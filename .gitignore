@@ -1,0 +1,11 @@
+# secret.no_commit: forbid secret.location = repo
+# secret.source:    require secret.source = env_or_vault
+# 秘密は env または vault から来る。repository には置かない。
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# Build output of the evaluation candidate. Not a product artifact.
+target/

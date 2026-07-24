@@ -1,0 +1,333 @@
+{
+  "record_kind": "project_founding_record",
+  "record_id": "01KYAXA21SWP66NDZ2GT1C58F2",
+  "record_id_scheme": "ulid",
+  "recorded_at": "2026-07-24T20:33:14Z",
+  "time_storage": "utc",
+  "source_of_truth": {
+    "system": "spec-system",
+    "domain_spec": "pins/domains/neovim-glsl.spec",
+    "domain_spec_version": "0.1",
+    "imported_pin_file": "pins/house_style.pin",
+    "imported_pin_version": "1.8",
+    "rule": "spec が真実。食い違ったらこの record を直す。pin を緩めない。"
+  },
+  "friction": {
+    "date": "2026-07-25",
+    "summary": "Neovim を editor 基盤として保持したまま GLSL 化する project を設立する。",
+    "verbatim_source": "private — 逐語の要求文と経緯は spec 台帳側にのみ保持する"
+  },
+  "establishment": {
+    "subject": "neovim_to_glsl",
+    "order": "first",
+    "deliverable": "this repository",
+    "completion_criterion": "未決 — open_question neovim_glsl.establishment_definition。何が存在すれば設立済みと判定するかはこの record では決めない。"
+  },
+  "frozen_pins": [
+    {
+      "id": "neovim_glsl.editor_basis",
+      "kind": "require",
+      "statement": "require neovim_glsl.editor.basis = neovim",
+      "assignment": {
+        "neovim_glsl.editor.basis": "neovim"
+      }
+    },
+    {
+      "id": "neovim_glsl.no_editor_substitution",
+      "kind": "forbid",
+      "statement": "forbid neovim_glsl.editor.substitution = allowed",
+      "excluded": {
+        "neovim_glsl.editor.substitution": "allowed"
+      }
+    },
+    {
+      "id": "neovim_glsl.emacs_alternative_rejected",
+      "kind": "forbid",
+      "statement": "forbid neovim_glsl.editor.basis = emacs_family",
+      "excluded": {
+        "neovim_glsl.editor.basis": "emacs_family"
+      }
+    },
+    {
+      "id": "neovim_glsl.project_established",
+      "kind": "require",
+      "statement": "require neovim_glsl.project.establishment = required",
+      "assignment": {
+        "neovim_glsl.project.establishment": "required"
+      }
+    },
+    {
+      "id": "neovim_glsl.project_subject",
+      "kind": "require",
+      "statement": "require neovim_glsl.project.subject = neovim_to_glsl",
+      "assignment": {
+        "neovim_glsl.project.subject": "neovim_to_glsl"
+      }
+    },
+    {
+      "id": "neovim_glsl.establishment_order",
+      "kind": "require",
+      "statement": "require neovim_glsl.project.establishment.order = first",
+      "assignment": {
+        "neovim_glsl.project.establishment.order": "first"
+      }
+    },
+    {
+      "id": "neovim_glsl.target_shading_language",
+      "kind": "require",
+      "statement": "require neovim_glsl.target.shading_language = glsl",
+      "assignment": {
+        "neovim_glsl.target.shading_language": "glsl"
+      }
+    }
+  ],
+  "properties": [
+    {
+      "id": "neovim_glsl.editor_basis_witness",
+      "statement": "forall stage . editor_basis(stage) == neovim",
+      "scope": "この project の全 stage。まだ定義されていない後段にも効く。"
+    },
+    {
+      "id": "neovim_glsl.no_substitution_witness",
+      "statement": "forall candidate . editor_substitution(candidate) == rejected",
+      "scope": "あらゆる editor 置換候補。emacs_family を含む。"
+    }
+  ],
+  "witnesses": [
+    {
+      "id": "neovim_glsl.editor_retained",
+      "input": "editor_basis_choice",
+      "output": "neovim"
+    },
+    {
+      "id": "neovim_glsl.emacs_alternative",
+      "input": "emacs_family_editor_substitution",
+      "output": "rejected"
+    },
+    {
+      "id": "neovim_glsl.founding",
+      "input": "this_instruction_deliverable",
+      "output": "established_neovim_to_glsl_project"
+    },
+    {
+      "id": "neovim_glsl.shading_language",
+      "input": "project_target_shading_language",
+      "output": "glsl"
+    }
+  ],
+  "inherited_pins": {
+    "source": "house_style@1.8",
+    "status_vocabulary": {
+      "witnessed_here": "この record または repository が今そのまま満たしている。",
+      "witnessed_by_absence": "forbid 型。禁止された事象がこの repository に存在しない。",
+      "binding_declared_upstream_enforced": "spec-system の session と台帳を縛る pin。この repository は拘束として宣言し、矛盾するものを一切定義しない。",
+      "binding_no_subject_yet": "require 型。値を担う component が設立段階に存在しない。いま作れば overreach であり free 軸を固定する。拘束は有効で、component を作る時点で満たす。"
+    },
+    "pins": [
+      {
+        "id": "error.envelope",
+        "statement": "require error.envelope = { code, message, details, trace_id }",
+        "status": "binding_no_subject_yet"
+      },
+      {
+        "id": "error.http_shape",
+        "statement": "require error.body.field in [code, message, details]",
+        "status": "binding_no_subject_yet"
+      },
+      {
+        "id": "error.no_raw_stack",
+        "statement": "forbid error.expose = raw_stacktrace",
+        "status": "witnessed_by_absence"
+      },
+      {
+        "id": "log.format",
+        "statement": "require log.format = json",
+        "status": "binding_no_subject_yet"
+      },
+      {
+        "id": "log.required_fields",
+        "statement": "require log.fields in [ts, level, trace_id, msg]",
+        "status": "binding_no_subject_yet"
+      },
+      {
+        "id": "log.no_secrets",
+        "statement": "forbid log.contains = secret",
+        "status": "witnessed_by_absence"
+      },
+      {
+        "id": "secret.source",
+        "statement": "require secret.source = env_or_vault",
+        "status": "binding_no_subject_yet",
+        "note": ".gitignore の見出しに拘束を記録済み。秘密を読む component はまだ無い。"
+      },
+      {
+        "id": "secret.no_commit",
+        "statement": "forbid secret.location = repo",
+        "status": "witnessed_by_absence",
+        "note": ".gitignore が構造的に担保する。"
+      },
+      {
+        "id": "idempotency.write",
+        "statement": "require write.idempotency = required",
+        "status": "binding_no_subject_yet"
+      },
+      {
+        "id": "retry.max",
+        "statement": "range retry.max = 0..5",
+        "status": "binding_no_subject_yet"
+      },
+      {
+        "id": "retry.backoff",
+        "statement": "require retry.backoff = exponential_jitter",
+        "status": "binding_no_subject_yet"
+      },
+      {
+        "id": "time.tz",
+        "statement": "require time.storage = utc",
+        "status": "witnessed_here",
+        "note": "recorded_at は UTC。この repository は他の時刻表現を保存しない。"
+      },
+      {
+        "id": "id.scheme",
+        "statement": "require id.scheme in [uuidv7, ulid]",
+        "status": "witnessed_here",
+        "note": "record_id は ulid。"
+      },
+      {
+        "id": "spec.autosave_gate",
+        "statement": "require spec.session_end.gate = spec_autosave",
+        "status": "binding_declared_upstream_enforced"
+      },
+      {
+        "id": "spec.require_update_flag",
+        "statement": "require spec.require_update.trigger = env_SPEC_REQUIRE_UPDATE",
+        "status": "binding_declared_upstream_enforced"
+      },
+      {
+        "id": "spec.hook_no_push",
+        "statement": "forbid spec.hook.git_push = enabled",
+        "status": "witnessed_by_absence",
+        "note": "この repository は hook を定義しない。設立 commit も push しない。"
+      },
+      {
+        "id": "spec.boot.scope",
+        "statement": "require spec.boot.scope = every_ai_chat_session",
+        "status": "binding_declared_upstream_enforced"
+      },
+      {
+        "id": "spec.boot.agents",
+        "statement": "require spec.boot.agent in [codex, claude_code, yui]",
+        "status": "binding_declared_upstream_enforced"
+      },
+      {
+        "id": "spec.boot.user_reminder",
+        "statement": "forbid spec.boot.user_reminder = required",
+        "status": "binding_declared_upstream_enforced"
+      },
+      {
+        "id": "spec.boot.cwd",
+        "statement": "require spec.boot.cwd = independent",
+        "status": "binding_declared_upstream_enforced"
+      },
+      {
+        "id": "spec.boot.development_entry",
+        "statement": "require spec.development.first_action = spec_system_supervisor_route",
+        "status": "witnessed_here",
+        "note": "この設立物は spec-system の route を通って生成された。README がこの repository の入口として同じ route を宣言する。"
+      },
+      {
+        "id": "spec.boot.missing_route",
+        "statement": "require spec.development.missing_or_red_spec = blocked",
+        "status": "binding_declared_upstream_enforced"
+      },
+      {
+        "id": "spec.boot.generator_context",
+        "statement": "require spec.generator.context = fresh_spec_only",
+        "status": "binding_declared_upstream_enforced"
+      },
+      {
+        "id": "spec.boot.supervisor_context",
+        "statement": "require spec.supervisor.yui_context = required_before_judgement",
+        "status": "binding_declared_upstream_enforced"
+      },
+      {
+        "id": "spec.boot.prompt_source",
+        "statement": "require spec.boot.prompt.source = house_style_boot_contract",
+        "status": "witnessed_here",
+        "note": "boot contract の文面を複製せず参照だけする。正本は house_style.pin の @boot-contract block ただ一つ。"
+      },
+      {
+        "id": "spec.boot.no_fallback",
+        "statement": "forbid spec.development.code_first_fallback = allowed",
+        "status": "witnessed_by_absence",
+        "note": "この repository には spec route の外で書かれた成果物が無い。"
+      },
+      {
+        "id": "ci.status_green",
+        "statement": "require ci.status = green",
+        "status": "binding_no_subject_yet",
+        "note": "build も test 対象も CI もまだ無い。CI provider と package manager の選択は spec が選んでいない設計判断で、project_form が package manager を free にしている。この pin が守る「緑でないものを push する」事故は、push しない設立段階では発生しない。CI を作る時点で満たす。"
+      },
+      {
+        "id": "ci.format_prettier",
+        "statement": "require ci.format.gate = prettier",
+        "status": "binding_no_subject_yet",
+        "note": "gate 自体は CI を作る時点で設置する。この repository の md と json は prettier 既定書式に沿う意図で書いてあるが、gate の実行は supervisor の領域であり implementer は実行していない。"
+      }
+    ]
+  },
+  "not_decided": {
+    "rule": "quarantine と open_question は実装しない。埋めたくなったら repository で決めず converter と人間ゲートへ差し戻す。",
+    "verbatim_text": "UNDECIDED.md",
+    "quarantine": [
+      {
+        "id": "neovim_glsl.glsl_scope",
+        "class": "ambiguous"
+      },
+      {
+        "id": "neovim_glsl.neovim_retention_form",
+        "class": "ambiguous"
+      },
+      {
+        "id": "neovim_glsl.full_replacement_wish",
+        "class": "ambiguous"
+      },
+      {
+        "id": "neovim_glsl.architecture",
+        "class": "unsettled"
+      },
+      {
+        "id": "neovim_glsl.performance_criteria",
+        "class": "unsettled"
+      }
+    ],
+    "open_question": [
+      "neovim_glsl.glsl_scope_decision",
+      "neovim_glsl.neovim_retention_decision",
+      "neovim_glsl.architecture_decision",
+      "neovim_glsl.graphics_stack_decision",
+      "neovim_glsl.performance_acceptance",
+      "neovim_glsl.plugin_config_compat_boundary",
+      "neovim_glsl.establishment_definition",
+      "neovim_glsl.post_establishment_roadmap",
+      "neovim_glsl.downstream_operation_model_link"
+    ]
+  },
+  "not_locked": {
+    "rule": "free は free のまま。実装・設定・依存・慣習のどれでも暗黙 pin 化しない。仮の選択も固定である。",
+    "verbatim_text": "DESIGN-SPACE.md",
+    "free": [
+      "neovim_glsl.integration_strategy",
+      "neovim_glsl.host_implementation_language",
+      "neovim_glsl.graphics_api",
+      "neovim_glsl.shader_pipeline",
+      "neovim_glsl.platform_host",
+      "neovim_glsl.text_rendering",
+      "neovim_glsl.project_form",
+      "neovim_glsl.plugin_config_compat",
+      "neovim_glsl.performance.numeric_targets",
+      "neovim_glsl.post_establishment_scope",
+      "neovim_glsl.downstream_operation_model"
+    ]
+  }
+}
