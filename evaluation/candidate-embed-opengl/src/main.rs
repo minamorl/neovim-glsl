@@ -33,6 +33,7 @@ struct Args {
     rows: usize,
     font_size: f32,
     lua: Option<String>,
+    preedit: Option<String>,
     nvim_args: Vec<String>,
 }
 
@@ -44,6 +45,7 @@ fn parse_args() -> Args {
         rows: 24,
         font_size: 15.0,
         lua: None,
+        preedit: None,
         nvim_args: Vec::new(),
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -56,6 +58,9 @@ fn parse_args() -> Args {
             "--rows" => { a.rows = argv[i + 1].parse().unwrap_or(24); i += 2 }
             "--font-size" => { a.font_size = argv[i + 1].parse().unwrap_or(15.0); i += 2 }
             "--lua" => { a.lua = argv.get(i + 1).cloned(); i += 2 }
+            // Injects a composition string so the preedit rendering can be checked
+            // without a human driving a real IME.
+            "--preedit" => { a.preedit = argv.get(i + 1).cloned(); i += 2 }
             "--" => { a.nvim_args.extend_from_slice(&argv[i + 1..]); break }
             other => { a.nvim_args.push(other.to_string()); i += 1 }
         }
@@ -379,6 +384,9 @@ impl App {
             }
         }
         self.handle_notifications();
+        if let Some(p) = self.args.preedit.clone() {
+            self.preedit = p;
+        }
 
         let gl = self.gl.as_ref().unwrap();
         let buf = unsafe {
@@ -400,7 +408,7 @@ impl App {
             );
 
             let r = self.renderer.as_mut().unwrap();
-            r.build(self.grid.as_ref().unwrap(), self.atlas.as_mut().unwrap(), "");
+            r.build(self.grid.as_ref().unwrap(), self.atlas.as_mut().unwrap(), &self.preedit);
             r.draw(gl, self.atlas.as_mut().unwrap(), w as i32, h as i32, &self.images);
             gl.finish();
 
