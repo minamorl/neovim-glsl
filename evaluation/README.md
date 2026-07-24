@@ -49,10 +49,11 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 - `ext_multigrid` 未対応。分割 window は単一 grid として来るものだけ扱う。
 - popup menu / cmdline / message の ext 化（`ext_popupmenu` 等）は未接続。
 - 下線・斜体・太字・undercurl は highlight を読んでいるが描いていない。
-- `.app` bundle 化していない。CLI から起動した素のバイナリなので、macOS が
-  `error messaging the mach port for IMKCFRunLoopWakeUpReliable` を出す。IME 自体は
-  上記のとおり動くが、この警告と Dock/メニューバー上の扱いは bundle 化で解消する領域。
 - IME の変換候補ウィンドウ自体は macOS が描くもので、GLSL 側では描いていない。
+- macOS が `error messaging the mach port for IMKCFRunLoopWakeUpReliable` を出す。
+  **`.app` bundle 化しても消えない**（bundle 版・素のバイナリ版の両方で 1 件ずつ出ることを
+  実測済み。当初「bundle 化で解消する」と書いたが、実測で否定された）。IME の
+  enabled / preedit / commit はいずれも警告と無関係に成立するので、実害は確認されていない。
 - glyph atlas は 1024×1024 固定で eviction が無い。字種が増えると埋まる。
 - 性能は測っていない。`open_question neovim_glsl.performance_acceptance` が未決なので、
   何を以て合格とするかが無く、数値目標を捏造しないため測定自体を保留した。
@@ -74,6 +75,17 @@ cargo build
 ```bash
 ./target/debug/nvimgl -- --clean
 ```
+
+Mac アプリ (`.app` bundle) として組む場合:
+
+```bash
+./make-app.sh          # PROFILE=debug で debug ビルドを包む
+open nvimgl.app
+```
+
+bundle は ad-hoc 署名まで行う。bundle 版でも IME は同じく enabled → preedit → commit まで
+通ることを実測済み。CLI から直接起動すると window が前面化しないことがあり、その場合は
+focus が来ないので IME も起動しない（`open` 経由か、明示的な activate が要る）。
 
 人間が窓を見なくても結果を検査できるよう、1フレームを offscreen で描いて PNG にする
 モードを持たせてある。上の evidence はすべてこれで撮った。
