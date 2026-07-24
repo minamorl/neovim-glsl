@@ -96,7 +96,7 @@ impl Renderer {
         }
     }
 
-    pub fn build(&mut self, grid: &Grid, atlas: &mut Atlas) {
+    pub fn build(&mut self, grid: &Grid, atlas: &mut Atlas, preedit: &str) {
         self.verts.clear();
         let (cw, ch) = (atlas.cell_w, atlas.cell_h);
         let (wu, wv) = atlas.white_uv();
@@ -125,6 +125,31 @@ impl Renderer {
                 let x = col as f32 * cw + g.bearing_x;
                 let y = row as f32 * ch + atlas.ascent - g.bearing_y;
                 self.push_quad(x, y, g.w, g.h, (g.u0, g.v0, g.u1, g.v1), rgb(ink, 1.0));
+            }
+        }
+
+        // Pass 3: the IME composition. It is not in any Neovim buffer yet, so it
+        // is drawn inverted to read as "pending" rather than as text.
+        if !preedit.is_empty() {
+            let (row, col) = grid.cursor;
+            let (fg, bg) = grid.colors(grid.cell(row, col).hl);
+            let y = row as f32 * ch;
+            let advance = |c: char| if (c as u32) < 0x2500 { cw } else { cw * 2.0 };
+
+            let mut x = col as f32 * cw;
+            for c in preedit.chars() {
+                self.push_quad(x, y, advance(c), ch, white, rgb(fg, 1.0));
+                x += advance(c);
+            }
+            let mut x = col as f32 * cw;
+            for c in preedit.chars() {
+                if let Some(g) = atlas.glyph(c) {
+                    self.push_quad(
+                        x + g.bearing_x, y + atlas.ascent - g.bearing_y,
+                        g.w, g.h, (g.u0, g.v0, g.u1, g.v1), rgb(bg, 1.0),
+                    );
+                }
+                x += advance(c);
             }
         }
     }

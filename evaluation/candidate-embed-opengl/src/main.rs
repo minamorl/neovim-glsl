@@ -21,7 +21,7 @@ use glutin::surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurfac
 use glutin_winit::{DisplayBuilder, GlWindow};
 use raw_window_handle::HasWindowHandle;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, Ime, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
@@ -72,6 +72,9 @@ struct App {
     grid: Option<grid::Grid>,
     nvim: Option<nvim::Nvim>,
     mods: ModifiersState,
+    /// Uncommitted IME composition. Owned by the IME, not by Neovim: it is drawn
+    /// locally and only reaches nvim once the IME commits it.
+    preedit: String,
 }
 
 impl App {
@@ -88,6 +91,7 @@ impl App {
             grid: None,
             nvim: None,
             mods: ModifiersState::empty(),
+            preedit: String::new(),
         }
     }
 
@@ -103,6 +107,19 @@ impl App {
     }
 
     fn render(&mut self) {
+        // Keep the candidate window under the text cursor.
+        if let (Some(w), Some(atlas), Some(grid)) =
+            (self.win.as_ref(), self.atlas.as_ref(), self.grid.as_ref())
+        {
+            let (row, col) = grid.cursor;
+            w.set_ime_cursor_area(
+                winit::dpi::PhysicalPosition::new(
+                    col as f64 * atlas.cell_w as f64,
+                    (row + 1) as f64 * atlas.cell_h as f64,
+                ),
+                winit::dpi::PhysicalSize::new(atlas.cell_w as f64, atlas.cell_h as f64),
+            );
+        }
         let (Some(gl), Some(r), Some(atlas), Some(grid), Some(surface), Some(ctx)) = (
             self.gl.as_ref(),
             self.renderer.as_mut(),
@@ -114,7 +131,7 @@ impl App {
             return;
         };
         let size = self.win.as_ref().unwrap().inner_size();
-        r.build(grid, atlas);
+        r.build(grid, atlas, &self.preedit);
         r.draw(gl, atlas, size.width as i32, size.height as i32);
         let _ = surface.swap_buffers(ctx);
     }
@@ -142,6 +159,9 @@ impl ApplicationHandler for App {
             .build(el, ConfigTemplateBuilder::new(), |c| c.last().expect("no GL config"))
             .expect("display build failed");
         let window = window.expect("no window");
+        // Without this macOS never routes composition to us and Japanese input is
+        // impossible regardless of how the key events are handled.
+        window.set_ime_allowed(true);
 
         let raw = window.window_handle().ok().map(|h| h.as_raw());
         let display = gl_config.display();
@@ -191,6 +211,16 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => el.exit(),
+            WindowEvent::Focused(f) => {
+                eprintln!("focus: {f}");
+                // The first set_ime_allowed happens before the window is focused,
+                // which some backends ignore. Re-assert once we actually have it.
+                if f {
+                    if let Some(w) = self.win.as_ref() {
+                        w.set_ime_allowed(true);
+                    }
+                }
+            }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             WindowEvent::Resized(size) => {
                 if let (Some(atlas), Some(nv), Some(surface), Some(ctx)) = (
@@ -210,6 +240,32 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            WindowEvent::Ime(ime) => {
+                match ime {
+                    Ime::Enabled => eprintln!("IME: enabled"),
+                    Ime::Preedit(text, range) => {
+                        eprintln!("IME: preedit {text:?} cursor={range:?}");
+                        self.preedit = text;
+                    }
+                    Ime::Commit(text) => {
+                        eprintln!("IME: commit {text:?}");
+                        self.preedit.clear();
+                        if let Some(nv) = self.nvim.as_mut() {
+                            let _ = nv.input(&text.replace('<', "<lt>"));
+                        }
+                    }
+                    Ime::Disabled => {
+                        eprintln!("IME: disabled");
+                        self.preedit.clear();
+                    }
+                }
+                if let Some(w) = self.win.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            // While a composition is open the IME owns the keystrokes; forwarding
+            // them too would double-insert whatever is being composed.
+            WindowEvent::KeyboardInput { .. } if !self.preedit.is_empty() => {}
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if let Some(keys) = encode_key(&event.logical_key, self.mods) {
                     if let Some(nv) = self.nvim.as_mut() {
@@ -289,7 +345,7 @@ impl App {
             );
 
             let r = self.renderer.as_mut().unwrap();
-            r.build(self.grid.as_ref().unwrap(), self.atlas.as_mut().unwrap());
+            r.build(self.grid.as_ref().unwrap(), self.atlas.as_mut().unwrap(), "");
             r.draw(gl, self.atlas.as_mut().unwrap(), w as i32, h as i32);
             gl.finish();
 

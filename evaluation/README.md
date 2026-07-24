@@ -36,6 +36,11 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 - 日本語が出る。SF Mono に無い字は Hiragino へ字形単位で fallback する。
 - cursor が反転表示される（block の下の字が背景色で描かれる）。
   証拠: `evidence/nvim-cursor-inversion.png`
+- **macOS の IME が接続されている。** かな入力の未確定文字列 (preedit) が届き、確定
+  (commit) された文字列が Neovim へ渡る。実測ログ:
+  `IME: enabled` → `IME: preedit "あ"` → `IME: preedit "ああ"` → `IME: commit "ああ"`。
+  未確定文字列は buffer に入っていないので、cursor 位置に反転表示で描き分けている。
+  候補ウィンドウの位置は `set_ime_cursor_area` で cursor 行の直下へ追従させる。
 - 入力が Neovim に届く。上記スクリーンショットの文字列は、すべて `nvim_input` 経由で
   打ち込んだ結果であって、こちらが描いた文字列ではない。
 
@@ -44,7 +49,10 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 - `ext_multigrid` 未対応。分割 window は単一 grid として来るものだけ扱う。
 - popup menu / cmdline / message の ext 化（`ext_popupmenu` 等）は未接続。
 - 下線・斜体・太字・undercurl は highlight を読んでいるが描いていない。
-- IME（macOS の日本語入力）未接続。日本語は `nvim_input` 経由でのみ確認した。
+- `.app` bundle 化していない。CLI から起動した素のバイナリなので、macOS が
+  `error messaging the mach port for IMKCFRunLoopWakeUpReliable` を出す。IME 自体は
+  上記のとおり動くが、この警告と Dock/メニューバー上の扱いは bundle 化で解消する領域。
+- IME の変換候補ウィンドウ自体は macOS が描くもので、GLSL 側では描いていない。
 - glyph atlas は 1024×1024 固定で eviction が無い。字種が増えると埋まる。
 - 性能は測っていない。`open_question neovim_glsl.performance_acceptance` が未決なので、
   何を以て合格とするかが無く、数値目標を捏造しないため測定自体を保留した。
