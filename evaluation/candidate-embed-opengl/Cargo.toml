@@ -1,0 +1,14 @@
+[package]
+name = "nvimgl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winit = "0.30"
+glutin = "0.32"
+glutin-winit = "0.5"
+glow = "0.14"
+raw-window-handle = "0.6"
+png = "0.17"
+rmpv = "1"
+fontdue = "0.9"
