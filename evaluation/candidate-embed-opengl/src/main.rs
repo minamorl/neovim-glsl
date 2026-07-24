@@ -201,14 +201,13 @@ impl ApplicationHandler for App {
         self.started = true;
 
         let snapshot = self.args.snapshot.is_some();
-        let atlas = text::Atlas::new(self.args.font_size);
-        let win_w = (atlas.cell_w * self.args.cols as f32).ceil() as u32;
-        let win_h = (atlas.cell_h * self.args.rows as f32).ceil() as u32;
-
+        // The window has to exist before the glyphs do: cell metrics depend on the
+        // display's scale factor, and rasterising at logical pixels on a HiDPI or
+        // 4K screen is exactly what makes the text come out too small.
         let attrs = Window::default_attributes()
             .with_title("nvimgl")
             .with_visible(!snapshot)
-            .with_inner_size(winit::dpi::PhysicalSize::new(win_w, win_h));
+            .with_inner_size(winit::dpi::LogicalSize::new(900.0, 560.0));
 
         let (window, gl_config) = DisplayBuilder::new()
             .with_window_attributes(Some(attrs))
@@ -218,6 +217,19 @@ impl ApplicationHandler for App {
         // Without this macOS never routes composition to us and Japanese input is
         // impossible regardless of how the key events are handled.
         window.set_ime_allowed(true);
+
+        let scale = window.scale_factor() as f32;
+        let atlas = text::Atlas::new(self.args.font_size * scale);
+        let win_w = (atlas.cell_w * self.args.cols as f32).ceil() as u32;
+        let win_h = (atlas.cell_h * self.args.rows as f32).ceil() as u32;
+        let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(win_w, win_h));
+        eprintln!(
+            "scale={scale} font={}pt -> {:.1}px  cell={:.1}x{:.1}px  window={win_w}x{win_h}px",
+            self.args.font_size,
+            self.args.font_size * scale,
+            atlas.cell_w,
+            atlas.cell_h
+        );
 
         let raw = window.window_handle().ok().map(|h| h.as_raw());
         let display = gl_config.display();
