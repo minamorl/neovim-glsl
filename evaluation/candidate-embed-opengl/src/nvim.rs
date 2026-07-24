@@ -15,10 +15,15 @@ pub struct Nvim {
     stdin: ChildStdin,
     rx: Receiver<Value>,
     next_msgid: u64,
+    custom: Vec<Notification>,
 }
 
 /// A `redraw` batch already split into its individual UI events.
 pub type RedrawEvent = (String, Vec<Value>);
+
+/// Any notification that is not `redraw` — this is how Lua running inside
+/// Neovim talks to the UI, via `vim.rpcnotify(1, name, ...)`.
+pub type Notification = (String, Vec<Value>);
 
 impl Nvim {
     pub fn spawn(extra_args: &[String]) -> std::io::Result<Self> {
@@ -48,7 +53,7 @@ impl Nvim {
             }
         });
 
-        Ok(Self { child, stdin, rx, next_msgid: 1 })
+        Ok(Self { child, stdin, rx, next_msgid: 1, custom: Vec::new() })
     }
 
     pub fn request(&mut self, method: &str, params: Vec<Value>) -> std::io::Result<()> {
@@ -96,6 +101,16 @@ impl Nvim {
         self.notify("nvim_input", vec![Value::from(keys)])
     }
 
+    pub fn exec_lua(&mut self, code: &str) -> std::io::Result<()> {
+        self.request("nvim_exec_lua", vec![Value::from(code), Value::Array(vec![])])
+    }
+
+    /// Notifications Lua sent us since the last call. The UI, not Neovim, decides
+    /// what they mean.
+    pub fn take_notifications(&mut self) -> Vec<Notification> {
+        std::mem::take(&mut self.custom)
+    }
+
     /// Drain everything currently queued, returning only the flattened `redraw`
     /// events. Responses to our own requests carry no UI state and are dropped.
     pub fn drain_redraw(&mut self) -> (Vec<RedrawEvent>, bool) {
@@ -103,7 +118,7 @@ impl Nvim {
         let mut closed = false;
         loop {
             match self.rx.try_recv() {
-                Ok(v) => collect_redraw(&v, &mut out),
+                Ok(v) => collect(&v, &mut out, &mut self.custom),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     closed = true;
@@ -118,7 +133,7 @@ impl Nvim {
     pub fn wait_redraw(&mut self, timeout: std::time::Duration) -> (Vec<RedrawEvent>, bool) {
         let mut out = Vec::new();
         match self.rx.recv_timeout(timeout) {
-            Ok(v) => collect_redraw(&v, &mut out),
+            Ok(v) => collect(&v, &mut out, &mut self.custom),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return (out, false),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return (out, true),
         }
@@ -136,13 +151,17 @@ impl Drop for Nvim {
 }
 
 /// A notification is `[2, method, params]`; for `redraw`, params is a list of
-/// `[event_name, args…]` where each `args` is itself one invocation.
-fn collect_redraw(v: &Value, out: &mut Vec<RedrawEvent>) {
+/// `[event_name, args…]` where each `args` is itself one invocation. Anything
+/// else is a message from Lua and is passed through untouched.
+fn collect(v: &Value, out: &mut Vec<RedrawEvent>, custom: &mut Vec<Notification>) {
     let Some(arr) = v.as_array() else { return };
     if arr.len() != 3 || arr[0].as_u64() != Some(2) {
         return;
     }
     if arr[1].as_str() != Some("redraw") {
+        if let (Some(name), Some(params)) = (arr[1].as_str(), arr[2].as_array()) {
+            custom.push((name.to_string(), params.clone()));
+        }
         return;
     }
     let Some(events) = arr[2].as_array() else { return };

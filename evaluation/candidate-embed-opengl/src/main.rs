@@ -32,6 +32,7 @@ struct Args {
     cols: usize,
     rows: usize,
     font_size: f32,
+    lua: Option<String>,
     nvim_args: Vec<String>,
 }
 
@@ -42,6 +43,7 @@ fn parse_args() -> Args {
         cols: 80,
         rows: 24,
         font_size: 15.0,
+        lua: None,
         nvim_args: Vec::new(),
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -53,6 +55,7 @@ fn parse_args() -> Args {
             "--cols" => { a.cols = argv[i + 1].parse().unwrap_or(80); i += 2 }
             "--rows" => { a.rows = argv[i + 1].parse().unwrap_or(24); i += 2 }
             "--font-size" => { a.font_size = argv[i + 1].parse().unwrap_or(15.0); i += 2 }
+            "--lua" => { a.lua = argv.get(i + 1).cloned(); i += 2 }
             "--" => { a.nvim_args.extend_from_slice(&argv[i + 1..]); break }
             other => { a.nvim_args.push(other.to_string()); i += 1 }
         }
@@ -75,6 +78,8 @@ struct App {
     /// Uncommitted IME composition. Owned by the IME, not by Neovim: it is drawn
     /// locally and only reaches nvim once the IME commits it.
     preedit: String,
+    /// Non-text surfaces placed by Lua. Neovim's grid knows nothing about these.
+    images: Vec<gl::Image>,
 }
 
 impl App {
@@ -92,17 +97,61 @@ impl App {
             nvim: None,
             mods: ModifiersState::empty(),
             preedit: String::new(),
+            images: Vec::new(),
         }
     }
 
-    fn pump(&mut self) -> bool {
-        let (Some(nv), Some(g)) = (self.nvim.as_mut(), self.grid.as_mut()) else {
-            return false;
+    /// Lua asked the UI to put something on screen. The grid is untouched.
+    fn handle_notifications(&mut self) {
+        let notes = match self.nvim.as_mut() {
+            Some(nv) => nv.take_notifications(),
+            None => return,
         };
-        let (events, closed) = nv.drain_redraw();
-        if !events.is_empty() {
-            g.apply(&events);
+        let mut placed = Vec::new();
+        for (name, params) in notes {
+            if name != "nvimgl_image" {
+                eprintln!("note: {name} (no handler)");
+                continue;
+            }
+            let num = |i: usize| params.get(i).and_then(|v| v.as_u64()).unwrap_or(0) as f32;
+            let Some(path) = params.first().and_then(|v| v.as_str()).map(str::to_string) else {
+                continue;
+            };
+            let (Some(glc), Some(atlas)) = (self.gl.as_ref(), self.atlas.as_ref()) else {
+                continue;
+            };
+            let (row, col) = (num(1), num(2));
+            let (cols, rows) = (num(3).max(1.0), num(4).max(1.0));
+            match load_png(&path) {
+                Some((rgba, w, h)) => {
+                    let tex = gl::Renderer::upload_rgba(glc, &rgba, w, h);
+                    eprintln!("image: {path} {w}x{h} -> cell ({row},{col}) span {cols}x{rows}");
+                    placed.push(gl::Image {
+                        tex,
+                        x: col * atlas.cell_w,
+                        y: row * atlas.cell_h,
+                        w: cols * atlas.cell_w,
+                        h: rows * atlas.cell_h,
+                    });
+                }
+                None => eprintln!("image: cannot load {path}"),
+            }
         }
+        self.images.extend(placed);
+    }
+
+    fn pump(&mut self) -> bool {
+        let closed = {
+            let (Some(nv), Some(g)) = (self.nvim.as_mut(), self.grid.as_mut()) else {
+                return false;
+            };
+            let (events, closed) = nv.drain_redraw();
+            if !events.is_empty() {
+                g.apply(&events);
+            }
+            closed
+        };
+        self.handle_notifications();
         closed
     }
 
@@ -120,19 +169,21 @@ impl App {
                 winit::dpi::PhysicalSize::new(atlas.cell_w as f64, atlas.cell_h as f64),
             );
         }
-        let (Some(gl), Some(r), Some(atlas), Some(grid), Some(surface), Some(ctx)) = (
-            self.gl.as_ref(),
-            self.renderer.as_mut(),
-            self.atlas.as_mut(),
-            self.grid.as_ref(),
-            self.surface.as_ref(),
-            self.ctx.as_ref(),
+        let App { gl, renderer, atlas, grid, surface, ctx, win, preedit, images, .. } = self;
+        let (Some(gl), Some(r), Some(atlas), Some(grid), Some(surface), Some(ctx), Some(win)) = (
+            gl.as_ref(),
+            renderer.as_mut(),
+            atlas.as_mut(),
+            grid.as_ref(),
+            surface.as_ref(),
+            ctx.as_ref(),
+            win.as_ref(),
         ) else {
             return;
         };
-        let size = self.win.as_ref().unwrap().inner_size();
-        r.build(grid, atlas, &self.preedit);
-        r.draw(gl, atlas, size.width as i32, size.height as i32);
+        let size = win.inner_size();
+        r.build(grid, atlas, preedit);
+        r.draw(gl, atlas, size.width as i32, size.height as i32, images);
         let _ = surface.swap_buffers(ctx);
     }
 }
@@ -191,6 +242,9 @@ impl ApplicationHandler for App {
         let renderer = gl::Renderer::new(&glc);
         let mut nv = nvim::Nvim::spawn(&self.args.nvim_args).expect("nvim --embed failed to start");
         nv.ui_attach(self.args.cols as u32, self.args.rows as u32).expect("ui_attach");
+        if let Some(code) = self.args.lua.clone() {
+            nv.exec_lua(&code).expect("exec_lua");
+        }
         let grid = grid::Grid::new(self.args.cols, self.args.rows);
 
         self.win = Some(window);
@@ -324,6 +378,7 @@ impl App {
                 break;
             }
         }
+        self.handle_notifications();
 
         let gl = self.gl.as_ref().unwrap();
         let buf = unsafe {
@@ -346,7 +401,7 @@ impl App {
 
             let r = self.renderer.as_mut().unwrap();
             r.build(self.grid.as_ref().unwrap(), self.atlas.as_mut().unwrap(), "");
-            r.draw(gl, self.atlas.as_mut().unwrap(), w as i32, h as i32);
+            r.draw(gl, self.atlas.as_mut().unwrap(), w as i32, h as i32, &self.images);
             gl.finish();
 
             let mut buf = vec![0u8; (w * h * 4) as usize];
@@ -406,6 +461,27 @@ fn wrap(base: &str, mods: ModifiersState) -> String {
     if mods.super_key() { p.push_str("D-") }
     if mods.shift_key() && base.len() > 1 { p.push_str("S-") }
     format!("<{p}{base}>")
+}
+
+fn load_png(path: &str) -> Option<(Vec<u8>, u32, u32)> {
+    let f = std::fs::File::open(path).ok()?;
+    let mut reader = png::Decoder::new(std::io::BufReader::new(f)).read_info().ok()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    buf.truncate(info.buffer_size());
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => buf.chunks(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::GrayscaleAlpha => {
+            buf.chunks(2).flat_map(|c| [c[0], c[0], c[0], c[1]]).collect()
+        }
+        png::ColorType::Indexed => return None,
+    };
+    Some((rgba, info.width, info.height))
 }
 
 fn write_png(path: &str, rgba_bottom_up: &[u8], w: u32, h: u32) {

@@ -27,11 +27,18 @@ in vec2 v_uv;
 in vec4 v_col;
 out vec4 frag;
 uniform sampler2D u_atlas;
+uniform int u_mode;
 void main() {
-    // Background quads sample a forced-opaque texel, so coverage is 1 there and
-    // antialiased glyph coverage elsewhere. One shader covers both.
-    float cov = texture(u_atlas, v_uv).r;
-    frag = vec4(v_col.rgb, v_col.a * cov);
+    vec4 t = texture(u_atlas, v_uv);
+    if (u_mode == 1) {
+        // Arbitrary RGBA content — an image is just another textured quad in the
+        // same scene as the text.
+        frag = t * v_col;
+    } else {
+        // Background quads sample a forced-opaque texel, so coverage is 1 there
+        // and antialiased glyph coverage elsewhere. One shader covers both.
+        frag = vec4(v_col.rgb, v_col.a * t.r);
+    }
 }
 "#;
 
@@ -43,6 +50,16 @@ pub struct Renderer {
     verts: Vec<f32>,
     u_screen: Option<glow::UniformLocation>,
     u_atlas: Option<glow::UniformLocation>,
+    u_mode: Option<glow::UniformLocation>,
+}
+
+/// An arbitrary RGBA surface placed over the text grid, in pixels.
+pub struct Image {
+    pub tex: glow::Texture,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
 }
 
 impl Renderer {
@@ -71,11 +88,12 @@ impl Renderer {
 
             let u_screen = gl.get_uniform_location(program, "u_screen");
             let u_atlas = gl.get_uniform_location(program, "u_atlas");
+            let u_mode = gl.get_uniform_location(program, "u_mode");
 
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
 
-            Self { program, vao, vbo, tex, verts: Vec::new(), u_screen, u_atlas }
+            Self { program, vao, vbo, tex, verts: Vec::new(), u_screen, u_atlas, u_mode }
         }
     }
 
@@ -154,7 +172,31 @@ impl Renderer {
         }
     }
 
-    pub fn draw(&mut self, gl: &glow::Context, atlas: &mut Atlas, px_w: i32, px_h: i32) {
+    /// Upload arbitrary RGBA pixels as a texture usable by `draw`.
+    pub fn upload_rgba(gl: &glow::Context, rgba: &[u8], w: u32, h: u32) -> glow::Texture {
+        unsafe {
+            let tex = gl.create_texture().unwrap();
+            gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_image_2d(
+                glow::TEXTURE_2D, 0, glow::RGBA8 as i32, w as i32, h as i32, 0,
+                glow::RGBA, glow::UNSIGNED_BYTE, Some(rgba),
+            );
+            tex
+        }
+    }
+
+    pub fn draw(
+        &mut self,
+        gl: &glow::Context,
+        atlas: &mut Atlas,
+        px_w: i32,
+        px_h: i32,
+        images: &[Image],
+    ) {
         unsafe {
             gl.viewport(0, 0, px_w, px_h);
             gl.clear_color(0.0, 0.0, 0.0, 1.0);
@@ -184,9 +226,40 @@ impl Renderer {
                 ),
                 glow::STREAM_DRAW,
             );
+            gl.uniform_1_i32(self.u_mode.as_ref(), 0);
             gl.draw_arrays(glow::TRIANGLES, 0, (self.verts.len() / 8) as i32);
+
+            // Images live in the same scene, drawn over the text with the same
+            // shader and the same coordinate system. Nothing about the grid has
+            // to change for them to exist.
+            if !images.is_empty() {
+                gl.uniform_1_i32(self.u_mode.as_ref(), 1);
+                for im in images {
+                    gl.bind_texture(glow::TEXTURE_2D, Some(im.tex));
+                    let q = image_quad(im);
+                    gl.buffer_data_u8_slice(
+                        glow::ARRAY_BUFFER,
+                        core::slice::from_raw_parts(q.as_ptr() as *const u8, q.len() * 4),
+                        glow::STREAM_DRAW,
+                    );
+                    gl.draw_arrays(glow::TRIANGLES, 0, 6);
+                }
+            }
         }
     }
+}
+
+fn image_quad(im: &Image) -> [f32; 48] {
+    let (x, y, w, h) = (im.x, im.y, im.w, im.h);
+    let mut v = [0f32; 48];
+    let corners = [
+        (x, y, 0.0, 0.0), (x + w, y, 1.0, 0.0), (x + w, y + h, 1.0, 1.0),
+        (x, y, 0.0, 0.0), (x + w, y + h, 1.0, 1.0), (x, y + h, 0.0, 1.0),
+    ];
+    for (i, (px, py, u, vv)) in corners.into_iter().enumerate() {
+        v[i * 8..i * 8 + 8].copy_from_slice(&[px, py, u, vv, 1.0, 1.0, 1.0, 1.0]);
+    }
+    v
 }
 
 fn rgb(c: u32, a: f32) -> [f32; 4] {

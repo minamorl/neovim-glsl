@@ -44,6 +44,14 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 - 入力が Neovim に届く。上記スクリーンショットの文字列は、すべて `nvim_input` 経由で
   打ち込んだ結果であって、こちらが描いた文字列ではない。
 
+- **テキスト以外のオブジェクトが同じシーンに共存する。** Neovim 内の Lua が
+  `vim.rpcnotify(1, 'nvimgl_image', path, row, col, cols, rows)` を投げると、UI 側が PNG を
+  texture にして grid の上へ quad として描く。grid は一切変更していない — Neovim は
+  そこに画像があることを知らないまま、テキストと画像が同一画面に並ぶ。
+  証拠: `evidence/image-and-text-coexist.png`
+  これは端末の graphics protocol 経由ではなく、renderer が全ピクセルを所有しているから
+  成立している。cell 格子という制約が無い以上、置けるものは画像に限らない。
+
 ### まだ出来ていないこと（この候補の限界であって、project の限界ではない）
 
 - `ext_multigrid` 未対応。分割 window は単一 grid として来るものだけ扱う。
