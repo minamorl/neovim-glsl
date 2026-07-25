@@ -334,15 +334,22 @@ fn push_cell_decorations(
         }
     };
     // A sine sampled into short quads. Amplitude is one thickness either way, so
-    // the wave occupies `2 * amp + t` px vertically.
+    // the wave occupies `2 * amp + t` px vertically. The sample grid is locked to
+    // absolute x exactly as `segmented` is, not restarted at the cell edge: a
+    // sample straddling the boundary is clipped into two quads at one shared y,
+    // so the wave joins up instead of kinking once per cell.
     let curl = |verts: &mut Vec<f32>, y: f32, amp: f32| {
         let period = (6.0 * t).max(4.0);
         let step = (period / 8.0).max(1.0);
-        let mut x = x0;
+        let mut x = x0 - x0 % step;
         while x < x0 + cw {
-            let w = step.min(x0 + cw - x);
-            let phase = (x + w * 0.5) / period * std::f32::consts::TAU;
-            push_quad(verts, x, y + amp * phase.sin(), w, t, white, color);
+            let (lo, hi) = (x.max(x0), (x + step).min(x0 + cw));
+            if hi > lo {
+                // Phase from the unclipped sample centre, so both halves of a
+                // clipped sample land on the same y.
+                let phase = (x + step * 0.5) / period * std::f32::consts::TAU;
+                push_quad(verts, lo, y + amp * phase.sin(), hi - lo, t, white, color);
+            }
             x += step;
         }
     };
@@ -466,6 +473,81 @@ mod tests {
         scene_with(hl, (0, 5))
     }
 
+    /// A 2x1 grid whose *both* cells are `x` styled by `hl`, so decorations are
+    /// emitted at two different cell origins through the real `build_scene`
+    /// path. Cursor parked off-grid.
+    fn run_scene(hl: Hl) -> Vec<f32> {
+        let mut atlas = Atlas::new(20.0);
+        let mut grid = Grid::new(2, 1);
+        grid.cursor = (0, 5);
+        grid.hls.insert(1, hl);
+        grid.cells[0] = Cell { ch: 'x', hl: 1 };
+        grid.cells[1] = Cell { ch: 'x', hl: 1 };
+        let mut verts = Vec::new();
+        build_scene(&mut verts, &grid, &mut atlas, "");
+        verts
+    }
+
+    /// Two backgrounds plus two glyphs precede the decorations in `run_scene`.
+    /// Pinned by `plain_run_emits_only_backgrounds_and_glyphs`.
+    const RUN_UNDECORATED_QUADS: usize = 4;
+
+    fn run_scene_decorations(hl: Hl) -> Vec<Quad> {
+        quads(&run_scene(hl))[RUN_UNDECORATED_QUADS..].to_vec()
+    }
+
+    /// Cell geometry pinned for the cross-cell tests: `(cw, ch, ascent,
+    /// x_height)`. Font-derived metrics would leave these tests at the mercy of
+    /// whichever font the host has; here `cw` is deliberately *not* a whole
+    /// number of dash/dot periods, so an absolute phase lock and a per-cell
+    /// restart cannot produce the same output.
+    const RUN: (f32, f32, f32, f32) = (7.0, 14.0, 11.0, 7.0);
+    /// The same, at double thickness (`t == 2`), which makes the curl's sample
+    /// step 1.5px — again not a divisor of `cw`.
+    const TALL_RUN: (f32, f32, f32, f32) = (7.0, 28.0, 22.0, 14.0);
+
+    /// Decorations for a horizontal run of `cells` identically styled cells,
+    /// laid out left to right exactly as `build_scene` lays them out.
+    fn run_decorations(hl: Hl, geom: (f32, f32, f32, f32), cells: usize) -> Vec<Quad> {
+        let (cw, ch, ascent, x_height) = geom;
+        let mut verts = Vec::new();
+        for i in 0..cells {
+            push_cell_decorations(
+                &mut verts,
+                (0.0, 0.0, 0.0, 0.0),
+                [1.0, 1.0, 1.0, 1.0],
+                hl,
+                i as f32 * cw,
+                0.0,
+                cw,
+                ch,
+                ascent,
+                x_height,
+            );
+        }
+        quads(&verts)
+    }
+
+    /// The cell a quad belongs to, taken from its centre so a quad sitting flush
+    /// against a boundary is attributed unambiguously.
+    fn owning_cell(q: &Quad, cw: f32) -> f32 {
+        ((q.x + q.w * 0.5) / cw).floor()
+    }
+
+    /// Merge quads that abut exactly, so a mark clipped at a cell boundary reads
+    /// back as the single mark it is drawn to be. Input must be in ascending x.
+    fn merge_marks(qs: &[Quad]) -> Vec<(f32, f32)> {
+        let mut spans: Vec<(f32, f32)> = Vec::new();
+        for q in qs {
+            if matches!(spans.last(), Some(last) if (last.1 - q.x).abs() < 1e-4) {
+                spans.last_mut().unwrap().1 = q.x + q.w;
+            } else {
+                spans.push((q.x, q.x + q.w));
+            }
+        }
+        spans
+    }
+
     fn scene_floats(hl: Hl) -> usize {
         scene(hl).len()
     }
@@ -565,14 +647,7 @@ mod tests {
     #[test]
     fn every_decoration_stays_inside_its_cell() {
         let (cw, ch, _, _) = metrics();
-        for (name, hl) in [
-            ("underline", with(|h| h.underline = true)),
-            ("undercurl", with(|h| h.undercurl = true)),
-            ("underdouble", with(|h| h.underdouble = true)),
-            ("underdotted", with(|h| h.underdotted = true)),
-            ("underdashed", with(|h| h.underdashed = true)),
-            ("strikethrough", with(|h| h.strikethrough = true)),
-        ] {
+        for (name, hl) in decoration_styles() {
             for q in decorations(hl) {
                 assert!(q.y >= 0.0 && q.y + q.h <= ch, "{name} escapes the cell vertically: {q:?}");
                 assert!(q.x >= 0.0 && q.x + q.w <= cw, "{name} escapes the cell horizontally: {q:?}");
@@ -668,6 +743,144 @@ mod tests {
         // Synthetic face reshapes the glyph but must not add underline/strike quads.
         assert_eq!(scene_floats(with(|h| h.bold = true)), 3 * QUAD_FLOATS);
         assert_eq!(scene_floats(with(|h| h.italic = true)), 3 * QUAD_FLOATS);
+    }
+
+    /// Every style that emits decoration quads, by name.
+    fn decoration_styles() -> Vec<(&'static str, Hl)> {
+        vec![
+            ("underline", with(|h| h.underline = true)),
+            ("undercurl", with(|h| h.undercurl = true)),
+            ("underdouble", with(|h| h.underdouble = true)),
+            ("underdotted", with(|h| h.underdotted = true)),
+            ("underdashed", with(|h| h.underdashed = true)),
+            ("strikethrough", with(|h| h.strikethrough = true)),
+        ]
+    }
+
+    #[test]
+    fn plain_run_emits_only_backgrounds_and_glyphs() {
+        // Pins `RUN_UNDECORATED_QUADS`: if the prologue ever grows, the run
+        // tests would silently start reading a background as a decoration.
+        assert_eq!(run_scene(plain()).len(), RUN_UNDECORATED_QUADS * QUAD_FLOATS);
+    }
+
+    #[test]
+    fn segmented_underlines_are_phase_locked_across_cell_boundaries() {
+        // The headline claim: a run of cells sharing one highlight reads as a
+        // single pattern. Restarting the phase at each cell would show up here
+        // as a short or doubled mark exactly at the boundary.
+        for (name, hl) in [
+            ("underdotted", with(|h| h.underdotted = true)),
+            ("underdashed", with(|h| h.underdashed = true)),
+        ] {
+            let marks = merge_marks(&run_decorations(hl, RUN, 2));
+            assert!(marks.len() >= 3, "{name}: expected a repeating pattern, got {marks:?}");
+            let width = |m: &(f32, f32)| m.1 - m.0;
+            let (first, last) = (width(&marks[0]), width(marks.last().unwrap()));
+            // Only the final mark may be short, clipped by the end of the run.
+            for m in &marks[..marks.len() - 1] {
+                assert!(
+                    (width(m) - first).abs() < 1e-4,
+                    "{name}: uneven mark {m:?} in {marks:?}"
+                );
+            }
+            assert!(last <= first + 1e-4, "{name}: trailing mark grew: {marks:?}");
+            let pitch = marks[1].0 - marks[0].0;
+            for w in marks.windows(2) {
+                assert!(
+                    ((w[1].0 - w[0].0) - pitch).abs() < 1e-4,
+                    "{name}: uneven spacing in {marks:?}"
+                );
+            }
+            // And the pattern really does cross the boundary rather than
+            // coincidentally lining up with it.
+            let (cw, ..) = RUN;
+            assert!(
+                marks.iter().any(|m| m.0 < cw && m.1 > cw)
+                    || marks.iter().all(|m| (m.0 % pitch - marks[0].0 % pitch).abs() < 1e-4),
+                "{name}: pattern does not continue past x={cw}: {marks:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn undercurl_samples_are_phase_locked_across_cell_boundaries() {
+        // At `TALL_RUN` the sample step is 1.5px, so one sample straddles the
+        // 7px cell edge. Both halves belong to the same sample and must sit at
+        // the same y, or the wave kinks once per cell.
+        let (cw, ..) = TALL_RUN;
+        let curl = run_decorations(with(|h| h.undercurl = true), TALL_RUN, 2);
+        let ends_at_edge = curl
+            .iter()
+            .find(|q| (q.x + q.w - cw).abs() < 1e-4)
+            .expect("a sample clipped by the cell's right edge");
+        let starts_at_edge = curl
+            .iter()
+            .find(|q| (q.x - cw).abs() < 1e-4)
+            .expect("a sample resuming at the next cell's left edge");
+        assert!(
+            (ends_at_edge.y - starts_at_edge.y).abs() < 1e-4,
+            "curl jumps at the cell boundary: {} -> {}",
+            ends_at_edge.y,
+            starts_at_edge.y
+        );
+        // The two halves reconstitute exactly one 1.5px sample: neither is
+        // dropped, and the next cell does not start a fresh full-width one.
+        assert!(
+            (ends_at_edge.w + starts_at_edge.w - 1.5).abs() < 1e-4,
+            "split sample halves are {} + {}, expected one 1.5px step",
+            ends_at_edge.w,
+            starts_at_edge.w
+        );
+        // Still a wave, not a flattened rule.
+        let top = curl.iter().map(|q| q.y).fold(f32::MAX, f32::min);
+        let bottom = curl.iter().map(|q| q.y).fold(f32::MIN, f32::max);
+        assert!(bottom - top > 0.0, "curl steps must vary in y");
+    }
+
+    #[test]
+    fn every_decoration_stays_inside_its_own_cell_anywhere_in_a_run() {
+        // `every_decoration_stays_inside_its_cell` only ever looks at x0 == 0,
+        // where clipping and a per-cell restart are indistinguishable. Here the
+        // decorations start at three different cell origins.
+        for geom in [RUN, TALL_RUN] {
+            let (cw, ch, ..) = geom;
+            for (name, hl) in decoration_styles() {
+                for q in run_decorations(hl, geom, 3) {
+                    let cell = owning_cell(&q, cw);
+                    assert!(
+                        q.x >= cell * cw - 1e-4 && q.x + q.w <= (cell + 1.0) * cw + 1e-4,
+                        "{name} escapes cell {cell} horizontally: {q:?}"
+                    );
+                    assert!(
+                        q.y >= -1e-4 && q.y + q.h <= ch + 1e-4,
+                        "{name} escapes the cell vertically: {q:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn build_scene_decorates_each_cell_of_a_run_at_its_own_origin() {
+        // The same property through the real scene builder, so the per-cell
+        // origin `build_scene` passes down is covered too.
+        let (cw, ch, ..) = metrics();
+        for (name, hl) in decoration_styles() {
+            let d = run_scene_decorations(hl);
+            assert!(
+                d.iter().any(|q| q.x >= cw - 1e-4),
+                "{name}: the second cell of the run got no decoration"
+            );
+            for q in &d {
+                let cell = owning_cell(q, cw);
+                assert!(
+                    q.x >= cell * cw - 1e-4 && q.x + q.w <= (cell + 1.0) * cw + 1e-4,
+                    "{name} escapes cell {cell} horizontally: {q:?}"
+                );
+                assert!(q.y >= -1e-4 && q.y + q.h <= ch + 1e-4, "{name} escapes vertically: {q:?}");
+            }
+        }
     }
 
     #[test]

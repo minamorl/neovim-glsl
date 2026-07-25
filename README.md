@@ -37,7 +37,7 @@ highlight が続く間は cell 境界で模様が途切れない。
 
 ```bash
 ./target/debug/nvimgl --snapshot ../evidence/text-attributes.png \
-  --cols 104 --rows 3 --lua "$(cat ../evidence/text-attributes.lua)" -- --clean
+  --cols 111 --rows 3 --lua "$(cat ../evidence/text-attributes.lua)" -- --clean
 ```
 
 ## 動かないもの
