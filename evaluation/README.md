@@ -59,7 +59,10 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 `open_question neovim_glsl.performance_acceptance` を人間ゲートで決めるには、
 決める材料が要る。ここに置いたのはその材料であって、判定ではない。
 
-実装は次の 2 経路。どちらも出力は同じ schema `nvimgl.perf-observation/v1` である。
+実装は次の 2 経路。どちらも出力は同じ schema `nvimgl.perf-observation/v2` である
+（`v1` からの変更は、提示回数を frame rate と呼ぶのをやめたことと、`frame.total_ms` が
+覆う段を report 自身に名乗らせたこと。同じ field 名で別の量を指すことになるので version を
+動かしてある）。
 
 - **headless benchmark** (`--perf-bench`): seed から生成した redraw event 列を
   `Grid::apply` と `gl::build_vertices` へ流す。window も GL context も Neovim も要らない。
@@ -71,32 +74,76 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 計測点はいずれも bool 判定 1 回で戻る。glyph cache の hit/miss などの counter は
 時計を読まないので常時有効。
 
+**`frame.total_ms` が何を含むかは経路によって違う。** 同じ field 名で違う量を出すと
+比較できない数を比較できるように見せてしまうので、report 自身が
+`measurement.frame_total_stages` で内訳を名指しする。
+
+| mode | `frame_total_stages` | 含まないもの |
+|---|---|---|
+| headless benchmark | `event_apply`, `vertex_build` | GPU 提出（context が無い） |
+| live session | `vertex_build`, `gpu_submit` | redraw 適用（event pump 側の別呼び出し。`frame.event_apply_ms` に単独で出る） |
+
+`slow_frames.frames_over_budget` はこの list が言う frame を分類する。それ以外は分類しない。
+
+計測境界そのものについて 2 点:
+
+- **待ち時間は work に入れない。** snapshot 経路は Neovim からの traffic を最大 60/80 ms
+  待つ。span は待ちが終わってから開く（`RedrawQueue::wait_ready` が生の message を
+  decode せず buffer するのはこのため）ので、`event_apply_ms` は decode + 適用だけで、
+  何も来なかった idle 時間は入らない。headless には受信そのものが無いため同じ field が
+  測るのは適用だけになるが、**どちらの経路も待ちは測らない**という点では揃っている。
+- **観測器自身の cost を frame に付けない。** `record_batch` は event ごとに名前を clone
+  して map を触る（1 frame 数十件）。これは frame span を閉じた後に走る。
+
 #### 実測値（このMacで実際に走らせた結果。証拠 JSON 付き）
 
 `evidence/perf-headless-bench.json` — 120×40、500 frame、warmup 50、seed 1、release build:
 
 | 観測量 | p50 | p99 | max |
 |---|---|---|---|
-| frame 全体 | 0.35 ms | 0.50 ms | 0.59 ms |
-| vertex 構築 | — | — | frame のほぼ全部 |
-| redraw batch 適用 | 0.003 ms 台 | — | — |
+| frame 全体 | 0.3137 ms | 0.8683 ms | 1.8738 ms |
+| vertex 構築 | 0.3098 ms | 0.8513 ms | 1.865 ms |
+| redraw batch 適用 | 0.004 ms | 0.0109 ms | 0.0405 ms |
 
+丸めていないのはわざとである。散文が JSON から 1 桁ずれても気付けるようにしてある。
+
+- frame 全体はこの経路では vertex 構築でほぼ説明が付く。`frame_total_stages` の 2 段のうち
+  適用側は 1 桁 µs で、残りが構築である。
 - vertex は 1 frame あたり約 57,000（背景 quad が cell 数だけ必ず出るため）
-- glyph atlas: lookup 約 158 万に対して rasterize は 116 回、hit_ratio 1.0（丸め後）、
-  atlas 使用高さ 38px / 1024px
+- glyph atlas: lookup 2640000 回に対して rasterize は 116 回、hit_ratio 1.0（丸め後）、
+  atlas 使用高さ 35px / 1024px
+- `uploads` は `null`。headless には upload する先の GPU が無いので、「0 回 upload した」
+  ではなく「その path を通っていない」と出る。
 - `--perf-frame-budget-ms 16.67` を渡した実行では超過 0 件。
   **この 16.67 は実行時に人間が渡した値であって、この repository が定めた基準ではない。**
+  超過が 0 件なので `worst_overrun_ms` は `null` である（0.0 ではない。観測されなかった量に
+  数を置かない）。
+
+上の数値は `evidence/perf-headless-bench.json` から引いたものである。散文と artefact が
+食い違ったままにならないよう、表の 3 行と atlas の 3 数は `perf.rs` の
+`the_readme_quotes_the_evidence_it_cites` が JSON と突き合わせている。
 
 `evidence/perf-live-session.json` — 実際の Neovim + 実 GPU（`GL_RENDERER = Apple M4 Max`,
 `4.1 Metal - 90.5`）。snapshot 経路で計測したので frame 数は 2 と少ない:
 
-- GPU 提出は 1 frame 目が 51 ms、2 frame 目が 0.33 ms。初回は shader/pipeline と
+- GPU 提出は 1 frame 目が 24.4101 ms、2 frame 目が 0.2283 ms。初回は shader/pipeline と
   atlas texture の初期化を含む。
-- redraw event を種別ごとに数えている。実測では `hl_group_set` 147 件、`grid_line` 64 件、
+- redraw batch 適用は p50 0.0593 ms・max 0.0832 ms。**ここに待ち時間は入っていない。**
+  入っていた頃は同じ経路が p50 1.81 ms・max 12.69 ms を出していたが、あれは適用の cost では
+  なく Neovim が黙っていた時間だった（span を `wait_ready` の後ろへ移した）。2 桁違う。
+- redraw event を種別ごとに数えている。実測では `hl_group_set` 136 件、`grid_line` 50 件、
   `option_set` 25 件など 17 種類。どの traffic が frame を重くしたかを後から辿れる。
-- `mean_fps_over_wall_clock` が 0.8 と低いのは、snapshot 経路が画面を落ち着かせるために
-  固定の待ち時間を持っているためで、描画能力の指標ではない。この経路では
-  `instantaneous_fps`（提示間隔から出した値、実測 31.8）の方を見ること。
+- 提示レートを frame rate と呼ばないようにしてある。
+  `presentations_per_wall_clock_second` は 0.8384 だが、これは「描く能力」ではなく
+  提示回数 ÷ 実時間そのもので、snapshot 経路が画面を落ち着かせるために持つ固定の
+  待ち時間がそのまま効いている。間隔から出した
+  `presentation_rate_hz` は 56.6983。どちらも `measurement.presentation_model`
+  （ここでは `on_demand_redraw`）と併せて読むこと。on-demand renderer は要求された
+  ときにしか描かないので、この 2 つが答えるのは「どれだけ描く必要があったか」であって
+  「どれだけ速く描けるか」ではない。
+- `glyph_atlas` の counter は frame window ではなく process 全体を覆う
+  （`counters_window` に明記）。同じ report の中の `warmup_frames_excluded` は
+  frame 分布の話であって、cache counter には掛かっていない。
 
 #### この数値で言えないこと
 

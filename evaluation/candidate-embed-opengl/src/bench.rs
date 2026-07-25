@@ -218,10 +218,18 @@ fn measurement() -> Measurement {
         // No GL context exists here, so GPU submission is not on this path and
         // its figures stay absent rather than being reported as zero.
         gpu_submit_measured: false,
+        frame_total_stages: perf::STAGES_HEADLESS,
+        // Nothing paces this loop; it presents as fast as the work completes.
+        presentation_model: perf::PRESENTATION_UNTHROTTLED,
     }
 }
 
 /// Drive one frame through the real apply/build path, timing each stage.
+///
+/// The frame span closes before any bookkeeping runs. `record_batch` clones a
+/// name and touches a map per event — tens of them per frame — and charging the
+/// observer's own cost to the thing it observes is exactly the error this
+/// module exists to avoid.
 fn run_frame(
     recorder: &mut Recorder,
     grid: &mut Grid,
@@ -234,14 +242,15 @@ fn run_frame(
     let apply = recorder.span();
     grid.apply(events);
     recorder.record_event_apply(apply);
-    recorder.record_batch(events);
 
     let build = recorder.span();
     gl::build_vertices(verts, grid, atlas, "");
     recorder.record_vertex_build(build);
 
-    recorder.record_present(verts.len() / VERTEX_FLOATS);
     recorder.record_frame_total(frame);
+
+    recorder.record_batch(events);
+    recorder.record_present(verts.len() / VERTEX_FLOATS);
 }
 
 /// Run the benchmark and return what was observed.
@@ -399,6 +408,87 @@ mod tests {
         // The GPU was never on this path.
         assert!(report.frame.gpu_submit_ms.is_none());
         assert!(!report.measurement.gpu_submit_measured);
+    }
+
+    #[test]
+    fn the_frame_total_covers_the_stages_the_report_says_it_covers() {
+        if !crate::text::font_available() {
+            eprintln!("skipped: no usable font on this host");
+            return;
+        }
+        let report = run(&params(20, 3));
+        assert_eq!(report.measurement.frame_total_stages, perf::STAGES_HEADLESS);
+
+        let total = report.frame.total_ms.expect("frames were timed");
+        let apply = report.frame.event_apply_ms.expect("applies were timed");
+        let build = report.frame.vertex_build_ms.expect("builds were timed");
+
+        // Each named stage ran inside the frame that contains it, so the worst
+        // frame is at least as long as the worst instance of either stage.
+        for stage in [apply, build] {
+            assert!(
+                total.max >= stage.max,
+                "a stage ({}) outlasted every frame it ran in",
+                stage.max
+            );
+        }
+
+        // And the frame is no longer than its stages plus what the report does
+        // not claim to cover. `record_batch` clones a name per event — tens per
+        // frame — so if it were inside the span, the frame would exceed the sum
+        // of its declared stages by far more than timer resolution.
+        let declared = apply.mean + build.mean;
+        assert!(
+            total.mean <= declared * 1.5 + 0.02,
+            "frame mean {} is well above its declared stages {declared}: \
+             something not in `frame_total_stages` is being charged to the frame",
+            total.mean
+        );
+
+        // Nothing claims a stage that could not have run.
+        assert!(!report
+            .measurement
+            .frame_total_stages
+            .contains(&"gpu_submit"));
+    }
+
+    #[test]
+    fn a_headless_run_declares_an_unthrottled_presentation_model() {
+        if !crate::text::font_available() {
+            eprintln!("skipped: no usable font on this host");
+            return;
+        }
+        let report = run(&params(5, 0));
+        // Nothing paces this loop, so presentations per wall-clock second is a
+        // rate the machine actually sustained — unlike the on-demand live path,
+        // where the same division measures how much redrawing was asked for.
+        assert_eq!(
+            report.measurement.presentation_model,
+            perf::PRESENTATION_UNTHROTTLED
+        );
+        assert!(report.frame.presentations_per_wall_clock_second.is_some());
+    }
+
+    #[test]
+    fn the_atlas_accounting_holds_over_a_real_workload() {
+        if !crate::text::font_available() {
+            eprintln!("skipped: no usable font on this host");
+            return;
+        }
+        let atlas = run(&params(30, 2)).glyph_atlas;
+        assert_eq!(
+            atlas.counters.hits + atlas.counters.misses,
+            atlas.counters.lookups
+        );
+        assert_eq!(
+            atlas.counters.rasterizations
+                + atlas.counters.empty_glyphs
+                + atlas.counters.rejections_atlas_full,
+            atlas.counters.misses,
+            "every miss must land in exactly one outcome"
+        );
+        // Headless has no GPU, so there is no upload count to report.
+        assert!(atlas.uploads.is_none());
     }
 
     #[test]

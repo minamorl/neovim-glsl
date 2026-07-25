@@ -28,7 +28,11 @@ use crate::nvim::RedrawEvent;
 use crate::platform::GraphicsProbe;
 use crate::text::AtlasStats;
 
-pub const SCHEMA: &str = "nvimgl.perf-observation/v1";
+/// Bumped from `v1` when the report stopped calling a presentation count a
+/// frame rate and started naming the stages `frame.total_ms` covers. A reader
+/// that knows only `v1` would read the same field names as different quantities,
+/// so the version has to move with them.
+pub const SCHEMA: &str = "nvimgl.perf-observation/v2";
 
 /// Reported figures are rounded to this many decimal places (milliseconds, so
 /// this is 0.1 µs). Rounding is presentation only; comparisons and percentiles
@@ -90,13 +94,18 @@ impl Samples {
 
     /// How many observations strictly exceeded `threshold`, and by how much the
     /// worst one did. The threshold is always caller-supplied.
-    fn exceedances(&self, threshold: f64) -> (u64, f64) {
+    ///
+    /// The overrun is `None` when nothing exceeded the threshold: a run with no
+    /// overrun has no worst overrun, and reporting `0.0` would claim one was
+    /// observed and measured at zero.
+    fn exceedances(&self, threshold: f64) -> (u64, Option<f64>) {
         let mut count = 0;
-        let mut worst = 0.0f64;
+        let mut worst: Option<f64> = None;
         for &value in &self.values {
             if value > threshold {
                 count += 1;
-                worst = worst.max(value - threshold);
+                let overrun = value - threshold;
+                worst = Some(worst.map_or(overrun, |w: f64| w.max(overrun)));
             }
         }
         (count, worst)
@@ -124,6 +133,24 @@ pub struct Summary {
     pub max: f64,
 }
 
+/// Stages that `frame.total_ms` spans in a headless benchmark. Redraw
+/// application and vertex building happen in the same call there, so both are
+/// inside the frame; there is no GL context, so nothing is submitted.
+pub const STAGES_HEADLESS: &[&str] = &["event_apply", "vertex_build"];
+
+/// Stages that `frame.total_ms` spans in a live or snapshot session. Redraw
+/// application happens in a *different* call (the event pump), so it is not in
+/// this total; it is reported on its own as `frame.event_apply_ms`.
+pub const STAGES_LIVE: &[&str] = &["vertex_build", "gpu_submit"];
+
+/// A renderer that only draws when Neovim says something changed. Presentations
+/// divided by wall clock then measures how much happened, not how fast the
+/// renderer can go.
+pub const PRESENTATION_ON_DEMAND: &str = "on_demand_redraw";
+
+/// A loop that presents as fast as it can, with nothing throttling it.
+pub const PRESENTATION_UNTHROTTLED: &str = "unthrottled_loop";
+
 /// Where the events being measured came from, and which stages were reachable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Measurement {
@@ -137,6 +164,20 @@ pub struct Measurement {
     /// Whether GPU submission was on the measured path at all. Headless runs
     /// have no context, and report `null` for those figures rather than 0.
     pub gpu_submit_measured: bool,
+    /// Exactly which stages `frame.total_ms` covers, in order.
+    ///
+    /// The two modes do not compose a frame the same way, and the field name
+    /// alone cannot say so. Without this, `total_ms` from a headless run and
+    /// `total_ms` from a live run look comparable under one schema and are not:
+    /// see [`STAGES_HEADLESS`] and [`STAGES_LIVE`]. Anything derived from
+    /// `total_ms` — `slow_frames.frames_over_budget` above all — classifies
+    /// whatever this list says, and nothing else.
+    pub frame_total_stages: &'static [&'static str],
+    /// How presentations were paced. Both presentation figures in `frame` are
+    /// readable only against this: under [`PRESENTATION_ON_DEMAND`] they measure
+    /// how much redrawing was asked for, not what the renderer could achieve.
+    /// Neither is named as a frame rate, for that reason.
+    pub presentation_model: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,14 +226,34 @@ pub struct FrameSection {
     pub warmup_frames_excluded: u64,
     pub wall_clock_ms: Option<f64>,
     pub total_ms: Option<Summary>,
+    /// Cost of folding one drained batch of `redraw` events into the grid.
+    ///
+    /// The blocking wait for that traffic is never inside this span; the wait
+    /// ends first and the span opens after it (`wait_and_apply` in `main.rs`,
+    /// and the pump drains without blocking at all). What *is* inside differs
+    /// slightly by path and
+    /// cannot: headless applies events the benchmark already holds, while a live
+    /// session also turns the received msgpack values into events first. Both
+    /// measure the work of taking a batch and having applied it, neither
+    /// measures waiting for one.
     pub event_apply_ms: Option<Summary>,
     pub vertex_build_ms: Option<Summary>,
     pub gpu_submit_ms: Option<Summary>,
     pub present_interval_ms: Option<Summary>,
     /// Distribution of 1000/interval over the observed presentation intervals.
-    pub instantaneous_fps: Option<Summary>,
+    ///
+    /// Named for what it counts rather than as an FPS figure: under
+    /// [`PRESENTATION_ON_DEMAND`] the interval is set by how long Neovim stayed
+    /// quiet, so this is the rate at which frames were *asked for*, and it is a
+    /// rate the renderer sustained only under [`PRESENTATION_UNTHROTTLED`].
+    pub presentation_rate_hz: Option<Summary>,
     /// Presentations divided by the measured wall clock of the recorded window.
-    pub mean_fps_over_wall_clock: Option<f64>,
+    ///
+    /// Read with `measurement.presentation_model`, and read the name literally:
+    /// this is a count over a duration. Calling it a mean frame rate would claim
+    /// the idle stretches of an on-demand session were the renderer failing to
+    /// keep up, which is not what was observed.
+    pub presentations_per_wall_clock_second: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -200,16 +261,33 @@ pub struct RedrawSection {
     pub batches: u64,
     pub events_total: u64,
     pub events_per_batch: Option<Summary>,
+    /// The same observations as `frame.event_apply_ms`, not a second
+    /// measurement of them. Applying a drained batch *is* the frame's event
+    /// apply stage; the figure appears in both sections because each is
+    /// readable on its own, and the two can never disagree.
     pub batch_apply_ms: Option<Summary>,
     /// Observed count per `redraw` event name, so an expensive frame can be
     /// attributed to the traffic that caused it.
     pub events_by_kind: BTreeMap<String, u64>,
 }
 
+/// Counters cover the whole process, not the recorded frame window: the atlas
+/// is a cache whose state at report time is the thing worth knowing, and
+/// splitting it by window would report a hit ratio for a cache half of whose
+/// fills are hidden.
+pub const ATLAS_WINDOW: &str = "process_lifetime_including_warmup";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AtlasSection {
+    /// Which observations the counters below cover. Deliberately *not* the
+    /// frame window `warmup_frames_excluded` describes: see [`ATLAS_WINDOW`].
+    pub counters_window: &'static str,
     #[serde(flatten)]
     pub counters: AtlasStats,
+    /// Texture uploads, or `null` when there was no GPU on the measured path to
+    /// upload to. A headless run cannot reach that code, and reporting `0`
+    /// would claim it ran and never uploaded.
+    pub uploads: Option<u64>,
     /// `null` before any lookup: a ratio over zero lookups is not an observation.
     pub hit_ratio: Option<f64>,
     pub cached_entries: u64,
@@ -429,14 +507,14 @@ impl Recorder {
         Some(ms(ended.saturating_duration_since(started)))
     }
 
-    fn fps_samples(&self) -> Samples {
-        let mut fps = Samples::default();
+    fn presentation_rate_samples(&self) -> Samples {
+        let mut rates = Samples::default();
         for &interval in &self.present_interval.values {
             if interval > 0.0 {
-                fps.push(1000.0 / interval);
+                rates.push(1000.0 / interval);
             }
         }
-        fps
+        rates
     }
 
     fn slow_frames(&self, budget_ms: Option<f64>) -> SlowFrameSection {
@@ -450,7 +528,7 @@ impl Recorder {
                     frame_budget_ms: Some(budget),
                     frames_over_budget: Some(over),
                     frames_over_budget_ratio: Some(round(over as f64 / observed as f64)),
-                    worst_overrun_ms: Some(round(worst)),
+                    worst_overrun_ms: worst.map(round),
                     flushes_observed: self.flushes,
                     presentations_observed: self.presentations,
                     flushes_not_presented,
@@ -480,7 +558,7 @@ impl Recorder {
         atlas: AtlasSnapshot,
     ) -> Report {
         let wall_clock = self.wall_clock_ms();
-        let mean_fps = wall_clock.and_then(|elapsed| {
+        let presentation_rate = wall_clock.and_then(|elapsed| {
             (elapsed > 0.0 && self.presentations > 0)
                 .then(|| round(self.presentations as f64 * 1000.0 / elapsed))
         });
@@ -506,8 +584,8 @@ impl Recorder {
                 vertex_build_ms: self.vertex_build.summary(),
                 gpu_submit_ms: gpu_submit,
                 present_interval_ms: self.present_interval.summary(),
-                instantaneous_fps: self.fps_samples().summary(),
-                mean_fps_over_wall_clock: mean_fps,
+                presentation_rate_hz: self.presentation_rate_samples().summary(),
+                presentations_per_wall_clock_second: presentation_rate,
             },
             redraw: RedrawSection {
                 batches: self.batches,
@@ -517,7 +595,11 @@ impl Recorder {
                 events_by_kind: self.events_by_kind.clone(),
             },
             glyph_atlas: AtlasSection {
+                counters_window: ATLAS_WINDOW,
                 counters: atlas.counters,
+                uploads: measurement
+                    .gpu_submit_measured
+                    .then_some(atlas.counters.uploads),
                 hit_ratio: (atlas.counters.lookups > 0)
                     .then(|| round(atlas.counters.hits as f64 / atlas.counters.lookups as f64)),
                 cached_entries: atlas.cached_entries as u64,
@@ -622,6 +704,19 @@ mod tests {
             event_source: "synthetic_deterministic_script",
             workload_deterministic: true,
             gpu_submit_measured: false,
+            frame_total_stages: STAGES_HEADLESS,
+            presentation_model: PRESENTATION_UNTHROTTLED,
+        }
+    }
+
+    fn gpu_measurement() -> Measurement {
+        Measurement {
+            mode: "live_session",
+            event_source: "nvim_ext_linegrid",
+            workload_deterministic: false,
+            gpu_submit_measured: true,
+            frame_total_stages: STAGES_LIVE,
+            presentation_model: PRESENTATION_ON_DEMAND,
         }
     }
 
@@ -695,7 +790,7 @@ mod tests {
         let report = report_of(&recorder, None);
         assert_eq!(report.frame.frames_recorded, 0);
         assert!(report.frame.total_ms.is_none());
-        assert!(report.frame.instantaneous_fps.is_none());
+        assert!(report.frame.presentation_rate_hz.is_none());
         assert_eq!(report.redraw.batches, 0);
         assert_eq!(report.redraw.events_total, 0);
         assert!(report.redraw.events_by_kind.is_empty());
@@ -765,6 +860,35 @@ mod tests {
     }
 
     #[test]
+    fn a_run_that_never_overran_reports_no_worst_overrun_rather_than_zero() {
+        let mut recorder = Recorder::enabled();
+        recorder.frame_total = samples(&[1.0, 2.0, 4.0]);
+
+        let slow = report_of(&recorder, Some(5.0)).slow_frames;
+        // The budget was applied — this is a measured verdict, not an absent one.
+        assert_eq!(slow.criterion, CRITERION_SUPPLIED);
+        assert_eq!(slow.frames_over_budget, Some(0));
+        assert_eq!(slow.frames_over_budget_ratio, Some(0.0));
+        assert!(
+            slow.worst_overrun_ms.is_none(),
+            "no frame overran, so there is no worst overrun to measure"
+        );
+
+        let value: serde_json::Value =
+            serde_json::from_str(&to_json(&report_of(&recorder, Some(5.0)))).unwrap();
+        assert!(value["slow_frames"]["worst_overrun_ms"].is_null());
+    }
+
+    #[test]
+    fn an_exact_hit_on_the_budget_is_not_an_overrun() {
+        let mut recorder = Recorder::enabled();
+        recorder.frame_total = samples(&[5.0, 5.0]);
+        let slow = report_of(&recorder, Some(5.0)).slow_frames;
+        assert_eq!(slow.frames_over_budget, Some(0));
+        assert!(slow.worst_overrun_ms.is_none());
+    }
+
+    #[test]
     fn a_budget_with_nothing_timed_stays_unclassified() {
         let recorder = Recorder::enabled();
         let slow = report_of(&recorder, Some(16.0)).slow_frames;
@@ -800,23 +924,24 @@ mod tests {
     }
 
     #[test]
-    fn fps_is_derived_from_observed_intervals_only() {
+    fn the_presentation_rate_is_derived_from_observed_intervals_only() {
         let mut recorder = Recorder::enabled();
         recorder.present_interval = samples(&[10.0, 20.0, 40.0]);
-        let fps = report_of(&recorder, None).frame.instantaneous_fps.unwrap();
-        assert_eq!(fps.count, 3);
-        assert_eq!(fps.min, 25.0); // 1000/40
-        assert_eq!(fps.max, 100.0); // 1000/10
-        assert_eq!(fps.p50, 50.0); // 1000/20
+        let rate = report_of(&recorder, None).frame;
+        let rate = rate.presentation_rate_hz.unwrap();
+        assert_eq!(rate.count, 3);
+        assert_eq!(rate.min, 25.0); // 1000/40
+        assert_eq!(rate.max, 100.0); // 1000/10
+        assert_eq!(rate.p50, 50.0); // 1000/20
     }
 
     #[test]
-    fn a_single_presentation_yields_no_interval_and_no_fps() {
+    fn a_single_presentation_yields_no_interval_and_no_rate() {
         let mut recorder = Recorder::enabled();
         recorder.record_present(64);
         let frame = report_of(&recorder, None).frame;
         assert!(frame.present_interval_ms.is_none());
-        assert!(frame.instantaneous_fps.is_none());
+        assert!(frame.presentation_rate_hz.is_none());
     }
 
     #[test]
@@ -825,7 +950,7 @@ mod tests {
         // Nothing observed yet, so there is no window to report a rate over.
         let frame = report_of(&recorder, None).frame;
         assert!(frame.wall_clock_ms.is_none());
-        assert!(frame.mean_fps_over_wall_clock.is_none());
+        assert!(frame.presentations_per_wall_clock_second.is_none());
 
         let mut recorder = Recorder::enabled();
         recorder.record_present(10);
@@ -834,7 +959,7 @@ mod tests {
         let elapsed = frame.wall_clock_ms.expect("a window opened");
         assert!(elapsed >= 0.0);
         assert!(
-            frame.mean_fps_over_wall_clock.is_some(),
+            frame.presentations_per_wall_clock_second.is_some(),
             "two presentations over a measured window is a rate"
         );
     }
@@ -846,7 +971,7 @@ mod tests {
         recorder.record_batch(&[event("flush")]);
         let frame = report_of(&recorder, None).frame;
         assert!(frame.wall_clock_ms.is_none());
-        assert!(frame.mean_fps_over_wall_clock.is_none());
+        assert!(frame.presentations_per_wall_clock_second.is_none());
     }
 
     #[test]
@@ -885,6 +1010,157 @@ mod tests {
         assert_eq!(report.glyph_atlas.packed_height_ratio, 0.25);
     }
 
+    fn atlas_with_uploads(uploads: u64) -> AtlasSnapshot {
+        AtlasSnapshot {
+            counters: AtlasStats {
+                lookups: 4,
+                hits: 3,
+                misses: 1,
+                rasterizations: 1,
+                empty_glyphs: 0,
+                rejections_atlas_full: 0,
+                uploads,
+            },
+            cached_entries: 1,
+            side_px: 1024,
+            packed_height_px: 16,
+        }
+    }
+
+    #[test]
+    fn texture_uploads_are_absent_when_there_was_no_gpu_to_upload_to() {
+        let recorder = Recorder::enabled();
+        let report = recorder.report(
+            measurement(),
+            Environment::observe(None),
+            parameters(None),
+            atlas_with_uploads(0),
+        );
+        assert!(!report.measurement.gpu_submit_measured);
+        assert!(
+            report.glyph_atlas.uploads.is_none(),
+            "a headless run never reaches the upload path; 0 would claim it did"
+        );
+
+        let value: serde_json::Value = serde_json::from_str(&to_json(&report)).unwrap();
+        assert!(value["glyph_atlas"]["uploads"].is_null());
+        // The counter is reported once, through the section that can suppress it.
+        assert_eq!(
+            value["glyph_atlas"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .filter(|k| k.as_str() == "uploads")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn texture_uploads_are_reported_when_the_gpu_was_on_the_path() {
+        let recorder = Recorder::enabled();
+        let report = recorder.report(
+            gpu_measurement(),
+            Environment::observe(None),
+            parameters(None),
+            atlas_with_uploads(3),
+        );
+        assert_eq!(report.glyph_atlas.uploads, Some(3));
+
+        // Zero uploads on a GPU path is an observation, not an absence.
+        let none_yet = recorder.report(
+            gpu_measurement(),
+            Environment::observe(None),
+            parameters(None),
+            atlas_with_uploads(0),
+        );
+        assert_eq!(none_yet.glyph_atlas.uploads, Some(0));
+    }
+
+    #[test]
+    fn atlas_counters_declare_the_window_they_cover() {
+        let mut recorder = Recorder::enabled();
+        recorder.note_warmup_frame();
+        let report = report_of(&recorder, None);
+        // The frame window excludes warm-up; the atlas counters do not, and the
+        // report has to say so rather than let one window be read for both.
+        assert_eq!(report.frame.warmup_frames_excluded, 1);
+        assert_eq!(report.glyph_atlas.counters_window, ATLAS_WINDOW);
+
+        let value: serde_json::Value = serde_json::from_str(&to_json(&report)).unwrap();
+        assert_eq!(value["glyph_atlas"]["counters_window"], ATLAS_WINDOW);
+    }
+
+    #[test]
+    fn the_report_names_the_stages_its_frame_total_covers() {
+        let recorder = Recorder::enabled();
+
+        let headless = report_of(&recorder, None);
+        assert_eq!(headless.measurement.frame_total_stages, STAGES_HEADLESS);
+
+        let live = recorder.report(
+            gpu_measurement(),
+            Environment::observe(None),
+            parameters(None),
+            AtlasSnapshot::absent(),
+        );
+        assert_eq!(live.measurement.frame_total_stages, STAGES_LIVE);
+
+        // The two modes compose a frame differently. That is the fact the field
+        // exists to publish, so a schema change that made them equal without
+        // unifying the spans would be a regression, not a simplification.
+        assert_ne!(STAGES_HEADLESS, STAGES_LIVE);
+        assert!(STAGES_HEADLESS.contains(&"event_apply"));
+        assert!(
+            !STAGES_LIVE.contains(&"event_apply"),
+            "live frames apply redraw in the event pump, not in the frame"
+        );
+        // A stage that was never measured must not be claimed as covered.
+        assert!(!STAGES_HEADLESS.contains(&"gpu_submit"));
+
+        let value: serde_json::Value = serde_json::from_str(&to_json(&headless)).unwrap();
+        let stages: Vec<&str> = value["measurement"]["frame_total_stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(stages, STAGES_HEADLESS);
+    }
+
+    #[test]
+    fn the_report_says_how_presentations_were_paced() {
+        let recorder = Recorder::enabled();
+        assert_eq!(
+            report_of(&recorder, None).measurement.presentation_model,
+            PRESENTATION_UNTHROTTLED
+        );
+
+        let live = recorder.report(
+            gpu_measurement(),
+            Environment::observe(None),
+            parameters(None),
+            AtlasSnapshot::absent(),
+        );
+        // Without this, `presentations_per_wall_clock_second` from an idle on-demand
+        // session reads as a frame rate the renderer could not exceed.
+        assert_eq!(live.measurement.presentation_model, PRESENTATION_ON_DEMAND);
+
+        let value: serde_json::Value = serde_json::from_str(&to_json(&live)).unwrap();
+        assert_eq!(
+            value["measurement"]["presentation_model"],
+            PRESENTATION_ON_DEMAND
+        );
+    }
+
+    #[test]
+    fn batch_apply_and_event_apply_are_the_same_observations() {
+        let mut recorder = Recorder::enabled();
+        recorder.event_apply = samples(&[1.0, 2.0, 3.0]);
+        let report = report_of(&recorder, None);
+        assert_eq!(report.frame.event_apply_ms, report.redraw.batch_apply_ms);
+    }
+
     #[test]
     fn report_json_carries_the_schema_and_refuses_to_imply_acceptance() {
         let recorder = Recorder::enabled();
@@ -909,7 +1185,7 @@ mod tests {
 
         // Unobserved quantities are null, never a stand-in number.
         assert!(value["frame"]["total_ms"].is_null());
-        assert!(value["frame"]["mean_fps_over_wall_clock"].is_null());
+        assert!(value["frame"]["presentations_per_wall_clock_second"].is_null());
         assert!(value["slow_frames"]["frames_over_budget"].is_null());
 
         // The atlas counters are flattened in, not nested under a wrapper.
@@ -943,7 +1219,8 @@ mod tests {
             "vertex_build_ms",
             "gpu_submit_ms",
             "present_interval_ms",
-            "instantaneous_fps",
+            "presentation_rate_hz",
+            "presentations_per_wall_clock_second",
         ] {
             assert!(
                 value["frame"].get(field).is_some(),
@@ -972,5 +1249,183 @@ mod tests {
         let s = samples(&[0.000_123_456, 0.000_2]).summary().unwrap();
         assert_eq!(s.min, 0.0001); // 4 decimal places of a millisecond
         assert!(s.max > 0.0);
+    }
+
+    // --- The committed evidence -------------------------------------------
+    //
+    // `evaluation/evidence/*.json` and the prose in `evaluation/README.md` are
+    // both published artefacts, and the commit that carries them claims they
+    // are honest observations. Nothing but a check like this stops the two from
+    // drifting apart, or stops a schema change from leaving a stale file behind
+    // still claiming the current schema.
+
+    fn evidence_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("evidence")
+    }
+
+    fn evidence(name: &str) -> serde_json::Value {
+        let path = evidence_dir().join(name);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("evidence {} is unreadable: {e}", path.display()));
+        serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("evidence {} is not JSON: {e}", path.display()))
+    }
+
+    fn readme() -> String {
+        let path = evidence_dir().join("..").join("README.md");
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is unreadable: {e}", path.display()))
+    }
+
+    fn count(atlas: &serde_json::Value, field: &str) -> u64 {
+        atlas[field]
+            .as_u64()
+            .unwrap_or_else(|| panic!("glyph_atlas.{field} is not a count"))
+    }
+
+    #[test]
+    fn the_committed_evidence_still_matches_the_schema_it_claims() {
+        for name in ["perf-headless-bench.json", "perf-live-session.json"] {
+            let report = evidence(name);
+            assert_eq!(report["schema"], SCHEMA, "{name} declares another schema");
+            assert_eq!(report["performance_acceptance"], CRITERION_UNSET, "{name}");
+            assert_eq!(report["canonical_performance_criteria"], false, "{name}");
+
+            let measurement = &report["measurement"];
+            let expected_stages = match measurement["mode"].as_str() {
+                Some("headless_benchmark") => STAGES_HEADLESS,
+                Some("live_session") => STAGES_LIVE,
+                other => panic!("{name} has an unknown mode {other:?}"),
+            };
+            let stages: Vec<&str> = measurement["frame_total_stages"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{name} does not say what total_ms covers"))
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect();
+            assert_eq!(
+                stages, expected_stages,
+                "{name} was produced by an instrumentation layout this build no longer has"
+            );
+            assert!(
+                measurement["presentation_model"].is_string(),
+                "{name} does not say how presentations were paced"
+            );
+
+            let atlas = &report["glyph_atlas"];
+            assert_eq!(atlas["counters_window"], ATLAS_WINDOW, "{name}");
+            assert_eq!(
+                count(atlas, "hits") + count(atlas, "misses"),
+                count(atlas, "lookups"),
+                "{name}: every lookup is a hit or a miss"
+            );
+            assert_eq!(
+                count(atlas, "rasterizations")
+                    + count(atlas, "empty_glyphs")
+                    + count(atlas, "rejections_atlas_full"),
+                count(atlas, "misses"),
+                "{name}: every miss has exactly one outcome"
+            );
+
+            // Uploads are reported exactly when the GPU was on the path.
+            let gpu = measurement["gpu_submit_measured"].as_bool().unwrap();
+            assert_eq!(
+                atlas["uploads"].is_null(),
+                !gpu,
+                "{name}: upload count disagrees with whether a GPU was measured"
+            );
+            assert_eq!(
+                report["frame"]["gpu_submit_ms"].is_null(),
+                !gpu,
+                "{name}: GPU timings disagree with whether a GPU was measured"
+            );
+        }
+    }
+
+    /// One `| label | p50 ms | p99 ms | max ms |` row, exactly as the README
+    /// table writes it. Unrounded on purpose: a rounded quotation cannot be
+    /// checked against the artefact without inventing a tolerance, and a
+    /// tolerance is the thing that lets prose drift.
+    fn readme_row(label: &str, summary: &serde_json::Value) -> String {
+        let at = |key: &str| {
+            summary[key]
+                .as_f64()
+                .unwrap_or_else(|| panic!("{label} has no {key}"))
+        };
+        format!(
+            "| {label} | {} ms | {} ms | {} ms |",
+            at("p50"),
+            at("p99"),
+            at("max")
+        )
+    }
+
+    #[test]
+    fn the_readme_quotes_the_evidence_it_cites() {
+        let readme = readme();
+        let bench = evidence("perf-headless-bench.json");
+        let atlas = &bench["glyph_atlas"];
+        let frame = &bench["frame"];
+
+        // The atlas figures are exactly where the prose drifted from the
+        // artefact once already: the README claimed 1.58M lookups against 2.64M
+        // measured, and a 38px atlas against 35px packed. The table rows are
+        // pinned for the same reason, before they get a chance to.
+        let mut quoted = vec![
+            format!("lookup {} 回", count(atlas, "lookups")),
+            format!("rasterize は {} 回", count(atlas, "rasterizations")),
+            format!(
+                "atlas 使用高さ {}px / {}px",
+                count(atlas, "packed_height_px"),
+                count(atlas, "atlas_side_px")
+            ),
+            readme_row("frame 全体", &frame["total_ms"]),
+            readme_row("vertex 構築", &frame["vertex_build_ms"]),
+            readme_row("redraw batch 適用", &frame["event_apply_ms"]),
+        ];
+
+        // The live run is not reproducible, so only the figures the prose names
+        // outright are pinned — but those must still be the measured ones.
+        let live = evidence("perf-live-session.json");
+        let submit = &live["frame"]["gpu_submit_ms"];
+        quoted.push(format!(
+            "GPU 提出は 1 frame 目が {} ms、2 frame 目が {} ms",
+            submit["max"].as_f64().unwrap(),
+            submit["min"].as_f64().unwrap()
+        ));
+        let apply = &live["frame"]["event_apply_ms"];
+        quoted.push(format!(
+            "redraw batch 適用は p50 {} ms・max {} ms",
+            apply["p50"].as_f64().unwrap(),
+            apply["max"].as_f64().unwrap()
+        ));
+        quoted.push(format!(
+            "`presentations_per_wall_clock_second` は {} だが",
+            live["frame"]["presentations_per_wall_clock_second"]
+                .as_f64()
+                .unwrap()
+        ));
+        quoted.push(format!(
+            "`presentation_rate_hz` は {}。",
+            live["frame"]["presentation_rate_hz"]["p50"]
+                .as_f64()
+                .unwrap()
+        ));
+        for kind in ["hl_group_set", "grid_line", "option_set"] {
+            quoted.push(format!(
+                "`{kind}` {} 件",
+                live["redraw"]["events_by_kind"][kind].as_u64().unwrap()
+            ));
+        }
+
+        for quoted in quoted {
+            assert!(
+                readme.contains(&quoted),
+                "evaluation/README.md does not say `{quoted}`, which is what the \
+                 evidence it cites actually measured"
+            );
+        }
     }
 }

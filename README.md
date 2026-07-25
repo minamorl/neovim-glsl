@@ -85,9 +85,19 @@ vim.rpcnotify(1, 'nvimgl_image', '/path/to/image.png', 3, 6, 34, 11)
 ./target/release/nvimgl --perf --perf-report /tmp/live.json -- --clean
 ```
 
-JSON は `nvimgl.perf-observation/v1`。frame time / FPS の分布（p50・p90・p95・p99）、
+JSON は `nvimgl.perf-observation/v2`。frame time と提示レートの分布（p50・p90・p95・p99）、
 redraw batch の event 種別内訳とその適用コスト、glyph atlas の hit / miss / 再ラスタライズ、
 frame ごとの vertex 数、そして実行環境と parameter が入る。
+
+**提示レートを FPS とは呼んでいない。** on-demand renderer は要求されたときにしか描かない
+ので、提示回数 ÷ 実時間は「どれだけ速く描けるか」ではなく「どれだけ描く必要があったか」に
+なる。field 名（`presentations_per_wall_clock_second` / `presentation_rate_hz`）はその
+とおりに読めるようにしてあり、どちらの意味で読むべきかは
+`measurement.presentation_model` が言う。
+
+**`frame.total_ms` が覆う段は経路で違い、report がそれを名指しする**
+（`measurement.frame_total_stages`）。同じ field 名で別の量を出したまま比較させないため。
+redraw 適用の計測に **Neovim を待っていた時間は入らない**。span は待ちが終わってから開く。
 
 **観測しなかった値は `null` で出る。**0 では出さない。GPU を通っていない headless 実行の
 `gpu_submit_ms` が `null` なのはこのためで、「速かった」ではなく「測っていない」を意味する。

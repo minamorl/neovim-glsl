@@ -7,7 +7,7 @@ use std::ffi::OsStr;
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
@@ -16,8 +16,35 @@ use rmpv::Value;
 pub struct Nvim {
     child: Child,
     stdin: ChildStdin,
-    rx: Receiver<Value>,
+    queue: RedrawQueue,
     next_msgid: u64,
+}
+
+/// What ended a blocking wait for traffic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ready {
+    /// At least one message is queued and ready to be drained.
+    Message,
+    /// The timeout elapsed with nothing to do.
+    TimedOut,
+    /// Neovim closed the pipe.
+    Closed,
+}
+
+/// The receive side of the transport.
+///
+/// This exists as its own type for one reason: it separates *waiting for*
+/// traffic from *decoding and applying* it. [`RedrawQueue::wait_ready`] blocks
+/// and buffers the raw message without touching it; [`RedrawQueue::drain_redraw`]
+/// does the decoding. A caller that wants to time the work therefore opens its
+/// span between the two calls and never folds idle wait into the measurement.
+/// Splitting it off from [`Nvim`] also means that boundary is testable without
+/// spawning a child process.
+pub struct RedrawQueue {
+    rx: Receiver<Value>,
+    /// The message that ended a blocking wait, held undecoded until the caller
+    /// drains it.
+    pending: Option<Value>,
     custom: Vec<Notification>,
 }
 
@@ -56,7 +83,13 @@ impl Nvim {
             }
         });
 
-        Ok(Self { child, stdin, rx, next_msgid: 1, custom: Vec::new() })
+        Ok(Self { child, stdin, queue: RedrawQueue::new(rx), next_msgid: 1 })
+    }
+
+    /// The receive side, for callers that need to place their own timing
+    /// boundary between waiting and draining.
+    pub fn queue_mut(&mut self) -> &mut RedrawQueue {
+        &mut self.queue
     }
 
     pub fn request(&mut self, method: &str, params: Vec<Value>) -> std::io::Result<()> {
@@ -90,7 +123,7 @@ impl Nvim {
             Value::Array(vec![]),
         ]))?;
 
-        let response = self.rx.recv_timeout(Duration::from_secs(2)).map_err(|error| {
+        let response = self.queue.recv_raw(Duration::from_secs(2)).map_err(|error| {
             std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 format!("nvim_get_api_info response unavailable: {error}"),
@@ -167,14 +200,54 @@ vim.bo[buffer].modifiable = false
     /// Notifications Lua sent us since the last call. The UI, not Neovim, decides
     /// what they mean.
     pub fn take_notifications(&mut self) -> Vec<Notification> {
-        std::mem::take(&mut self.custom)
+        self.queue.take_notifications()
     }
 
     /// Drain everything currently queued, returning only the flattened `redraw`
     /// events. Responses to our own requests carry no UI state and are dropped.
     pub fn drain_redraw(&mut self) -> (Vec<RedrawEvent>, bool) {
+        self.queue.drain_redraw()
+    }
+}
+
+impl RedrawQueue {
+    pub fn new(rx: Receiver<Value>) -> Self {
+        Self {
+            rx,
+            pending: None,
+            custom: Vec::new(),
+        }
+    }
+
+    /// Block until at least one message is queued or `timeout` elapses.
+    ///
+    /// The message is buffered untouched — nothing is decoded and no `redraw`
+    /// event is applied here. All of that work happens in [`Self::drain_redraw`],
+    /// which is why a caller can open a timing span after this returns and
+    /// measure only the work, never the wait.
+    pub fn wait_ready(&mut self, timeout: Duration) -> Ready {
+        if self.pending.is_some() {
+            return Ready::Message;
+        }
+        match self.rx.recv_timeout(timeout) {
+            Ok(v) => {
+                self.pending = Some(v);
+                Ready::Message
+            }
+            Err(RecvTimeoutError::Timeout) => Ready::TimedOut,
+            Err(RecvTimeoutError::Disconnected) => Ready::Closed,
+        }
+    }
+
+    /// Drain everything currently queued — including anything a preceding
+    /// [`Self::wait_ready`] buffered — returning only the flattened `redraw`
+    /// events. Responses to our own requests carry no UI state and are dropped.
+    pub fn drain_redraw(&mut self) -> (Vec<RedrawEvent>, bool) {
         let mut out = Vec::new();
         let mut closed = false;
+        if let Some(v) = self.pending.take() {
+            collect(&v, &mut out, &mut self.custom);
+        }
         loop {
             match self.rx.try_recv() {
                 Ok(v) => collect(&v, &mut out, &mut self.custom),
@@ -188,17 +261,17 @@ vim.bo[buffer].modifiable = false
         (out, closed)
     }
 
-    /// Block until at least one event arrives or the timeout elapses.
-    pub fn wait_redraw(&mut self, timeout: std::time::Duration) -> (Vec<RedrawEvent>, bool) {
-        let mut out = Vec::new();
-        match self.rx.recv_timeout(timeout) {
-            Ok(v) => collect(&v, &mut out, &mut self.custom),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return (out, false),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return (out, true),
+    pub fn take_notifications(&mut self) -> Vec<Notification> {
+        std::mem::take(&mut self.custom)
+    }
+
+    /// One undecoded message, for the startup handshake that reads a response
+    /// rather than UI traffic.
+    fn recv_raw(&mut self, timeout: Duration) -> Result<Value, RecvTimeoutError> {
+        match self.pending.take() {
+            Some(v) => Ok(v),
+            None => self.rx.recv_timeout(timeout),
         }
-        let (mut rest, closed) = self.drain_redraw();
-        out.append(&mut rest);
-        (out, closed)
     }
 }
 

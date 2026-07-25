@@ -1,6 +1,6 @@
 {
-  "schema": "nvimgl.perf-observation/v1",
-  "trace_id": "01KYCERW266QVZ7FVY13Z9DVKD",
+  "schema": "nvimgl.perf-observation/v2",
+  "trace_id": "01KYCM1KGQ23761ZVJRYHRX499",
   "evaluation_candidate": true,
   "canonical_performance_criteria": false,
   "performance_acceptance": "unset_awaiting_human_gate",
@@ -8,7 +8,12 @@
     "mode": "live_session",
     "event_source": "nvim_ext_linegrid",
     "workload_deterministic": false,
-    "gpu_submit_measured": true
+    "gpu_submit_measured": true,
+    "frame_total_stages": [
+      "vertex_build",
+      "gpu_submit"
+    ],
+    "presentation_model": "on_demand_redraw"
   },
   "environment": {
     "os": "macos",
@@ -35,91 +40,91 @@
   "frame": {
     "frames_recorded": 2,
     "warmup_frames_excluded": 0,
-    "wall_clock_ms": 2513.5663,
+    "wall_clock_ms": 2385.4853,
     "total_ms": {
       "count": 2,
-      "min": 4.7819,
-      "mean": 28.4341,
-      "p50": 4.7819,
-      "p90": 52.0863,
-      "p95": 52.0863,
-      "p99": 52.0863,
-      "max": 52.0863
+      "min": 0.3115,
+      "mean": 12.8856,
+      "p50": 0.3115,
+      "p90": 25.4598,
+      "p95": 25.4598,
+      "p99": 25.4598,
+      "max": 25.4598
     },
     "event_apply_ms": {
       "count": 3,
-      "min": 0.276,
-      "mean": 4.9256,
-      "p50": 1.8094,
-      "p90": 12.6915,
-      "p95": 12.6915,
-      "p99": 12.6915,
-      "max": 12.6915
+      "min": 0.026,
+      "mean": 0.0562,
+      "p50": 0.0593,
+      "p90": 0.0832,
+      "p95": 0.0832,
+      "p99": 0.0832,
+      "max": 0.0832
     },
     "vertex_build_ms": {
       "count": 2,
-      "min": 0.1093,
-      "mean": 0.4191,
-      "p50": 0.1093,
-      "p90": 0.7288,
-      "p95": 0.7288,
-      "p99": 0.7288,
-      "max": 0.7288
+      "min": 0.0829,
+      "mean": 0.565,
+      "p50": 0.0829,
+      "p90": 1.0472,
+      "p95": 1.0472,
+      "p99": 1.0472,
+      "max": 1.0472
     },
     "gpu_submit_ms": {
       "count": 2,
-      "min": 0.3288,
-      "mean": 25.7065,
-      "p50": 0.3288,
-      "p90": 51.0843,
-      "p95": 51.0843,
-      "p99": 51.0843,
-      "max": 51.0843
+      "min": 0.2283,
+      "mean": 12.3192,
+      "p50": 0.2283,
+      "p90": 24.4101,
+      "p95": 24.4101,
+      "p99": 24.4101,
+      "max": 24.4101
     },
     "present_interval_ms": {
       "count": 1,
-      "min": 31.448,
-      "mean": 31.448,
-      "p50": 31.448,
-      "p90": 31.448,
-      "p95": 31.448,
-      "p99": 31.448,
-      "max": 31.448
+      "min": 17.6372,
+      "mean": 17.6372,
+      "p50": 17.6372,
+      "p90": 17.6372,
+      "p95": 17.6372,
+      "p99": 17.6372,
+      "max": 17.6372
     },
-    "instantaneous_fps": {
+    "presentation_rate_hz": {
       "count": 1,
-      "min": 31.7985,
-      "mean": 31.7985,
-      "p50": 31.7985,
-      "p90": 31.7985,
-      "p95": 31.7985,
-      "p99": 31.7985,
-      "max": 31.7985
+      "min": 56.6983,
+      "mean": 56.6983,
+      "p50": 56.6983,
+      "p90": 56.6983,
+      "p95": 56.6983,
+      "p99": 56.6983,
+      "max": 56.6983
     },
-    "mean_fps_over_wall_clock": 0.7957
+    "presentations_per_wall_clock_second": 0.8384
   },
   "redraw": {
     "batches": 3,
-    "events_total": 327,
+    "events_total": 302,
     "events_per_batch": {
       "count": 3,
-      "min": 27.0,
-      "mean": 109.0,
-      "p50": 140.0,
-      "p90": 160.0,
-      "p95": 160.0,
-      "p99": 160.0,
-      "max": 160.0
+      "min": 20.0,
+      "mean": 100.6667,
+      "p50": 106.0,
+      "p90": 176.0,
+      "p95": 176.0,
+      "p99": 176.0,
+      "max": 176.0
     },
     "batch_apply_ms": {
       "count": 3,
-      "min": 0.276,
-      "mean": 4.9256,
-      "p50": 1.8094,
-      "p90": 12.6915,
-      "p95": 12.6915,
-      "p99": 12.6915,
-      "max": 12.6915
+      "min": 0.026,
+      "mean": 0.0562,
+      "p50": 0.0593,
+      "p90": 0.0832,
+      "p95": 0.0832,
+      "p99": 0.0832,
+      "max": 0.0832
     },
     "events_by_kind": {
       "chdir": 1,
@@ -127,10 +132,10 @@
       "flush": 2,
       "grid_clear": 1,
       "grid_cursor_goto": 2,
-      "grid_line": 64,
+      "grid_line": 50,
       "grid_resize": 1,
       "hl_attr_define": 58,
-      "hl_group_set": 147,
+      "hl_group_set": 136,
       "mode_change": 2,
       "mode_info_set": 1,
       "mouse_on": 1,
@@ -142,6 +147,7 @@
     }
   },
   "glyph_atlas": {
+    "counters_window": "process_lifetime_including_warmup",
     "lookups": 3840,
     "hits": 3822,
     "misses": 18,
