@@ -198,4 +198,37 @@ mod tests {
         // Outside [left, right) nothing moved.
         assert_eq!(grid.cell(0, 2).ch, 'k');
     }
+
+    #[test]
+    fn a_negative_scroll_moves_the_region_down_by_that_many_rows() {
+        let mut grid = Grid::new(2, 4);
+        for row in 0..4 {
+            grid.set(row, 0, Cell { ch: (b'a' + row as u8) as char, hl: row as u64 });
+            grid.set(row, 1, Cell { ch: 'k', hl: 0 });
+        }
+        // Rows [0,4) move down one: a b c d -> a a b c, and the vacated top row
+        // keeps what was there for nvim to redraw over.
+        grid.scroll(0, 4, 0, 1, -1);
+        assert_eq!(
+            (0..4).map(|r| grid.cell(r, 0).ch).collect::<String>(),
+            "aabc"
+        );
+        // The highlight travels with the cell, and column 1 is outside the region.
+        assert_eq!(grid.cell(3, 0).hl, 2);
+        assert_eq!((0..4).map(|r| grid.cell(r, 1).ch).collect::<String>(), "kkkk");
+    }
+
+    #[test]
+    fn a_negative_scroll_of_an_inner_region_leaves_the_rows_around_it_alone() {
+        let mut grid = Grid::new(1, 5);
+        for row in 0..5 {
+            grid.set(row, 0, Cell { ch: (b'a' + row as u8) as char, hl: 0 });
+        }
+        // Only rows [1,4) participate: b c d -> b b c.
+        grid.scroll(1, 4, 0, 1, -1);
+        assert_eq!(
+            (0..5).map(|r| grid.cell(r, 0).ch).collect::<String>(),
+            "abbce"
+        );
+    }
 }

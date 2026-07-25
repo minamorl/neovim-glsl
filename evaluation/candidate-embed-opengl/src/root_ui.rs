@@ -61,6 +61,23 @@ struct Cursor {
     col: usize,
 }
 
+/// Where one grid sits on the composited screen.
+///
+/// `row`/`col`/`width`/`height` are one coordinate space for every placement
+/// kind: absolute screen cells, floored the way the compositor floors them. A
+/// float's own anchor is reported separately in `anchor*`, so a consumer can
+/// locate the float without re-deriving the anchor chain and never has to guess
+/// which space a key is in. The rectangle is the one submitted for compositing,
+/// not the part that survives it: it may hang off any edge, and the message
+/// grid is allocated full-height, so `row + height` routinely exceeds the
+/// screen. Clipping to `scene.cols`/`scene.rows` is the consumer's to do.
+///
+/// The coordinates are absent only when the grid has no place on this screen at
+/// all: an `external` window, a `float` whose anchor chain does not resolve, or
+/// an `unplaced` grid nvim has allocated but not positioned — either not yet, or
+/// no longer, after `win_close` without a `grid_destroy`.
+/// `hidden` is nvim's own per-window flag; a float is also off screen when
+/// anything in its `anchor_grid` chain is hidden.
 #[derive(Serialize)]
 struct GridView {
     id: u64,
@@ -75,6 +92,16 @@ struct GridView {
     width: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     height: Option<usize>,
+    /// Which corner of the float `win_float_pos` positioned, and the grid and
+    /// (possibly fractional, possibly negative) cell it positioned it against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor_grid: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor_row: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anchor_col: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     zindex: Option<i64>,
     hidden: bool,
@@ -95,27 +122,46 @@ fn grids(screen: &Screen) -> Vec<GridView> {
                 col: None,
                 width: None,
                 height: None,
+                anchor: None,
+                anchor_grid: None,
+                anchor_row: None,
+                anchor_col: None,
                 zindex: None,
                 hidden: false,
             };
+            if id == GLOBAL_GRID {
+                (view.row, view.col) = (Some(0), Some(0));
+                (view.width, view.height) = (Some(cols), Some(rows));
+            }
             if let Some(window) = screen.window(id) {
                 view.hidden = window.hidden;
+                (view.row, view.col) = match screen.screen_origin(id) {
+                    Some((row, col)) => (Some(row), Some(col)),
+                    None => (None, None),
+                };
                 match window.placement {
-                    Placement::Window { row, col, width, height } => {
+                    // A split shows the extent nvim gave it, which may be less
+                    // than the grid it was handed.
+                    Placement::Window { width, height, .. } => {
                         view.placement = "window";
-                        (view.row, view.col) = (Some(row), Some(col));
                         (view.width, view.height) = (Some(width), Some(height));
                     }
-                    Placement::Float { row, col, zindex, .. } => {
+                    // A float and the message grid are shown whole.
+                    Placement::Float { anchor, anchor_grid, row, col, zindex } => {
                         view.placement = "float";
-                        (view.row, view.col) = (Some(row as i64), Some(col as i64));
+                        (view.width, view.height) = (Some(cols), Some(rows));
+                        view.anchor = Some(anchor.name());
+                        view.anchor_grid = Some(anchor_grid);
+                        (view.anchor_row, view.anchor_col) = (Some(row), Some(col));
                         view.zindex = Some(zindex);
                     }
-                    Placement::Message { row, zindex } => {
+                    Placement::Message { zindex, .. } => {
                         view.placement = "message";
-                        view.row = Some(row);
+                        (view.width, view.height) = (Some(cols), Some(rows));
                         view.zindex = Some(zindex);
                     }
+                    // Not on this screen at all, so `screen_origin` gave it no
+                    // coordinates to report.
                     Placement::External => view.placement = "external",
                 }
             }
@@ -196,7 +242,62 @@ fn evaluate(screen: &Screen) -> Evaluation<'_> {
 
 #[cfg(test)]
 mod tests {
+    use rmpv::Value;
+
     use super::*;
+    use crate::nvim::RedrawEvent;
+
+    fn resize(grid: u64, cols: usize, rows: usize) -> RedrawEvent {
+        ("grid_resize".into(), vec![Value::from(grid), Value::from(cols), Value::from(rows)])
+    }
+
+    fn win_pos(grid: u64, row: i64, col: i64, width: usize, height: usize) -> RedrawEvent {
+        (
+            "win_pos".into(),
+            vec![
+                Value::from(grid),
+                Value::Ext(1, vec![grid as u8]),
+                Value::from(row),
+                Value::from(col),
+                Value::from(width),
+                Value::from(height),
+            ],
+        )
+    }
+
+    fn win_float_pos(
+        grid: u64,
+        anchor: &str,
+        anchor_grid: u64,
+        row: f64,
+        col: f64,
+        zindex: Option<i64>,
+    ) -> RedrawEvent {
+        let mut args = vec![
+            Value::from(grid),
+            Value::Ext(1, vec![grid as u8]),
+            Value::from(anchor),
+            Value::from(anchor_grid),
+            Value::from(row),
+            Value::from(col),
+            Value::from(true),
+        ];
+        if let Some(z) = zindex {
+            args.push(Value::from(z));
+        }
+        ("win_float_pos".into(), args)
+    }
+
+    /// The projected grid entry for `id`.
+    fn grid_view(value: &serde_json::Value, id: u64) -> serde_json::Value {
+        value["scene"]["grids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == id)
+            .unwrap()
+            .clone()
+    }
 
     #[test]
     fn projection_is_evidence_without_root_ui_adoption() {
@@ -219,35 +320,123 @@ mod tests {
     fn the_projection_records_where_each_grid_was_placed() {
         let mut screen = Screen::new(6, 2);
         screen.apply(&[
-            ("grid_resize".into(), vec![2u64.into(), 3u64.into(), 1u64.into()]),
-            (
-                "win_pos".into(),
-                vec![2u64.into(), 2u64.into(), 1u64.into(), 3u64.into(), 3u64.into(), 1u64.into()],
-            ),
-            ("grid_resize".into(), vec![5u64.into(), 4u64.into(), 1u64.into()]),
-            (
-                "win_float_pos".into(),
-                vec![
-                    5u64.into(),
-                    5u64.into(),
-                    "NW".into(),
-                    1u64.into(),
-                    1u64.into(),
-                    1u64.into(),
-                    true.into(),
-                    70i64.into(),
-                ],
-            ),
+            resize(2, 3, 1),
+            win_pos(2, 1, 3, 3, 1),
+            resize(5, 4, 1),
+            win_float_pos(5, "NW", GLOBAL_GRID, 1.0, 1.0, Some(70)),
         ]);
 
         let value = serde_json::to_value(evaluate(&screen)).unwrap();
         let grids = value["scene"]["grids"].as_array().unwrap().clone();
         assert_eq!(grids.len(), 3);
+
+        // The global grid is the screen, so it is locatable like any other.
+        assert_eq!(grids[0]["placement"], "global");
+        assert_eq!((grids[0]["row"].clone(), grids[0]["col"].clone()), (0.into(), 0.into()));
+        assert_eq!((grids[0]["width"].clone(), grids[0]["height"].clone()), (6.into(), 2.into()));
+
         assert_eq!(grids[1]["placement"], "window");
         assert_eq!((grids[1]["row"].clone(), grids[1]["col"].clone()), (1.into(), 3.into()));
         assert_eq!(grids[1]["width"], 3);
+
         assert_eq!(grids[2]["placement"], "float");
         assert_eq!(grids[2]["zindex"], 70);
         assert_eq!(grids[2]["hidden"], false);
+        // A float is shown whole, and its anchor is recorded as nvim gave it.
+        assert_eq!((grids[2]["width"].clone(), grids[2]["height"].clone()), (4.into(), 1.into()));
+        assert_eq!(grids[2]["anchor"], "NW");
+        assert_eq!(grids[2]["anchor_grid"], 1);
+        assert_eq!(grids[2]["anchor_row"], 1.0);
+        assert_eq!(grids[2]["anchor_col"], 1.0);
+    }
+
+    /// `row`/`col` mean the same thing for every placement: the screen cell the
+    /// compositor puts the grid's top-left in. A float's anchor is relative and
+    /// may be fractional or negative, so it cannot be reported in those keys.
+    #[test]
+    fn a_float_is_projected_at_the_screen_cell_it_composites_at() {
+        let mut screen = Screen::new(8, 4);
+        screen.apply(&[
+            resize(3, 2, 1),
+            win_float_pos(3, "NW", GLOBAL_GRID, 1.0, 2.0, None),
+            // Anchored to the float above, not to the screen.
+            resize(4, 2, 1),
+            win_float_pos(4, "NW", 3, 1.0, 1.0, Some(60)),
+            // Off the left edge, at a fractional column.
+            resize(5, 4, 1),
+            win_float_pos(5, "NW", GLOBAL_GRID, 0.0, -2.5, None),
+        ]);
+
+        let value = serde_json::to_value(evaluate(&screen)).unwrap();
+
+        let nested = grid_view(&value, 4);
+        assert_eq!((nested["row"].clone(), nested["col"].clone()), (2.into(), 3.into()));
+        assert_eq!(nested["anchor_grid"], 3);
+        assert_eq!(nested["anchor_row"], 1.0);
+        assert_eq!(nested["anchor_col"], 1.0);
+        // Which is where it actually lands on the composited screen.
+        assert_eq!(screen.screen_origin(4), Some((2, 3)));
+
+        // Floored, not truncated: -2.5 composites in column -3.
+        let offscreen = grid_view(&value, 5);
+        assert_eq!((offscreen["row"].clone(), offscreen["col"].clone()), (0.into(), (-3).into()));
+        assert_eq!(offscreen["anchor_col"], -2.5);
+    }
+
+    #[test]
+    fn a_grid_with_no_place_on_the_screen_is_projected_without_coordinates() {
+        let mut screen = Screen::new(4, 2);
+        screen.apply(&[
+            resize(2, 2, 1),
+            ("win_external_pos".into(), vec![Value::from(2u64), Value::Ext(1, vec![2])]),
+            // A float anchored to itself: the chain never reaches the screen.
+            resize(3, 2, 1),
+            win_float_pos(3, "NW", 3, 0.0, 0.0, None),
+        ]);
+
+        let value = serde_json::to_value(evaluate(&screen)).unwrap();
+
+        let external = grid_view(&value, 2);
+        assert_eq!(external["placement"], "external");
+        assert!(external.get("row").is_none() && external.get("col").is_none());
+
+        let unanchored = grid_view(&value, 3);
+        assert_eq!(unanchored["placement"], "float");
+        assert!(unanchored.get("row").is_none() && unanchored.get("col").is_none());
+        // The anchor it was given is still reported, so the dangling one is visible.
+        assert_eq!(unanchored["anchor_grid"], 3);
+    }
+
+    /// `win_close` drops the placement but leaves the grid allocated until
+    /// `grid_destroy`. It is still a grid on the projection, just one with
+    /// nowhere to be — distinct from `hidden`, which keeps its position.
+    #[test]
+    fn a_closed_but_undestroyed_grid_is_projected_as_unplaced() {
+        let mut screen = Screen::new(6, 2);
+        screen.apply(&[resize(2, 3, 1), win_pos(2, 1, 3, 3, 1)]);
+        let placed = grid_view(&serde_json::to_value(evaluate(&screen)).unwrap(), 2);
+        assert_eq!(placed["placement"], "window");
+
+        screen.apply(&[("win_close".into(), vec![Value::from(2u64)])]);
+        let view = grid_view(&serde_json::to_value(evaluate(&screen)).unwrap(), 2);
+        assert_eq!(view["placement"], "unplaced");
+        assert_eq!(view["hidden"], false);
+        assert!(view.get("row").is_none() && view.get("col").is_none());
+        // The grid itself is still there, at the size nvim gave it.
+        assert_eq!((view["cols"].clone(), view["rows"].clone()), (3.into(), 1.into()));
+    }
+
+    #[test]
+    fn a_hidden_window_still_reports_where_it_sits() {
+        let mut screen = Screen::new(6, 2);
+        screen.apply(&[
+            resize(2, 3, 1),
+            win_pos(2, 1, 3, 3, 1),
+            ("win_hide".into(), vec![Value::from(2u64)]),
+        ]);
+
+        let view = grid_view(&serde_json::to_value(evaluate(&screen)).unwrap(), 2);
+        assert_eq!(view["hidden"], true);
+        assert_eq!((view["row"].clone(), view["col"].clone()), (1.into(), 3.into()));
     }
 }

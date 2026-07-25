@@ -22,8 +22,9 @@ use crate::nvim::RedrawEvent;
 /// message area are still drawn on it and windows are composited over it.
 pub const GLOBAL_GRID: u64 = 1;
 
-/// Split windows sit below every float. nvim gives floats a default `zindex` of
-/// 50 and the message grid 200; both may override it in the event.
+/// Split windows sit below every float. A float carries its own `zindex` in
+/// `win_float_pos` and defaults to 50; the message grid's 200 is hard-coded in
+/// nvim (`api.txt`, message scrollback) and never travels in an event.
 const WINDOW_ZINDEX: i64 = 0;
 const FLOAT_DEFAULT_ZINDEX: i64 = 50;
 const MESSAGE_DEFAULT_ZINDEX: i64 = 200;
@@ -48,6 +49,16 @@ impl Anchor {
             "SW" => Anchor::SouthWest,
             "SE" => Anchor::SouthEast,
             _ => Anchor::NorthWest,
+        }
+    }
+
+    /// The name nvim uses for this corner, for reporting.
+    pub fn name(self) -> &'static str {
+        match self {
+            Anchor::NorthWest => "NW",
+            Anchor::NorthEast => "NE",
+            Anchor::SouthWest => "SW",
+            Anchor::SouthEast => "SE",
         }
     }
 }
@@ -318,9 +329,10 @@ impl Screen {
         );
     }
 
-    /// `win_float_pos` is
-    /// `[grid, win, anchor, anchor_grid, anchor_row, anchor_col, focusable]`,
-    /// with a trailing `zindex` on newer Neovim.
+    /// `win_float_pos` is `[grid, win, anchor, anchor_grid, anchor_row,
+    /// anchor_col, mouse_enabled, zindex]`. `zindex` is part of the signature on
+    /// the Neovim this targets (0.11); the fallback only covers a server old
+    /// enough to omit it.
     fn ev_win_float_pos(&mut self, a: &[Value]) {
         let (Some(id), Some(anchor), Some(anchor_grid), Some(row), Some(col)) = (
             u(a, 0),
@@ -361,17 +373,12 @@ impl Screen {
         }
     }
 
-    /// `msg_set_pos` is `[grid, row, scrolled, sep_char]`, with a trailing
-    /// `zindex` on newer Neovim.
+    /// `msg_set_pos` is `[grid, row, scrolled, sep_char]`. It carries no zindex:
+    /// nvim composites the message grid above every float at a fixed 200, which
+    /// is what `MESSAGE_DEFAULT_ZINDEX` records.
     fn ev_msg_set_pos(&mut self, a: &[Value]) {
         let (Some(id), Some(row)) = (u(a, 0), u(a, 1)) else { return };
-        self.place(
-            id,
-            Placement::Message {
-                row: row as i64,
-                zindex: i(a, 4).unwrap_or(MESSAGE_DEFAULT_ZINDEX),
-            },
-        );
+        self.place(id, Placement::Message { row: row as i64, zindex: MESSAGE_DEFAULT_ZINDEX });
     }
 
     /// The absolute top-left of a grid in screen cells, following float anchors
@@ -402,14 +409,42 @@ impl Screen {
         }
     }
 
+    /// Whether a grid is on screen at all. A float rides on whatever it is
+    /// anchored to, so hiding a split has to take the floats above it with it —
+    /// `win_hide` for the parent may arrive in a batch of its own.
+    fn on_screen(&self, id: u64, depth: usize) -> bool {
+        if id == GLOBAL_GRID {
+            return true;
+        }
+        if depth == 0 {
+            return false;
+        }
+        let Some(win) = self.windows.get(&id) else { return false };
+        if win.hidden {
+            return false;
+        }
+        match win.placement {
+            Placement::Float { anchor_grid, .. } => self.on_screen(anchor_grid, depth - 1),
+            _ => true,
+        }
+    }
+
+    /// The absolute top-left of a placed grid, floored to the cell the
+    /// compositor puts it in. Reported for hidden grids too: it says where the
+    /// grid sits, not whether it is drawn.
+    pub fn screen_origin(&self, id: u64) -> Option<(i64, i64)> {
+        let (row, col) = self.origin(id, ANCHOR_DEPTH)?;
+        Some((row.floor() as i64, col.floor() as i64))
+    }
+
     /// The screen rectangle a placed grid occupies: its origin plus the extent
     /// nvim gave it (for a split) or its own size (for a float or the message
     /// grid). Not yet clipped — it may stick out of the screen on any side.
     fn rect(&self, id: u64) -> Option<(i64, i64, usize, usize, i64)> {
-        let win = self.windows.get(&id)?;
-        if win.hidden {
+        if !self.on_screen(id, ANCHOR_DEPTH) {
             return None;
         }
+        let win = self.windows.get(&id)?;
         let grid = self.grids.get(&id)?;
         let (row, col) = self.origin(id, ANCHOR_DEPTH)?;
         let (width, height, z) = match win.placement {
@@ -595,6 +630,23 @@ mod tests {
         ev("win_float_pos", args)
     }
 
+    /// `grid_scroll` is `[grid, top, bot, left, right, rows, cols]`. `rows` is
+    /// signed: negative moves the region down.
+    fn grid_scroll(grid: u64, top: u64, bot: u64, left: u64, right: u64, rows: i64) -> RedrawEvent {
+        ev(
+            "grid_scroll",
+            vec![
+                Value::from(grid),
+                Value::from(top),
+                Value::from(bot),
+                Value::from(left),
+                Value::from(right),
+                Value::from(rows),
+                Value::from(0u64),
+            ],
+        )
+    }
+
     /// The screen row as a string, for readable assertions.
     fn row_text(screen: &Screen, row: usize) -> String {
         (0..screen.cols()).map(|c| screen.cell(row, c).ch).collect()
@@ -695,18 +747,7 @@ mod tests {
         assert_eq!(row_text(&screen, 1), "wxyz");
 
         // Scrolling grid 2 moves its own rows only.
-        screen.apply(&[ev(
-            "grid_scroll",
-            vec![
-                Value::from(2u64),
-                Value::from(0u64),
-                Value::from(2u64),
-                Value::from(0u64),
-                Value::from(4u64),
-                Value::from(1i64),
-                Value::from(0u64),
-            ],
-        )]);
+        screen.apply(&[grid_scroll(2, 0, 2, 0, 4, 1)]);
         assert_eq!(row_text(&screen, 0), "abcd");
         assert_eq!(row_text(&screen, 1), "1234");
 
@@ -714,6 +755,29 @@ mod tests {
         screen.apply(&[ev("grid_clear", vec![Value::from(2u64)])]);
         assert_eq!(row_text(&screen, 0), "abcd");
         assert_eq!(row_text(&screen, 1), "    ");
+    }
+
+    /// The `rows` argument is signed, so it has to be decoded as one. Read as a
+    /// `u64` the whole event would be dropped and the region would never move,
+    /// which no test of `Grid::scroll` alone would notice.
+    #[test]
+    fn a_negative_grid_scroll_from_the_wire_moves_the_region_down() {
+        let mut screen = Screen::new(4, 3);
+        let mut events = filled(GLOBAL_GRID, 4, 3, '.');
+        events.push(resize(2, 4, 3));
+        for (row, ch) in ['a', 'b', 'c'].into_iter().enumerate() {
+            events.push(line(2, row, 0, &ch.to_string().repeat(4), 0));
+        }
+        events.push(win_pos(2, 0, 0, 4, 3));
+        screen.apply(&events);
+        assert_eq!(row_text(&screen, 2), "cccc");
+
+        // Rows [0,3) move down one, so the bottom row loses 'c' and the vacated
+        // top row keeps 'a' for nvim to redraw over.
+        screen.apply(&[grid_scroll(2, 0, 3, 0, 4, -1)]);
+        assert_eq!(row_text(&screen, 0), "aaaa");
+        assert_eq!(row_text(&screen, 1), "aaaa");
+        assert_eq!(row_text(&screen, 2), "bbbb");
     }
 
     #[test]
@@ -804,6 +868,63 @@ mod tests {
         screen.apply(&events);
         assert_eq!(row_text(&screen, 1), "..aa....");
         assert_eq!(row_text(&screen, 2), "...bb...");
+    }
+
+    #[test]
+    fn a_float_anchored_to_a_hidden_window_is_hidden_with_it() {
+        let mut screen = Screen::new(8, 3);
+        let mut events = filled(GLOBAL_GRID, 8, 3, '.');
+        events.extend(filled(2, 4, 1, 'w'));
+        events.extend(filled(3, 2, 1, 'f'));
+        events.push(win_pos(2, 1, 0, 4, 1));
+        events.push(win_float_pos(3, "NW", 2, 0.0, 0.0, None));
+        screen.apply(&events);
+        assert_eq!(row_text(&screen, 1), "ffww....");
+
+        // Only the split is hidden. The float has nothing left to sit on, so it
+        // must go too rather than keep compositing at the split's last position.
+        screen.apply(&[ev("win_hide", vec![Value::from(2u64)])]);
+        assert_eq!(row_text(&screen, 1), "........");
+        assert!(!screen.window(3).unwrap().hidden);
+
+        // Showing the split again brings the float back with it.
+        screen.apply(&[win_pos(2, 1, 0, 4, 1)]);
+        assert_eq!(row_text(&screen, 1), "ffww....");
+    }
+
+    #[test]
+    fn an_anchor_cycle_is_bounded_and_puts_nothing_on_screen() {
+        let mut screen = Screen::new(4, 1);
+        let mut events = filled(GLOBAL_GRID, 4, 1, '.');
+        events.extend(filled(3, 4, 1, 'a'));
+        events.extend(filled(4, 4, 1, 'b'));
+        events.extend(filled(5, 4, 1, 'c'));
+        // Two floats anchored to each other, and one anchored to itself.
+        events.push(win_float_pos(3, "NW", 4, 0.0, 0.0, None));
+        events.push(win_float_pos(4, "NW", 3, 0.0, 0.0, None));
+        events.push(win_float_pos(5, "NW", 5, 0.0, 0.0, None));
+        screen.apply(&events);
+        assert_eq!(row_text(&screen, 0), "....");
+        assert_eq!(screen.screen_origin(3), None);
+        assert_eq!(screen.screen_origin(5), None);
+    }
+
+    #[test]
+    fn an_anchor_chain_longer_than_the_bound_stops_rather_than_spinning() {
+        let mut screen = Screen::new(4, 1);
+        let mut events = filled(GLOBAL_GRID, 4, 1, '.');
+        // A chain of floats each anchored to the previous one, longer than
+        // ANCHOR_DEPTH allows to be resolved.
+        let ids: Vec<u64> = (2..2 + ANCHOR_DEPTH as u64 + 2).collect();
+        for (n, id) in ids.iter().enumerate() {
+            events.extend(filled(*id, 1, 1, 'f'));
+            let anchor = if n == 0 { GLOBAL_GRID } else { ids[n - 1] };
+            events.push(win_float_pos(*id, "NW", anchor, 0.0, 0.0, None));
+        }
+        screen.apply(&events);
+        // The near end of the chain resolves; past the bound it is dropped.
+        assert_eq!(screen.screen_origin(ids[0]), Some((0, 0)));
+        assert_eq!(screen.screen_origin(*ids.last().unwrap()), None);
     }
 
     #[test]
