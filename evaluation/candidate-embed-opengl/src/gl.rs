@@ -42,6 +42,9 @@ void main() {
 }
 "#;
 
+/// Floats per vertex in the interleaved stream: pos.xy, uv.xy, colour.rgba.
+pub const VERTEX_FLOATS: usize = 8;
+
 pub struct Renderer {
     program: glow::Program,
     vao: glow::VertexArray,
@@ -97,79 +100,13 @@ impl Renderer {
         }
     }
 
-    fn push_quad(
-        &mut self,
-        x: f32, y: f32, w: f32, h: f32,
-        uv: (f32, f32, f32, f32),
-        col: [f32; 4],
-    ) {
-        let (u0, v0, u1, v1) = uv;
-        let c = col;
-        let quad = [
-            (x, y, u0, v0), (x + w, y, u1, v0), (x + w, y + h, u1, v1),
-            (x, y, u0, v0), (x + w, y + h, u1, v1), (x, y + h, u0, v1),
-        ];
-        for (px, py, pu, pv) in quad {
-            self.verts.extend_from_slice(&[px, py, pu, pv, c[0], c[1], c[2], c[3]]);
-        }
+    pub fn build(&mut self, grid: &Grid, atlas: &mut Atlas, preedit: &str) {
+        build_vertices(&mut self.verts, grid, atlas, preedit);
     }
 
-    pub fn build(&mut self, grid: &Grid, atlas: &mut Atlas, preedit: &str) {
-        self.verts.clear();
-        let (cw, ch) = (atlas.cell_w, atlas.cell_h);
-        let (wu, wv) = atlas.white_uv();
-        let white = (wu, wv, wu, wv);
-
-        // Pass 1: every background, including the cursor block, so glyphs drawn
-        // afterwards always land on top of their own cell's background.
-        for row in 0..grid.rows {
-            for col in 0..grid.cols {
-                let cell = grid.cell(row, col);
-                let (fg, bg) = grid.colors(cell.hl);
-                let is_cursor = grid.cursor == (row, col);
-                let paint = if is_cursor { fg } else { bg };
-                self.push_quad(col as f32 * cw, row as f32 * ch, cw, ch, white, rgb(paint, 1.0));
-            }
-        }
-
-        // Pass 2: glyphs.
-        for row in 0..grid.rows {
-            for col in 0..grid.cols {
-                let cell = grid.cell(row, col);
-                let (fg, bg) = grid.colors(cell.hl);
-                let is_cursor = grid.cursor == (row, col);
-                let ink = if is_cursor { bg } else { fg };
-                let Some(g) = atlas.glyph(cell.ch) else { continue };
-                let x = col as f32 * cw + g.bearing_x;
-                let y = row as f32 * ch + atlas.ascent - g.bearing_y;
-                self.push_quad(x, y, g.w, g.h, (g.u0, g.v0, g.u1, g.v1), rgb(ink, 1.0));
-            }
-        }
-
-        // Pass 3: the IME composition. It is not in any Neovim buffer yet, so it
-        // is drawn inverted to read as "pending" rather than as text.
-        if !preedit.is_empty() {
-            let (row, col) = grid.cursor;
-            let (fg, bg) = grid.colors(grid.cell(row, col).hl);
-            let y = row as f32 * ch;
-            let advance = |c: char| if (c as u32) < 0x2500 { cw } else { cw * 2.0 };
-
-            let mut x = col as f32 * cw;
-            for c in preedit.chars() {
-                self.push_quad(x, y, advance(c), ch, white, rgb(fg, 1.0));
-                x += advance(c);
-            }
-            let mut x = col as f32 * cw;
-            for c in preedit.chars() {
-                if let Some(g) = atlas.glyph(c) {
-                    self.push_quad(
-                        x + g.bearing_x, y + atlas.ascent - g.bearing_y,
-                        g.w, g.h, (g.u0, g.v0, g.u1, g.v1), rgb(bg, 1.0),
-                    );
-                }
-                x += advance(c);
-            }
-        }
+    /// Vertices the last [`Renderer::build`] produced.
+    pub fn vertex_count(&self) -> usize {
+        self.verts.len() / VERTEX_FLOATS
     }
 
     /// Upload arbitrary RGBA pixels as a texture usable by `draw`.
@@ -210,6 +147,7 @@ impl Renderer {
                     glow::RED, glow::UNSIGNED_BYTE, Some(&atlas.pixels),
                 );
                 atlas.dirty = false;
+                atlas.stats.uploads += 1;
             }
 
             gl.use_program(Some(self.program));
@@ -245,6 +183,87 @@ impl Renderer {
                     gl.draw_arrays(glow::TRIANGLES, 0, 6);
                 }
             }
+        }
+    }
+}
+
+fn push_quad(
+    verts: &mut Vec<f32>,
+    x: f32, y: f32, w: f32, h: f32,
+    uv: (f32, f32, f32, f32),
+    col: [f32; 4],
+) {
+    let (u0, v0, u1, v1) = uv;
+    let c = col;
+    let quad = [
+        (x, y, u0, v0), (x + w, y, u1, v0), (x + w, y + h, u1, v1),
+        (x, y, u0, v0), (x + w, y + h, u1, v1), (x, y + h, u0, v1),
+    ];
+    for (px, py, pu, pv) in quad {
+        verts.extend_from_slice(&[px, py, pu, pv, c[0], c[1], c[2], c[3]]);
+    }
+}
+
+/// Turn a grid into the interleaved vertex stream the shader consumes.
+///
+/// This is the whole CPU side of a frame and it touches no GL object, so a
+/// headless benchmark can time exactly the code the window runs rather than a
+/// re-implementation of it.
+pub fn build_vertices(verts: &mut Vec<f32>, grid: &Grid, atlas: &mut Atlas, preedit: &str) {
+    verts.clear();
+    let (cw, ch) = (atlas.cell_w, atlas.cell_h);
+    let (wu, wv) = atlas.white_uv();
+    let white = (wu, wv, wu, wv);
+
+    // Pass 1: every background, including the cursor block, so glyphs drawn
+    // afterwards always land on top of their own cell's background.
+    for row in 0..grid.rows {
+        for col in 0..grid.cols {
+            let cell = grid.cell(row, col);
+            let (fg, bg) = grid.colors(cell.hl);
+            let is_cursor = grid.cursor == (row, col);
+            let paint = if is_cursor { fg } else { bg };
+            push_quad(verts, col as f32 * cw, row as f32 * ch, cw, ch, white, rgb(paint, 1.0));
+        }
+    }
+
+    // Pass 2: glyphs.
+    for row in 0..grid.rows {
+        for col in 0..grid.cols {
+            let cell = grid.cell(row, col);
+            let (fg, bg) = grid.colors(cell.hl);
+            let is_cursor = grid.cursor == (row, col);
+            let ink = if is_cursor { bg } else { fg };
+            let Some(g) = atlas.glyph(cell.ch) else { continue };
+            let x = col as f32 * cw + g.bearing_x;
+            let y = row as f32 * ch + atlas.ascent - g.bearing_y;
+            push_quad(verts, x, y, g.w, g.h, (g.u0, g.v0, g.u1, g.v1), rgb(ink, 1.0));
+        }
+    }
+
+    // Pass 3: the IME composition. It is not in any Neovim buffer yet, so it
+    // is drawn inverted to read as "pending" rather than as text.
+    if !preedit.is_empty() {
+        let (row, col) = grid.cursor;
+        let (fg, bg) = grid.colors(grid.cell(row, col).hl);
+        let y = row as f32 * ch;
+        let advance = |c: char| if (c as u32) < 0x2500 { cw } else { cw * 2.0 };
+
+        let mut x = col as f32 * cw;
+        for c in preedit.chars() {
+            push_quad(verts, x, y, advance(c), ch, white, rgb(fg, 1.0));
+            x += advance(c);
+        }
+        let mut x = col as f32 * cw;
+        for c in preedit.chars() {
+            if let Some(g) = atlas.glyph(c) {
+                push_quad(
+                    verts,
+                    x + g.bearing_x, y + atlas.ascent - g.bearing_y,
+                    g.w, g.h, (g.u0, g.v0, g.u1, g.v1), rgb(bg, 1.0),
+                );
+            }
+            x += advance(c);
         }
     }
 }

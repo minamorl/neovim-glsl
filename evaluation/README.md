@@ -52,6 +52,60 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
   これは端末の graphics protocol 経由ではなく、renderer が全ピクセルを所有しているから
   成立している。cell 格子という制約が無い以上、置けるものは画像に限らない。
 
+### 性能: 測定はする。合否は決めない
+
+`quarantine neovim_glsl.performance_criteria` と `free neovim_glsl.performance.numeric_targets`
+は「数値目標を発明するな」と言っているのであって「測るな」とは言っていない。
+`open_question neovim_glsl.performance_acceptance` を人間ゲートで決めるには、
+決める材料が要る。ここに置いたのはその材料であって、判定ではない。
+
+実装は次の 2 経路。どちらも出力は同じ schema `nvimgl.perf-observation/v1` である。
+
+- **headless benchmark** (`--perf-bench`): seed から生成した redraw event 列を
+  `Grid::apply` と `gl::build_vertices` へ流す。window も GL context も Neovim も要らない。
+  測っているのは実際に window が呼ぶ関数そのものであって、模造品ではない。
+- **live session** (`--perf` / `--perf-report`): 実際の `nvim --embed` から来る
+  `ext_linegrid` を測る。GPU 提出（draw + swap、snapshot 経路では `glFinish` まで）を含む。
+
+計測は既定で切ってある。`--perf` 系を渡さない限り `Instant::now()` は一度も呼ばれず、
+計測点はいずれも bool 判定 1 回で戻る。glyph cache の hit/miss などの counter は
+時計を読まないので常時有効。
+
+#### 実測値（このMacで実際に走らせた結果。証拠 JSON 付き）
+
+`evidence/perf-headless-bench.json` — 120×40、500 frame、warmup 50、seed 1、release build:
+
+| 観測量 | p50 | p99 | max |
+|---|---|---|---|
+| frame 全体 | 0.35 ms | 0.50 ms | 0.59 ms |
+| vertex 構築 | — | — | frame のほぼ全部 |
+| redraw batch 適用 | 0.003 ms 台 | — | — |
+
+- vertex は 1 frame あたり約 57,000（背景 quad が cell 数だけ必ず出るため）
+- glyph atlas: lookup 約 158 万に対して rasterize は 116 回、hit_ratio 1.0（丸め後）、
+  atlas 使用高さ 38px / 1024px
+- `--perf-frame-budget-ms 16.67` を渡した実行では超過 0 件。
+  **この 16.67 は実行時に人間が渡した値であって、この repository が定めた基準ではない。**
+
+`evidence/perf-live-session.json` — 実際の Neovim + 実 GPU（`GL_RENDERER = Apple M4 Max`,
+`4.1 Metal - 90.5`）。snapshot 経路で計測したので frame 数は 2 と少ない:
+
+- GPU 提出は 1 frame 目が 51 ms、2 frame 目が 0.33 ms。初回は shader/pipeline と
+  atlas texture の初期化を含む。
+- redraw event を種別ごとに数えている。実測では `hl_group_set` 147 件、`grid_line` 64 件、
+  `option_set` 25 件など 17 種類。どの traffic が frame を重くしたかを後から辿れる。
+- `mean_fps_over_wall_clock` が 0.8 と低いのは、snapshot 経路が画面を落ち着かせるために
+  固定の待ち時間を持っているためで、描画能力の指標ではない。この経路では
+  `instantaneous_fps`（提示間隔から出した値、実測 31.8）の方を見ること。
+
+#### この数値で言えないこと
+
+- **速いとも遅いとも言っていない。** 比較対象も閾値も無い。
+- headless benchmark の workload は合成である。実際の編集操作の分布ではない。
+  `--perf-seed` が同じなら workload は完全に再生されるが、**再現するのは workload だけで、
+  時間は毎回の実測値**である。
+- 他候補（新規 host / 再実装 / fork）とは比較していない。それらは未実装である。
+
 ### まだ出来ていないこと（この候補の限界であって、project の限界ではない）
 
 - `ext_multigrid` 未対応。分割 window は単一 grid として来るものだけ扱う。
@@ -63,8 +117,8 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
   実測済み。当初「bundle 化で解消する」と書いたが、実測で否定された）。IME の
   enabled / preedit / commit はいずれも警告と無関係に成立するので、実害は確認されていない。
 - glyph atlas は 1024×1024 固定で eviction が無い。字種が増えると埋まる。
-- 性能は測っていない。`open_question neovim_glsl.performance_acceptance` が未決なので、
-  何を以て合格とするかが無く、数値目標を捏造しないため測定自体を保留した。
+- 性能の**受入基準**は無い。`open_question neovim_glsl.performance_acceptance` が未決である。
+  測定そのものは行えるようになったが（下記）、合否は判定していない。
 
 ### 再現手順
 
@@ -100,6 +154,18 @@ focus が来ないので IME も起動しない（`open` 経由か、明示的�
 
 ```bash
 ./target/debug/nvimgl --snapshot /tmp/shot.png --input 'ihello<Esc>' -- --clean
+```
+
+上の実測値を出し直す（release build で測ること。debug の数値は debug の数値であり、
+その旨は report の `environment.debug_assertions` に出る）:
+
+```bash
+cargo build --release
+./target/release/nvimgl --perf-bench 500 --perf-warmup 50 --perf-seed 1 \
+    --cols 120 --rows 40 --perf-frame-budget-ms 16.67 \
+    --perf-report ../evidence/perf-headless-bench.json
+./target/release/nvimgl --snapshot /tmp/perf-shot.png --input 'ihello world<Esc>' \
+    --perf-report ../evidence/perf-live-session.json -- --clean
 ```
 
 ### この候補について分かった判断材料

@@ -8,8 +8,33 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use fontdue::{Font, FontSettings};
+use serde::Serialize;
 
 pub const ATLAS: usize = 1024;
+
+/// Counters for what the glyph cache and the atlas allocator actually did.
+///
+/// These are plain increments on paths that already do far more expensive work
+/// (a hash lookup at best, a rasterisation at worst), so they are always on:
+/// they read no clock and allocate nothing. Only the timing instrumentation in
+/// [`crate::perf`] is gated behind a switch.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize)]
+pub struct AtlasStats {
+    /// Glyph requests reaching the cache.
+    pub lookups: u64,
+    /// Requests served from the cache.
+    pub hits: u64,
+    /// Requests that had to go to the rasteriser.
+    pub misses: u64,
+    /// Misses that produced ink and consumed atlas space.
+    pub rasterizations: u64,
+    /// Misses that produced no ink (space, unmapped, zero-coverage bitmap).
+    pub empty_glyphs: u64,
+    /// Glyphs refused because the shelf allocator ran out of atlas.
+    pub rejections_atlas_full: u64,
+    /// Times the atlas texture was re-uploaded to the GPU.
+    pub uploads: u64,
+}
 
 #[derive(Clone, Copy)]
 pub struct Glyph {
@@ -31,6 +56,9 @@ pub type StyleKey = (char, bool, bool);
 pub struct Atlas {
     pub pixels: Vec<u8>,
     pub dirty: bool,
+    /// Observed cache/allocator behaviour. Written only by this module and by
+    /// the renderer's upload path; never by the reporter.
+    pub stats: AtlasStats,
     fonts: Vec<Font>,
     cache: HashMap<StyleKey, Option<Glyph>>,
     px: f32,
@@ -79,6 +107,7 @@ impl Atlas {
         Self {
             pixels,
             dirty: true,
+            stats: AtlasStats::default(),
             fonts,
             cache: HashMap::new(),
             px,
@@ -107,12 +136,31 @@ impl Atlas {
     /// independently, so the same character can appear plain and styled at once.
     pub fn styled_glyph(&mut self, ch: char, bold: bool, italic: bool) -> Option<Glyph> {
         let key: StyleKey = (ch, bold, italic);
+        self.stats.lookups += 1;
         if let Some(g) = self.cache.get(&key) {
+            self.stats.hits += 1;
             return *g;
         }
+        self.stats.misses += 1;
         let g = self.rasterize(ch, bold, italic);
+        if g.is_some() {
+            self.stats.rasterizations += 1;
+        } else {
+            self.stats.empty_glyphs += 1;
+        }
         self.cache.insert(key, g);
         g
+    }
+
+    /// Number of distinct (char, bold, italic) keys the cache is holding.
+    pub fn cached_entries(&self) -> usize {
+        self.cache.len()
+    }
+
+    /// Atlas rows consumed by the shelf allocator so far, in texels. This is
+    /// where the allocator currently stands, not a prediction of capacity.
+    pub fn packed_height_px(&self) -> usize {
+        (self.shelf_y + self.shelf_h).min(ATLAS)
     }
 
     fn rasterize(&mut self, ch: char, bold: bool, italic: bool) -> Option<Glyph> {
@@ -142,6 +190,7 @@ impl Atlas {
             self.shelf_h = 0;
         }
         if self.shelf_y + h >= ATLAS {
+            self.stats.rejections_atlas_full += 1;
             return None; // Atlas full; v0.1 does not evict.
         }
 
@@ -218,6 +267,15 @@ pub fn synthesize(base: &[u8], w: usize, h: usize, bold: bool, italic: bool) -> 
     }
 
     (src, sw, h)
+}
+
+/// Whether any candidate font path is readable on this host. [`Atlas::new`]
+/// asserts on the empty case, so callers that must degrade rather than abort
+/// (a benchmark on a font-less CI box) can ask first.
+pub fn font_available() -> bool {
+    candidate_font_paths()
+        .into_iter()
+        .any(|(path, _)| path.is_file())
 }
 
 fn candidate_font_paths() -> Vec<(PathBuf, u32)> {

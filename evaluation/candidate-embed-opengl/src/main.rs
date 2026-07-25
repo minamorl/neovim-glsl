@@ -4,9 +4,11 @@
 //! editing engine. This process owns only pixels and input.
 
 mod aish;
+mod bench;
 mod gl;
 mod grid;
 mod nvim;
+mod perf;
 mod platform;
 mod root_ui;
 mod text;
@@ -41,10 +43,30 @@ struct Args {
     aish: Option<PathBuf>,
     platform_report: Option<PathBuf>,
     root_ui_evaluation: Option<PathBuf>,
+    /// Measure the live session. Off unless asked for: see `perf` module docs.
+    perf: bool,
+    perf_report: Option<PathBuf>,
+    /// Frame count for the headless deterministic benchmark. `Some` selects it.
+    perf_bench: Option<u64>,
+    perf_warmup: u64,
+    perf_seed: u64,
+    /// A frame budget is only ever the caller's. Nothing defaults it.
+    perf_frame_budget_ms: Option<f64>,
     nvim_args: Vec<String>,
 }
 
+impl Args {
+    /// Asking for a report is asking for the measurement that fills it.
+    fn perf_enabled(&self) -> bool {
+        self.perf || self.perf_report.is_some()
+    }
+}
+
 fn parse_args() -> Args {
+    parse_args_from(std::env::args().skip(1).collect())
+}
+
+fn parse_args_from(argv: Vec<String>) -> Args {
     let mut a = Args {
         snapshot: None,
         input: None,
@@ -56,9 +78,14 @@ fn parse_args() -> Args {
         aish: None,
         platform_report: None,
         root_ui_evaluation: None,
+        perf: false,
+        perf_report: None,
+        perf_bench: None,
+        perf_warmup: 0,
+        perf_seed: 1,
+        perf_frame_budget_ms: None,
         nvim_args: Vec::new(),
     };
-    let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -75,6 +102,27 @@ fn parse_args() -> Args {
             }
             "--root-ui-evaluation" => {
                 a.root_ui_evaluation = argv.get(i + 1).map(PathBuf::from);
+                i += 2
+            }
+            // Measurement. Absent flags mean absent measurement, and an
+            // unparsable value leaves the setting unobserved rather than
+            // silently substituting a number the user never chose.
+            "--perf" => { a.perf = true; i += 1 }
+            "--perf-report" => { a.perf_report = argv.get(i + 1).map(PathBuf::from); i += 2 }
+            "--perf-bench" => {
+                a.perf_bench = argv.get(i + 1).and_then(|v| v.parse().ok());
+                i += 2
+            }
+            "--perf-warmup" => {
+                a.perf_warmup = argv.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
+                i += 2
+            }
+            "--perf-seed" => {
+                a.perf_seed = argv.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(1);
+                i += 2
+            }
+            "--perf-frame-budget-ms" => {
+                a.perf_frame_budget_ms = argv.get(i + 1).and_then(|v| v.parse().ok());
                 i += 2
             }
             // Injects a composition string so the preedit rendering can be checked
@@ -101,6 +149,8 @@ struct App {
     aish: aish::Bridge,
     graphics_probe: Option<platform::GraphicsProbe>,
     evaluation_written: bool,
+    perf: perf::Recorder,
+    perf_report_written: bool,
     mods: ModifiersState,
     /// Uncommitted IME composition. Owned by the IME, not by Neovim: it is drawn
     /// locally and only reaches nvim once the IME commits it.
@@ -112,6 +162,7 @@ struct App {
 impl App {
     fn new(args: Args) -> Self {
         let aish = aish::Bridge::new(args.aish.clone());
+        let perf = perf::Recorder::new(args.perf_enabled());
         Self {
             args,
             started: false,
@@ -126,6 +177,8 @@ impl App {
             aish,
             graphics_probe: None,
             evaluation_written: false,
+            perf,
+            perf_report_written: false,
             mods: ModifiersState::empty(),
             preedit: String::new(),
             images: Vec::new(),
@@ -226,7 +279,8 @@ impl App {
     }
 
     fn pump(&mut self) -> bool {
-        let closed = {
+        let batch = self.perf.span();
+        let (events, closed) = {
             let (Some(nv), Some(g)) = (self.nvim.as_mut(), self.grid.as_mut()) else {
                 return false;
             };
@@ -234,14 +288,67 @@ impl App {
             if !events.is_empty() {
                 g.apply(&events);
             }
-            closed
+            (events, closed)
         };
+        // An empty drain is the idle poll, not a redraw batch. Timing it would
+        // fill the distribution with the cost of finding nothing to do.
+        if !events.is_empty() {
+            self.perf.record_event_apply(batch);
+            self.perf.record_batch(&events);
+        }
         self.handle_notifications();
         self.handle_aish_results();
         closed
     }
 
+    fn write_perf_report(&mut self) {
+        if !self.perf.is_enabled() || self.perf_report_written {
+            return;
+        }
+        self.perf_report_written = true;
+        self.perf.set_recording(false);
+
+        // Report the grid actually on screen, which a resize may have changed
+        // away from the requested geometry.
+        let (cols, rows) = self
+            .grid
+            .as_ref()
+            .map(|grid| (grid.cols, grid.rows))
+            .unwrap_or((self.args.cols, self.args.rows));
+        let atlas = self
+            .atlas
+            .as_ref()
+            .map(perf::AtlasSnapshot::of)
+            .unwrap_or_else(perf::AtlasSnapshot::absent);
+
+        let report = self.perf.report(
+            perf::Measurement {
+                mode: "live_session",
+                event_source: "nvim_ext_linegrid",
+                // A live session is driven by a human and by Neovim's own
+                // scheduling; nothing here is replayable.
+                workload_deterministic: false,
+                gpu_submit_measured: true,
+            },
+            perf::Environment::observe(self.graphics_probe.clone()),
+            perf::Parameters {
+                cols,
+                rows,
+                font_size_px: self.args.font_size,
+                frames_requested: None,
+                warmup_frames: 0,
+                seed: None,
+                frame_budget_ms: self.args.perf_frame_budget_ms,
+            },
+            atlas,
+        );
+        if let Err(error) = perf::emit(&report, self.args.perf_report.as_deref()) {
+            eprintln!("perf report write failed: {error}");
+        }
+    }
+
     fn render(&mut self) {
+        let frame = self.perf.span();
         // Keep the candidate window under the text cursor.
         if let (Some(w), Some(atlas), Some(grid)) =
             (self.win.as_ref(), self.atlas.as_ref(), self.grid.as_ref())
@@ -255,7 +362,9 @@ impl App {
                 winit::dpi::PhysicalSize::new(atlas.cell_w as f64, atlas.cell_h as f64),
             );
         }
-        let App { gl, renderer, atlas, grid, surface, ctx, win, preedit, images, .. } = self;
+        let App {
+            gl, renderer, atlas, grid, surface, ctx, win, preedit, images, perf, ..
+        } = self;
         let (Some(gl), Some(r), Some(atlas), Some(grid), Some(surface), Some(ctx), Some(win)) = (
             gl.as_ref(),
             renderer.as_mut(),
@@ -268,9 +377,21 @@ impl App {
             return;
         };
         let size = win.inner_size();
+
+        let build = perf.span();
         r.build(grid, atlas, preedit);
+        perf.record_vertex_build(build);
+        let vertices = r.vertex_count();
+
+        // The swap is part of submission: without it the measurement would stop
+        // before the driver is asked to present anything.
+        let submit = perf.span();
         r.draw(gl, atlas, size.width as i32, size.height as i32, images);
         let _ = surface.swap_buffers(ctx);
+        perf.record_gpu_submit(submit);
+
+        perf.record_present(vertices);
+        perf.record_frame_total(frame);
     }
 }
 
@@ -466,9 +587,32 @@ impl ApplicationHandler for App {
         }
         el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(8)));
     }
+
+    /// Last point at which the session's observations still exist.
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        self.write_perf_report();
+    }
 }
 
 impl App {
+    /// Wait once for redraw traffic and fold it into the grid. Returns true when
+    /// Neovim closed the pipe. Measured like the live loop's [`App::pump`], so a
+    /// snapshot run observes the same batch costs a session does.
+    fn settle(&mut self, timeout: Duration) -> bool {
+        let batch = self.perf.span();
+        let (events, closed) = self.nvim.as_mut().unwrap().wait_redraw(timeout);
+        if let Some(g) = self.grid.as_mut() {
+            g.apply(&events);
+        }
+        if !events.is_empty() {
+            self.perf.record_event_apply(batch);
+            self.perf.record_batch(&events);
+        }
+        self.handle_notifications();
+        self.handle_aish_results();
+        closed
+    }
+
     /// Render one settled frame offscreen and write it as a PNG, so the result
     /// can be checked without a human watching a window.
     fn run_snapshot(&mut self, path: &str, w: u32, h: u32) {
@@ -476,29 +620,14 @@ impl App {
             // Let the initial screen settle before typing into it.
             let deadline = Instant::now() + Duration::from_millis(800);
             while Instant::now() < deadline {
-                let (ev, _) = self
-                    .nvim
-                    .as_mut()
-                    .unwrap()
-                    .wait_redraw(Duration::from_millis(60));
-                if let Some(g) = self.grid.as_mut() {
-                    g.apply(&ev);
-                }
-                self.handle_notifications();
-                self.handle_aish_results();
+                self.settle(Duration::from_millis(60));
             }
             let _ = self.nvim.as_mut().unwrap().input(&keys);
         }
 
         let deadline = Instant::now() + Duration::from_millis(1500);
         while Instant::now() < deadline {
-            let (ev, closed) = self.nvim.as_mut().unwrap().wait_redraw(Duration::from_millis(80));
-            if let Some(g) = self.grid.as_mut() {
-                g.apply(&ev);
-            }
-            self.handle_notifications();
-            self.handle_aish_results();
-            if closed {
+            if self.settle(Duration::from_millis(80)) {
                 break;
             }
         }
@@ -510,6 +639,7 @@ impl App {
         self.write_evaluations();
 
         let gl = self.gl.as_ref().unwrap();
+        let frame = self.perf.span();
         let buf = unsafe {
             let tex = gl.create_texture().unwrap();
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
@@ -529,10 +659,22 @@ impl App {
             );
 
             let r = self.renderer.as_mut().unwrap();
+            let build = self.perf.span();
             r.build(self.grid.as_ref().unwrap(), self.atlas.as_mut().unwrap(), &self.preedit);
+            self.perf.record_vertex_build(build);
+            let vertices = r.vertex_count();
+
+            // `finish` is what makes this a measurement rather than a queue
+            // depth: it does not return until the GPU is done with the frame.
+            let submit = self.perf.span();
             r.draw(gl, self.atlas.as_mut().unwrap(), w as i32, h as i32, &self.images);
             gl.finish();
+            self.perf.record_gpu_submit(submit);
+            self.perf.record_present(vertices);
+            self.perf.record_frame_total(frame);
 
+            // Reading the pixels back is what a snapshot does, not what a frame
+            // does, so it stays outside every span above.
             let mut buf = vec![0u8; (w * h * 4) as usize];
             gl.read_pixels(
                 0, 0, w as i32, h as i32, glow::RGBA, glow::UNSIGNED_BYTE,
@@ -630,8 +772,128 @@ fn write_png(path: &str, rgba_bottom_up: &[u8], w: u32, h: u32) {
 
 fn main() {
     let args = parse_args();
+
+    // The benchmark is headless by construction: it must not touch a window
+    // system, a GL context or a Neovim process, so it returns before any of
+    // them are created.
+    if let Some(frames) = args.perf_bench {
+        let report = bench::run(&bench::BenchParams {
+            cols: args.cols,
+            rows: args.rows,
+            font_size_px: args.font_size,
+            frames,
+            warmup: args.perf_warmup,
+            seed: args.perf_seed,
+            frame_budget_ms: args.perf_frame_budget_ms,
+        });
+        if let Err(error) = perf::emit(&report, args.perf_report.as_deref()) {
+            eprintln!("perf report write failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let el = EventLoop::new().expect("event loop");
     el.set_control_flow(ControlFlow::Wait);
     let mut app = App::new(args);
     el.run_app(&mut app).expect("run_app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args_of(argv: &[&str]) -> Args {
+        parse_args_from(argv.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn measurement_is_off_unless_it_is_asked_for() {
+        let a = args_of(&[]);
+        assert!(!a.perf);
+        assert!(!a.perf_enabled());
+        assert!(a.perf_report.is_none());
+        assert!(a.perf_bench.is_none());
+        assert!(a.perf_frame_budget_ms.is_none());
+        assert!(!perf::Recorder::new(a.perf_enabled()).is_enabled());
+    }
+
+    #[test]
+    fn existing_flags_keep_working_alongside_the_new_ones() {
+        let a = args_of(&["--cols", "100", "--rows", "40", "--snapshot", "out.png"]);
+        assert_eq!((a.cols, a.rows), (100, 40));
+        assert_eq!(a.snapshot.as_deref(), Some("out.png"));
+        assert!(!a.perf_enabled());
+        assert!(a.nvim_args.is_empty());
+    }
+
+    #[test]
+    fn perf_enables_live_measurement() {
+        let a = args_of(&["--perf"]);
+        assert!(a.perf && a.perf_enabled());
+        assert!(perf::Recorder::new(a.perf_enabled()).is_enabled());
+    }
+
+    #[test]
+    fn asking_for_a_report_implies_the_measurement_that_fills_it() {
+        let a = args_of(&["--perf-report", "/tmp/perf.json"]);
+        assert!(!a.perf, "the bare flag was not passed");
+        assert!(a.perf_enabled(), "a report with no measurement would be empty");
+        assert_eq!(a.perf_report, Some(PathBuf::from("/tmp/perf.json")));
+    }
+
+    #[test]
+    fn bench_mode_takes_its_frame_count_and_stays_off_by_default() {
+        assert!(args_of(&[]).perf_bench.is_none());
+        let a = args_of(&["--perf-bench", "250"]);
+        assert_eq!(a.perf_bench, Some(250));
+    }
+
+    #[test]
+    fn bench_parameters_have_stable_defaults_and_are_overridable() {
+        let a = args_of(&["--perf-bench", "10"]);
+        assert_eq!(a.perf_warmup, 0, "no frames are silently discarded by default");
+        assert_eq!(a.perf_seed, 1);
+
+        let a = args_of(&["--perf-bench", "10", "--perf-warmup", "5", "--perf-seed", "99"]);
+        assert_eq!((a.perf_warmup, a.perf_seed), (5, 99));
+    }
+
+    #[test]
+    fn a_frame_budget_exists_only_when_the_caller_supplies_one() {
+        assert!(args_of(&["--perf-bench", "10"]).perf_frame_budget_ms.is_none());
+        let a = args_of(&["--perf-frame-budget-ms", "16.67"]);
+        assert_eq!(a.perf_frame_budget_ms, Some(16.67));
+    }
+
+    #[test]
+    fn an_unparsable_value_leaves_the_setting_unobserved() {
+        // Better an absent budget than one the user did not choose.
+        assert!(args_of(&["--perf-frame-budget-ms", "soon"]).perf_frame_budget_ms.is_none());
+        assert!(args_of(&["--perf-bench", "lots"]).perf_bench.is_none());
+    }
+
+    #[test]
+    fn a_flag_missing_its_value_does_not_panic() {
+        for argv in [
+            vec!["--perf-report"],
+            vec!["--perf-bench"],
+            vec!["--perf-warmup"],
+            vec!["--perf-seed"],
+            vec!["--perf-frame-budget-ms"],
+        ] {
+            let a = args_of(&argv);
+            assert!(a.perf_bench.is_none() || a.perf_bench.is_some());
+        }
+    }
+
+    #[test]
+    fn perf_flags_are_not_forwarded_to_neovim() {
+        let a = args_of(&[
+            "--perf", "--perf-bench", "8", "--perf-seed", "3",
+            "--perf-frame-budget-ms", "16.6", "--", "-u", "NONE",
+        ]);
+        assert_eq!(a.nvim_args, vec!["-u".to_string(), "NONE".to_string()]);
+        assert_eq!(a.perf_bench, Some(8));
+    }
 }

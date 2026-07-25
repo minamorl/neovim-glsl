@@ -1,0 +1,181 @@
+{
+  "schema": "nvimgl.perf-observation/v1",
+  "trace_id": "01KYCERW266QVZ7FVY13Z9DVKD",
+  "evaluation_candidate": true,
+  "canonical_performance_criteria": false,
+  "performance_acceptance": "unset_awaiting_human_gate",
+  "measurement": {
+    "mode": "live_session",
+    "event_source": "nvim_ext_linegrid",
+    "workload_deterministic": false,
+    "gpu_submit_measured": true
+  },
+  "environment": {
+    "os": "macos",
+    "architecture": "aarch64",
+    "family": "unix",
+    "pointer_width": 64,
+    "available_parallelism": 16,
+    "debug_assertions": false,
+    "graphics": {
+      "api_version": "4.1 Metal - 90.5",
+      "renderer": "Apple M4 Max",
+      "shading_language_version": "4.10"
+    }
+  },
+  "parameters": {
+    "cols": 80,
+    "rows": 24,
+    "font_size_px": 15.0,
+    "frames_requested": null,
+    "warmup_frames": 0,
+    "seed": null,
+    "frame_budget_ms": null
+  },
+  "frame": {
+    "frames_recorded": 2,
+    "warmup_frames_excluded": 0,
+    "wall_clock_ms": 2513.5663,
+    "total_ms": {
+      "count": 2,
+      "min": 4.7819,
+      "mean": 28.4341,
+      "p50": 4.7819,
+      "p90": 52.0863,
+      "p95": 52.0863,
+      "p99": 52.0863,
+      "max": 52.0863
+    },
+    "event_apply_ms": {
+      "count": 3,
+      "min": 0.276,
+      "mean": 4.9256,
+      "p50": 1.8094,
+      "p90": 12.6915,
+      "p95": 12.6915,
+      "p99": 12.6915,
+      "max": 12.6915
+    },
+    "vertex_build_ms": {
+      "count": 2,
+      "min": 0.1093,
+      "mean": 0.4191,
+      "p50": 0.1093,
+      "p90": 0.7288,
+      "p95": 0.7288,
+      "p99": 0.7288,
+      "max": 0.7288
+    },
+    "gpu_submit_ms": {
+      "count": 2,
+      "min": 0.3288,
+      "mean": 25.7065,
+      "p50": 0.3288,
+      "p90": 51.0843,
+      "p95": 51.0843,
+      "p99": 51.0843,
+      "max": 51.0843
+    },
+    "present_interval_ms": {
+      "count": 1,
+      "min": 31.448,
+      "mean": 31.448,
+      "p50": 31.448,
+      "p90": 31.448,
+      "p95": 31.448,
+      "p99": 31.448,
+      "max": 31.448
+    },
+    "instantaneous_fps": {
+      "count": 1,
+      "min": 31.7985,
+      "mean": 31.7985,
+      "p50": 31.7985,
+      "p90": 31.7985,
+      "p95": 31.7985,
+      "p99": 31.7985,
+      "max": 31.7985
+    },
+    "mean_fps_over_wall_clock": 0.7957
+  },
+  "redraw": {
+    "batches": 3,
+    "events_total": 327,
+    "events_per_batch": {
+      "count": 3,
+      "min": 27.0,
+      "mean": 109.0,
+      "p50": 140.0,
+      "p90": 160.0,
+      "p95": 160.0,
+      "p99": 160.0,
+      "max": 160.0
+    },
+    "batch_apply_ms": {
+      "count": 3,
+      "min": 0.276,
+      "mean": 4.9256,
+      "p50": 1.8094,
+      "p90": 12.6915,
+      "p95": 12.6915,
+      "p99": 12.6915,
+      "max": 12.6915
+    },
+    "events_by_kind": {
+      "chdir": 1,
+      "default_colors_set": 1,
+      "flush": 2,
+      "grid_clear": 1,
+      "grid_cursor_goto": 2,
+      "grid_line": 64,
+      "grid_resize": 1,
+      "hl_attr_define": 58,
+      "hl_group_set": 147,
+      "mode_change": 2,
+      "mode_info_set": 1,
+      "mouse_on": 1,
+      "option_set": 25,
+      "set_icon": 1,
+      "set_title": 1,
+      "update_menu": 17,
+      "win_viewport": 2
+    }
+  },
+  "glyph_atlas": {
+    "lookups": 3840,
+    "hits": 3822,
+    "misses": 18,
+    "rasterizations": 17,
+    "empty_glyphs": 1,
+    "rejections_atlas_full": 0,
+    "uploads": 1,
+    "hit_ratio": 0.9953,
+    "cached_entries": 18,
+    "atlas_side_px": 1024,
+    "packed_height_px": 25,
+    "packed_height_ratio": 0.0244
+  },
+  "vertices": {
+    "per_frame": {
+      "count": 2,
+      "min": 11814.0,
+      "mean": 11814.0,
+      "p50": 11814.0,
+      "p90": 11814.0,
+      "p95": 11814.0,
+      "p99": 11814.0,
+      "max": 11814.0
+    },
+    "total": 23628
+  },
+  "slow_frames": {
+    "criterion": "unset_awaiting_human_gate",
+    "frame_budget_ms": null,
+    "frames_over_budget": null,
+    "frames_over_budget_ratio": null,
+    "worst_overrun_ms": null,
+    "flushes_observed": 2,
+    "presentations_observed": 2,
+    "flushes_not_presented": 0
+  }
+}
