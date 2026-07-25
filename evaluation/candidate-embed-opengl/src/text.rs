@@ -5,6 +5,7 @@
 //! sampling it.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use fontdue::{Font, FontSettings};
 
@@ -39,16 +40,18 @@ pub struct Atlas {
 
 impl Atlas {
     pub fn new(px: f32) -> Self {
-        // SF Mono is the metric source. Hiragino only fills in what SF Mono
-        // lacks, so cell metrics stay monospaced.
+        // The first available font is the metric source; later fonts only fill
+        // missing glyphs so the grid stays monospaced. The environment override
+        // keeps this evaluation candidate portable without declaring any one
+        // platform font stack canonical.
         let mut fonts = Vec::new();
-        for (path, idx) in [
-            ("/System/Library/Fonts/SFNSMono.ttf", 0usize),
-            ("/System/Library/Fonts/Supplemental/Andale Mono.ttf", 0),
-            ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
-        ] {
+        for (path, idx) in candidate_font_paths() {
             if let Ok(bytes) = std::fs::read(path) {
-                let settings = FontSettings { collection_index: idx as u32, scale: px, ..Default::default() };
+                let settings = FontSettings {
+                    collection_index: idx,
+                    scale: px,
+                    ..Default::default()
+                };
                 if let Ok(f) = Font::from_bytes(bytes, settings) {
                     fonts.push(f);
                 }
@@ -145,4 +148,43 @@ impl Atlas {
             bearing_y: (m.height as i32 + m.ymin) as f32,
         })
     }
+}
+
+fn candidate_font_paths() -> Vec<(PathBuf, u32)> {
+    let mut paths = Vec::new();
+    if let Some(configured) = std::env::var_os("NVIMGL_FONT_PATHS") {
+        paths.extend(std::env::split_paths(&configured).map(|path| (path, 0)));
+    }
+
+    #[cfg(target_os = "macos")]
+    paths.extend(
+        [
+            "/System/Library/Fonts/SFNSMono.ttf",
+            "/System/Library/Fonts/Supplemental/Andale Mono.ttf",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        ]
+        .into_iter()
+        .map(|path| (PathBuf::from(path), 0)),
+    );
+
+    #[cfg(target_os = "linux")]
+    paths.extend(
+        [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/run/current-system/sw/share/X11/fonts/TTF/DejaVuSansMono.ttf",
+        ]
+        .into_iter()
+        .map(|path| (PathBuf::from(path), 0)),
+    );
+
+    #[cfg(target_os = "windows")]
+    if let Some(windows) = std::env::var_os("WINDIR") {
+        let fonts = PathBuf::from(windows).join("Fonts");
+        paths.push((fonts.join("consola.ttf"), 0));
+        paths.push((fonts.join("msgothic.ttc"), 0));
+    }
+
+    paths
 }

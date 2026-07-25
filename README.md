@@ -20,6 +20,9 @@ Neovim が担当する。このプログラムが持つのは画面と入力だ�
 - 画像とテキストが同じ画面に共存する。Neovim 側の Lua から位置を指定して置ける
 - キーボード入力
 - `.app` として組む
+- aish の read-only structured surface（discovery / status / typed object inspection）
+- Mac → Zeno と multi-target 方向を実測する platform report
+- Root-ui 統合仮説を検証する machine-readable grid projection
 
 ## 動かないもの
 
@@ -60,6 +63,34 @@ Neovim 内の Lua から画像を置く:
 vim.rpcnotify(1, 'nvimgl_image', '/path/to/image.png', 3, 6, 34, 11)
 -- 引数は パス, 行, 列, 幅（文字数）, 高さ（行数）
 ```
+
+### aish を混ぜる
+
+`aish-nu` の場所を明示して起動する:
+
+```bash
+./target/debug/nvimgl --aish /path/to/ai-native-shell/aish-nu -- --clean
+```
+
+Neovim 内で `:AishDiscover`、`:AishStatus`、
+`:AishInspect repository /path/to/repository` が使える。
+結果は JSON の scratch buffer に開く。現段階は read-only で、`aish run` / `aish exec`
+は公開しない。destructive / external change の確認 UI が未決なまま実行経路を足すと、
+aish の effect gate を迂回しかねないため。
+
+### platform / Root-ui 評価を記録する
+
+```bash
+./target/debug/nvimgl \
+  --snapshot /tmp/nvimgl.png \
+  --platform-report /tmp/nvimgl-platform.json \
+  --root-ui-evaluation /tmp/nvimgl-root-ui.json \
+  -- --clean
+```
+
+platform report は実行中の OS・architecture・GL/GLSL・Neovim を記録し、Macを第一段、
+Zenoを次の評価、全体を multi-target 方向として残す。Root-ui projection は現行 grid を
+機械可読にするが、Root-ui 採用や visual/editor ownership を決定しない。
 
 ### macOS での注意
 

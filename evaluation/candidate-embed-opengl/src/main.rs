@@ -3,11 +3,15 @@
 //! Neovim itself is untouched: it runs as `nvim --embed` and remains the
 //! editing engine. This process owns only pixels and input.
 
+mod aish;
 mod gl;
 mod grid;
 mod nvim;
+mod platform;
+mod root_ui;
 mod text;
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use glow::HasContext;
@@ -34,6 +38,9 @@ struct Args {
     font_size: f32,
     lua: Option<String>,
     preedit: Option<String>,
+    aish: Option<PathBuf>,
+    platform_report: Option<PathBuf>,
+    root_ui_evaluation: Option<PathBuf>,
     nvim_args: Vec<String>,
 }
 
@@ -46,6 +53,9 @@ fn parse_args() -> Args {
         font_size: 15.0,
         lua: None,
         preedit: None,
+        aish: None,
+        platform_report: None,
+        root_ui_evaluation: None,
         nvim_args: Vec::new(),
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -58,6 +68,15 @@ fn parse_args() -> Args {
             "--rows" => { a.rows = argv[i + 1].parse().unwrap_or(24); i += 2 }
             "--font-size" => { a.font_size = argv[i + 1].parse().unwrap_or(15.0); i += 2 }
             "--lua" => { a.lua = argv.get(i + 1).cloned(); i += 2 }
+            "--aish" => { a.aish = argv.get(i + 1).map(PathBuf::from); i += 2 }
+            "--platform-report" => {
+                a.platform_report = argv.get(i + 1).map(PathBuf::from);
+                i += 2
+            }
+            "--root-ui-evaluation" => {
+                a.root_ui_evaluation = argv.get(i + 1).map(PathBuf::from);
+                i += 2
+            }
             // Injects a composition string so the preedit rendering can be checked
             // without a human driving a real IME.
             "--preedit" => { a.preedit = argv.get(i + 1).cloned(); i += 2 }
@@ -79,6 +98,9 @@ struct App {
     atlas: Option<text::Atlas>,
     grid: Option<grid::Grid>,
     nvim: Option<nvim::Nvim>,
+    aish: aish::Bridge,
+    graphics_probe: Option<platform::GraphicsProbe>,
+    evaluation_written: bool,
     mods: ModifiersState,
     /// Uncommitted IME composition. Owned by the IME, not by Neovim: it is drawn
     /// locally and only reaches nvim once the IME commits it.
@@ -89,6 +111,7 @@ struct App {
 
 impl App {
     fn new(args: Args) -> Self {
+        let aish = aish::Bridge::new(args.aish.clone());
         Self {
             args,
             started: false,
@@ -100,6 +123,9 @@ impl App {
             atlas: None,
             grid: None,
             nvim: None,
+            aish,
+            graphics_probe: None,
+            evaluation_written: false,
             mods: ModifiersState::empty(),
             preedit: String::new(),
             images: Vec::new(),
@@ -114,35 +140,89 @@ impl App {
         };
         let mut placed = Vec::new();
         for (name, params) in notes {
-            if name != "nvimgl_image" {
-                eprintln!("note: {name} (no handler)");
-                continue;
-            }
-            let num = |i: usize| params.get(i).and_then(|v| v.as_u64()).unwrap_or(0) as f32;
-            let Some(path) = params.first().and_then(|v| v.as_str()).map(str::to_string) else {
-                continue;
-            };
-            let (Some(glc), Some(atlas)) = (self.gl.as_ref(), self.atlas.as_ref()) else {
-                continue;
-            };
-            let (row, col) = (num(1), num(2));
-            let (cols, rows) = (num(3).max(1.0), num(4).max(1.0));
-            match load_png(&path) {
-                Some((rgba, w, h)) => {
-                    let tex = gl::Renderer::upload_rgba(glc, &rgba, w, h);
-                    eprintln!("image: {path} {w}x{h} -> cell ({row},{col}) span {cols}x{rows}");
-                    placed.push(gl::Image {
-                        tex,
-                        x: col * atlas.cell_w,
-                        y: row * atlas.cell_h,
-                        w: cols * atlas.cell_w,
-                        h: rows * atlas.cell_h,
-                    });
+            match name.as_str() {
+                "nvimgl_aish" => match aish::Request::from_rpc(&params) {
+                    Ok(request) => self.aish.submit(request),
+                    Err(error) => self.aish.submit_error(error),
+                },
+                "nvimgl_image" => {
+                    let num =
+                        |i: usize| params.get(i).and_then(|v| v.as_u64()).unwrap_or(0) as f32;
+                    let Some(path) = params
+                        .first()
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                    else {
+                        continue;
+                    };
+                    let (Some(glc), Some(atlas)) = (self.gl.as_ref(), self.atlas.as_ref())
+                    else {
+                        continue;
+                    };
+                    let (row, col) = (num(1), num(2));
+                    let (cols, rows) = (num(3).max(1.0), num(4).max(1.0));
+                    match load_png(&path) {
+                        Some((rgba, w, h)) => {
+                            let tex = gl::Renderer::upload_rgba(glc, &rgba, w, h);
+                            eprintln!(
+                                "image: {path} {w}x{h} -> cell ({row},{col}) span {cols}x{rows}"
+                            );
+                            placed.push(gl::Image {
+                                tex,
+                                x: col * atlas.cell_w,
+                                y: row * atlas.cell_h,
+                                w: cols * atlas.cell_w,
+                                h: rows * atlas.cell_h,
+                            });
+                        }
+                        None => eprintln!("image: cannot load {path}"),
+                    }
                 }
-                None => eprintln!("image: cannot load {path}"),
+                _ => eprintln!("note: {name} (no handler)"),
             }
         }
         self.images.extend(placed);
+    }
+
+    fn handle_aish_results(&mut self) {
+        let results = self.aish.take_results();
+        let Some(nvim) = self.nvim.as_mut() else {
+            return;
+        };
+        for result in results {
+            if let Err(error) = nvim.show_json_scratch(&result.title, &result.body) {
+                eprintln!("aish result display failed: {error}");
+            }
+        }
+    }
+
+    fn write_evaluations(&mut self) {
+        if self.evaluation_written {
+            return;
+        }
+        let mut requested = false;
+        if let (Some(path), Some(grid)) =
+            (self.args.root_ui_evaluation.as_deref(), self.grid.as_ref())
+        {
+            requested = true;
+            if let Err(error) = root_ui::write_evaluation(path, grid) {
+                eprintln!("root-ui evaluation write failed: {error}");
+            } else {
+                eprintln!("WROTE {}", path.display());
+            }
+        }
+        if let (Some(path), Some(graphics)) = (
+            self.args.platform_report.as_deref(),
+            self.graphics_probe.clone(),
+        ) {
+            requested = true;
+            if let Err(error) = platform::write_report(path, graphics) {
+                eprintln!("platform report write failed: {error}");
+            } else {
+                eprintln!("WROTE {}", path.display());
+            }
+        }
+        self.evaluation_written = requested;
     }
 
     fn pump(&mut self) -> bool {
@@ -157,6 +237,7 @@ impl App {
             closed
         };
         self.handle_notifications();
+        self.handle_aish_results();
         closed
     }
 
@@ -247,18 +328,32 @@ impl ApplicationHandler for App {
         let glc = unsafe {
             glow::Context::from_loader_function_cstr(|s| display.get_proc_address(s))
         };
-        unsafe {
-            eprintln!(
-                "GL {} | {} | GLSL {}",
-                glc.get_parameter_string(glow::VERSION),
-                glc.get_parameter_string(glow::RENDERER),
-                glc.get_parameter_string(glow::SHADING_LANGUAGE_VERSION)
-            );
-        }
+        let graphics_probe = unsafe {
+            platform::GraphicsProbe {
+                api_version: glc.get_parameter_string(glow::VERSION),
+                renderer: glc.get_parameter_string(glow::RENDERER),
+                shading_language_version: glc
+                    .get_parameter_string(glow::SHADING_LANGUAGE_VERSION),
+            }
+        };
+        eprintln!(
+            "GL {} | {} | GLSL {}",
+            graphics_probe.api_version,
+            graphics_probe.renderer,
+            graphics_probe.shading_language_version
+        );
 
         let renderer = gl::Renderer::new(&glc);
         let mut nv = nvim::Nvim::spawn(&self.args.nvim_args).expect("nvim --embed failed to start");
+        let host_channel = nv
+            .api_channel_id()
+            .expect("nvim_get_api_info did not return the embedded RPC channel");
         nv.ui_attach(self.args.cols as u32, self.args.rows as u32).expect("ui_attach");
+        nv.exec_lua_with_args(
+            include_str!("../integration/aish.lua"),
+            vec![rmpv::Value::from(host_channel)],
+        )
+        .expect("install read-only aish commands");
         if let Some(code) = self.args.lua.clone() {
             nv.exec_lua(&code).expect("exec_lua");
         }
@@ -272,6 +367,7 @@ impl ApplicationHandler for App {
         self.atlas = Some(atlas);
         self.grid = Some(grid);
         self.nvim = Some(nv);
+        self.graphics_probe = Some(graphics_probe);
 
         if let Some(path) = self.args.snapshot.clone() {
             self.run_snapshot(&path, win_w, win_h);
@@ -357,12 +453,15 @@ impl ApplicationHandler for App {
             el.exit();
             return;
         }
-        if let Some(g) = self.grid.as_mut() {
-            if g.flushed {
-                g.flushed = false;
-                if let Some(w) = self.win.as_ref() {
-                    w.request_redraw();
-                }
+        let flushed = self.grid.as_mut().is_some_and(|grid| {
+            let flushed = grid.flushed;
+            grid.flushed = false;
+            flushed
+        });
+        if flushed {
+            self.write_evaluations();
+            if let Some(w) = self.win.as_ref() {
+                w.request_redraw();
             }
         }
         el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(8)));
@@ -373,14 +472,20 @@ impl App {
     /// Render one settled frame offscreen and write it as a PNG, so the result
     /// can be checked without a human watching a window.
     fn run_snapshot(&mut self, path: &str, w: u32, h: u32) {
-        if let (Some(nv), Some(keys)) = (self.nvim.as_mut(), self.args.input.clone()) {
+        if let Some(keys) = self.args.input.clone() {
             // Let the initial screen settle before typing into it.
             let deadline = Instant::now() + Duration::from_millis(800);
             while Instant::now() < deadline {
-                let (ev, _) = nv.wait_redraw(Duration::from_millis(60));
+                let (ev, _) = self
+                    .nvim
+                    .as_mut()
+                    .unwrap()
+                    .wait_redraw(Duration::from_millis(60));
                 if let Some(g) = self.grid.as_mut() {
                     g.apply(&ev);
                 }
+                self.handle_notifications();
+                self.handle_aish_results();
             }
             let _ = self.nvim.as_mut().unwrap().input(&keys);
         }
@@ -391,14 +496,18 @@ impl App {
             if let Some(g) = self.grid.as_mut() {
                 g.apply(&ev);
             }
+            self.handle_notifications();
+            self.handle_aish_results();
             if closed {
                 break;
             }
         }
         self.handle_notifications();
+        self.handle_aish_results();
         if let Some(p) = self.args.preedit.clone() {
             self.preedit = p;
         }
+        self.write_evaluations();
 
         let gl = self.gl.as_ref().unwrap();
         let buf = unsafe {

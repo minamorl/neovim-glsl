@@ -7,6 +7,7 @@ use std::io::{BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::thread;
+use std::time::Duration;
 
 use rmpv::Value;
 
@@ -57,8 +58,7 @@ impl Nvim {
     }
 
     pub fn request(&mut self, method: &str, params: Vec<Value>) -> std::io::Result<()> {
-        let msgid = self.next_msgid;
-        self.next_msgid += 1;
+        let msgid = self.next_request_id();
         let msg = Value::Array(vec![
             Value::from(0u8),
             Value::from(msgid),
@@ -66,6 +66,35 @@ impl Nvim {
             Value::Array(params),
         ]);
         self.send(msg)
+    }
+
+    fn next_request_id(&mut self) -> u64 {
+        let msgid = self.next_msgid;
+        self.next_msgid += 1;
+        msgid
+    }
+
+    /// Return the RPC channel assigned to this embedded client.
+    ///
+    /// This runs before other requests are placed in flight. Lua executed by
+    /// `nvim_exec_lua` does not expose the channel through `vim.v.channel`, so
+    /// integrations need it supplied explicitly.
+    pub fn api_channel_id(&mut self) -> std::io::Result<u64> {
+        let msgid = self.next_request_id();
+        self.send(Value::Array(vec![
+            Value::from(0u8),
+            Value::from(msgid),
+            Value::from("nvim_get_api_info"),
+            Value::Array(vec![]),
+        ]))?;
+
+        let response = self.rx.recv_timeout(Duration::from_secs(2)).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("nvim_get_api_info response unavailable: {error}"),
+            )
+        })?;
+        parse_api_channel_id(&response, msgid)
     }
 
     pub fn notify(&mut self, method: &str, params: Vec<Value>) -> std::io::Result<()> {
@@ -103,6 +132,34 @@ impl Nvim {
 
     pub fn exec_lua(&mut self, code: &str) -> std::io::Result<()> {
         self.request("nvim_exec_lua", vec![Value::from(code), Value::Array(vec![])])
+    }
+
+    pub fn exec_lua_with_args(
+        &mut self,
+        code: &str,
+        args: Vec<Value>,
+    ) -> std::io::Result<()> {
+        self.request("nvim_exec_lua", vec![Value::from(code), Value::Array(args)])
+    }
+
+    /// Display structured integration output in an ordinary Neovim scratch
+    /// buffer. Neovim still owns the editor state; the host only supplies text.
+    pub fn show_json_scratch(&mut self, title: &str, body: &str) -> std::io::Result<()> {
+        self.exec_lua_with_args(
+            r#"
+local title, body = ...
+vim.cmd("botright new")
+local buffer = vim.api.nvim_get_current_buf()
+vim.bo[buffer].buftype = "nofile"
+vim.bo[buffer].bufhidden = "wipe"
+vim.bo[buffer].swapfile = false
+vim.bo[buffer].filetype = "json"
+vim.api.nvim_buf_set_name(buffer, title)
+vim.api.nvim_buf_set_lines(buffer, 0, -1, false, vim.split(body, "\n", { plain = true }))
+vim.bo[buffer].modifiable = false
+"#,
+            vec![Value::from(title), Value::from(body)],
+        )
     }
 
     /// Notifications Lua sent us since the last call. The UI, not Neovim, decides
@@ -143,6 +200,37 @@ impl Nvim {
     }
 }
 
+fn parse_api_channel_id(response: &Value, expected_msgid: u64) -> std::io::Result<u64> {
+    let parts = response.as_array().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "RPC response is not an array")
+    })?;
+    if parts.len() != 4
+        || parts[0].as_u64() != Some(1)
+        || parts[1].as_u64() != Some(expected_msgid)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "unexpected RPC response to nvim_get_api_info",
+        ));
+    }
+    if !parts[2].is_nil() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("nvim_get_api_info failed: {}", parts[2]),
+        ));
+    }
+    parts[3]
+        .as_array()
+        .and_then(|api_info| api_info.first())
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "nvim_get_api_info omitted its channel id",
+            )
+        })
+}
+
 impl Drop for Nvim {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -173,5 +261,21 @@ fn collect(v: &Value, out: &mut Vec<RedrawEvent>, custom: &mut Vec<Notification>
                 out.push((name.to_string(), args.clone()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_embedded_client_channel_id() {
+        let response = Value::Array(vec![
+            Value::from(1u8),
+            Value::from(7u64),
+            Value::Nil,
+            Value::Array(vec![Value::from(42u64), Value::Map(vec![])]),
+        ]);
+        assert_eq!(parse_api_channel_id(&response, 7).unwrap(), 42);
     }
 }
