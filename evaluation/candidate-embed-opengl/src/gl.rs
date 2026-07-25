@@ -3,7 +3,7 @@
 
 use glow::HasContext;
 
-use crate::grid::Grid;
+use crate::screen::Screen;
 use crate::text::{Atlas, ATLAS};
 
 pub const VS: &str = r#"#version 330 core
@@ -114,30 +114,33 @@ impl Renderer {
         }
     }
 
-    pub fn build(&mut self, grid: &Grid, atlas: &mut Atlas, preedit: &str) {
+    /// Turn the composited screen into quads. Every grid Neovim gave us has
+    /// already been stacked into `screen`, so drawing stays one flat pass.
+    pub fn build(&mut self, screen: &Screen, atlas: &mut Atlas, preedit: &str) {
         self.verts.clear();
         let (cw, ch) = (atlas.cell_w, atlas.cell_h);
         let (wu, wv) = atlas.white_uv();
         let white = (wu, wv, wu, wv);
+        let cursor = screen.cursor();
 
         // Pass 1: every background, including the cursor block, so glyphs drawn
         // afterwards always land on top of their own cell's background.
-        for row in 0..grid.rows {
-            for col in 0..grid.cols {
-                let cell = grid.cell(row, col);
-                let (fg, bg) = grid.colors(cell.hl);
-                let is_cursor = grid.cursor == (row, col);
+        for row in 0..screen.rows() {
+            for col in 0..screen.cols() {
+                let cell = screen.cell(row, col);
+                let (fg, bg) = screen.colors(cell.hl);
+                let is_cursor = cursor == Some((row, col));
                 let paint = if is_cursor { fg } else { bg };
                 self.push_quad(col as f32 * cw, row as f32 * ch, cw, ch, white, rgb(paint, 1.0));
             }
         }
 
         // Pass 2: glyphs.
-        for row in 0..grid.rows {
-            for col in 0..grid.cols {
-                let cell = grid.cell(row, col);
-                let (fg, bg) = grid.colors(cell.hl);
-                let is_cursor = grid.cursor == (row, col);
+        for row in 0..screen.rows() {
+            for col in 0..screen.cols() {
+                let cell = screen.cell(row, col);
+                let (fg, bg) = screen.colors(cell.hl);
+                let is_cursor = cursor == Some((row, col));
                 let ink = if is_cursor { bg } else { fg };
                 let Some(g) = atlas.glyph(cell.ch) else { continue };
                 let x = col as f32 * cw + g.bearing_x;
@@ -147,10 +150,11 @@ impl Renderer {
         }
 
         // Pass 3: the IME composition. It is not in any Neovim buffer yet, so it
-        // is drawn inverted to read as "pending" rather than as text.
+        // is drawn inverted to read as "pending" rather than as text. Without a
+        // cursor on screen there is nowhere to put it.
         if !preedit.is_empty() {
-            let (row, col) = grid.cursor;
-            let (fg, bg) = grid.colors(grid.cell(row, col).hl);
+            let Some((row, col)) = cursor else { return };
+            let (fg, bg) = screen.colors(screen.cell(row, col).hl);
             let y = row as f32 * ch;
             let advance = |c: char| if (c as u32) < 0x2500 { cw } else { cw * 2.0 };
 
