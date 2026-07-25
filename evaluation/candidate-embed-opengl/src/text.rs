@@ -40,6 +40,10 @@ pub struct Atlas {
     pub cell_w: f32,
     pub cell_h: f32,
     pub ascent: f32,
+    /// Height of a lowercase `x` above the baseline. The renderer centres
+    /// strikethrough on it, so the rule crosses the body of the text rather than
+    /// a guessed fraction of the ascent.
+    pub x_height: f32,
 }
 
 impl Atlas {
@@ -67,6 +71,13 @@ impl Atlas {
         let cell_w = primary.metrics('M', px).advance_width.max(1.0).round();
         let lm = primary.horizontal_line_metrics(px).expect("line metrics");
         let cell_h = (lm.ascent - lm.descent + lm.line_gap).ceil().max(1.0);
+        // fontdue exposes no OS/2 x-height, so measure it: the rasterised height
+        // of `x` is exactly the distance from baseline to x-height. Fall back to
+        // a typical ratio if the primary font has no `x`.
+        let x_height = match primary.metrics('x', px).height as f32 {
+            h if h > 0.0 => h,
+            _ => lm.ascent * 0.52,
+        };
 
         let mut pixels = vec![0u8; ATLAS * ATLAS];
         // Opaque texel for background quads.
@@ -88,6 +99,7 @@ impl Atlas {
             cell_w,
             cell_h,
             ascent: lm.ascent,
+            x_height,
         }
     }
 

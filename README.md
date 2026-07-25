@@ -15,6 +15,9 @@ Neovim が担当する。このプログラムが持つのは画面と入力だ�
 
 - 実際の Neovim の画面が GLSL 経由で出る。行番号、ステータスライン、コマンドライン、
   ハイライト色、カーソルの反転表示
+- 文字属性。太字・斜体（フォントに専用の face が無いので合成）、下線 5 種
+  （`underline` / `undercurl` / `underdouble` / `underdotted` / `underdashed`）、
+  取り消し線。色は nvim の `sp` に従い、無ければ文字色を継ぐ
 - 日本語の表示。フォントに無い字は字形単位で別フォントへ落ちる
 - IME。かな入力の未確定文字列がその場に出て、確定した文字列だけが Neovim に渡る
 - 画像とテキストが同じ画面に共存する。Neovim 側の Lua から位置を指定して置ける
@@ -24,13 +27,25 @@ Neovim が担当する。このプログラムが持つのは画面と入力だ�
 - Mac → Zeno と multi-target 方向を実測する platform report
 - Root-ui 統合仮説を検証する machine-readable grid projection
 
+文字属性は実機の snapshot で確認した。下線 5 種はいずれも同じ quad で描いており、
+undercurl は正弦を刻んだ波、点線・破線は絶対 x に位相を合わせてあるので、同じ
+highlight が続く間は cell 境界で模様が途切れない。
+
+![文字属性の描画](evaluation/evidence/text-attributes.png)
+
+再現するコマンド（`evaluation/candidate-embed-opengl` から）:
+
+```bash
+./target/debug/nvimgl --snapshot ../evidence/text-attributes.png \
+  --cols 104 --rows 3 --lua "$(cat ../evidence/text-attributes.lua)" -- --clean
+```
+
 ## 動かないもの
 
 実験段階なので足りていないものは多い。
 
 - ウィンドウ分割（`ext_multigrid` 未対応）
 - 補完メニュー、コマンドライン、メッセージの外部描画
-- 下線、斜体、太字
 - 動画。表示のしくみは画像と同じだが、デコードは実装していない
 - 性能は測っていない
 
