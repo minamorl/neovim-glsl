@@ -102,6 +102,10 @@ cargo をフルパスで指定するだけでは足りない。
 export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 ```
 
+Finder から `.app` を起動した場合は shell の `PATH` を引き継がない。nvimgl は
+`NVIMGL_NVIM`、現在の `PATH`、各 OS の一般的な配置の順に Neovim を探索する。
+独自の場所へ入れた場合は `NVIMGL_NVIM=/absolute/path/to/nvim` を使う。
+
 ターミナルから直接起動するとウィンドウが前面に来ないことがあり、その状態では IME が
 起動しない。`open nvimgl.app` を使うか、ウィンドウをクリックする。
 

@@ -3,7 +3,9 @@
 //! Neovim is the editing engine; this process is only its UI. Nothing here
 //! interprets buffers or keymaps — it forwards input and consumes `redraw`.
 
+use std::ffi::OsStr;
 use std::io::{BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::thread;
@@ -28,7 +30,7 @@ pub type Notification = (String, Vec<Value>);
 
 impl Nvim {
     pub fn spawn(extra_args: &[String]) -> std::io::Result<Self> {
-        let mut cmd = Command::new("nvim");
+        let mut cmd = Command::new(resolve_nvim()?);
         cmd.arg("--embed");
         for a in extra_args {
             cmd.arg(a);
@@ -200,6 +202,83 @@ vim.bo[buffer].modifiable = false
     }
 }
 
+fn resolve_nvim() -> std::io::Result<PathBuf> {
+    nvim_candidates(
+        std::env::var_os("NVIMGL_NVIM").as_deref(),
+        std::env::var_os("PATH").as_deref(),
+        std::env::var_os("HOME").as_deref(),
+    )
+    .into_iter()
+    .find(|candidate| candidate.is_file())
+    .ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Neovim executable not found. Set NVIMGL_NVIM to an absolute nvim path.",
+        )
+    })
+}
+
+fn nvim_candidates(
+    configured: Option<&OsStr>,
+    path: Option<&OsStr>,
+    home: Option<&OsStr>,
+) -> Vec<PathBuf> {
+    let binary = if cfg!(windows) { "nvim.exe" } else { "nvim" };
+    let mut candidates = Vec::new();
+
+    if let Some(configured) = configured.filter(|value| !value.is_empty()) {
+        candidates.push(PathBuf::from(configured));
+    }
+    if let Some(path) = path {
+        candidates.extend(std::env::split_paths(path).map(|directory| directory.join(binary)));
+    }
+    if let Some(home) = home {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/bin").join(binary));
+        candidates.push(home.join(".nix-profile/bin").join(binary));
+        #[cfg(target_os = "windows")]
+        candidates.push(
+            home.join("scoop/apps/neovim/current/bin")
+                .join(binary),
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    candidates.extend([
+        PathBuf::from("/opt/homebrew/bin/nvim"),
+        PathBuf::from("/usr/local/bin/nvim"),
+        PathBuf::from("/opt/local/bin/nvim"),
+    ]);
+
+    #[cfg(target_os = "linux")]
+    candidates.extend([
+        PathBuf::from("/usr/bin/nvim"),
+        PathBuf::from("/usr/local/bin/nvim"),
+        PathBuf::from("/opt/nvim/bin/nvim"),
+        PathBuf::from("/run/current-system/sw/bin/nvim"),
+    ]);
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            candidates.push(
+                PathBuf::from(program_files)
+                    .join("Neovim/bin")
+                    .join(binary),
+            );
+        }
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            candidates.push(
+                PathBuf::from(local_app_data)
+                    .join("Programs/Neovim/bin")
+                    .join(binary),
+            );
+        }
+    }
+
+    candidates
+}
+
 fn parse_api_channel_id(response: &Value, expected_msgid: u64) -> std::io::Result<u64> {
     let parts = response.as_array().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, "RPC response is not an array")
@@ -267,6 +346,26 @@ fn collect(v: &Value, out: &mut Vec<RedrawEvent>, custom: &mut Vec<Notification>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finder_style_path_keeps_portable_fallbacks() {
+        let binary = if cfg!(windows) { "nvim.exe" } else { "nvim" };
+        let configured = PathBuf::from("custom-nvim");
+        let first_path = PathBuf::from("first-bin");
+        let second_path = PathBuf::from("second-bin");
+        let path = std::env::join_paths([&first_path, &second_path]).unwrap();
+        let home = PathBuf::from("test-home");
+        let candidates = nvim_candidates(
+            Some(configured.as_os_str()),
+            Some(path.as_os_str()),
+            Some(home.as_os_str()),
+        );
+        assert_eq!(candidates[0], configured);
+        assert!(candidates.contains(&first_path.join(binary)));
+        assert!(candidates.contains(&home.join(".local/bin").join(binary)));
+        #[cfg(target_os = "macos")]
+        assert!(candidates.contains(&PathBuf::from("/opt/homebrew/bin/nvim")));
+    }
 
     #[test]
     fn parses_the_embedded_client_channel_id() {
