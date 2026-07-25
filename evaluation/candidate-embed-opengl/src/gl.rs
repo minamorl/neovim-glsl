@@ -3,6 +3,7 @@
 
 use glow::HasContext;
 
+use crate::ext_ui::{self, ExtUi, Overlay};
 use crate::grid::Grid;
 use crate::text::{Atlas, ATLAS};
 
@@ -114,11 +115,21 @@ impl Renderer {
         }
     }
 
-    pub fn build(&mut self, grid: &Grid, atlas: &mut Atlas, preedit: &str) {
+    pub fn build(
+        &mut self,
+        grid: &Grid,
+        atlas: &mut Atlas,
+        preedit: &str,
+        ext: &ExtUi,
+        overlay: &Overlay,
+    ) {
         self.verts.clear();
         let (cw, ch) = (atlas.cell_w, atlas.cell_h);
         let (wu, wv) = atlas.white_uv();
         let white = (wu, wv, wu, wv);
+        // While the command line is open the caret the user is watching is the
+        // one inside it, so the grid must not also show a block.
+        let grid_cursor = overlay.cursor.is_none();
 
         // Pass 1: every background, including the cursor block, so glyphs drawn
         // afterwards always land on top of their own cell's background.
@@ -126,7 +137,7 @@ impl Renderer {
             for col in 0..grid.cols {
                 let cell = grid.cell(row, col);
                 let (fg, bg) = grid.colors(cell.hl);
-                let is_cursor = grid.cursor == (row, col);
+                let is_cursor = grid_cursor && grid.cursor == (row, col);
                 let paint = if is_cursor { fg } else { bg };
                 self.push_quad(col as f32 * cw, row as f32 * ch, cw, ch, white, rgb(paint, 1.0));
             }
@@ -137,7 +148,7 @@ impl Renderer {
             for col in 0..grid.cols {
                 let cell = grid.cell(row, col);
                 let (fg, bg) = grid.colors(cell.hl);
-                let is_cursor = grid.cursor == (row, col);
+                let is_cursor = grid_cursor && grid.cursor == (row, col);
                 let ink = if is_cursor { bg } else { fg };
                 let Some(g) = atlas.glyph(cell.ch) else { continue };
                 let x = col as f32 * cw + g.bearing_x;
@@ -146,10 +157,19 @@ impl Renderer {
             }
         }
 
-        // Pass 3: the IME composition. It is not in any Neovim buffer yet, so it
+        // Pass 3: the surfaces Neovim externalised. They are drawn over the grid
+        // because that is exactly what nvim stopped drawing into it.
+        self.push_overlay(grid, atlas, ext, overlay);
+
+        // Pass 4: the IME composition. It is not in any Neovim buffer yet, so it
         // is drawn inverted to read as "pending" rather than as text.
         if !preedit.is_empty() {
-            let (row, col) = grid.cursor;
+            // Composition follows the caret, which is inside the command line
+            // whenever one is open.
+            let (row, col) = match overlay.cursor {
+                Some(cursor) => (cursor.row, cursor.col),
+                None => grid.cursor,
+            };
             let (fg, bg) = grid.colors(grid.cell(row, col).hl);
             let y = row as f32 * ch;
             let advance = |c: char| if (c as u32) < 0x2500 { cw } else { cw * 2.0 };
@@ -168,6 +188,62 @@ impl Renderer {
                     );
                 }
                 x += advance(c);
+            }
+        }
+    }
+
+    /// Draw the external UI surfaces: one background quad and one glyph per
+    /// cell, in the order the layout produced them so later spans cover earlier
+    /// ones. Spans are clipped to the grid rather than trusted to fit.
+    fn push_overlay(&mut self, grid: &Grid, atlas: &mut Atlas, ext: &ExtUi, overlay: &Overlay) {
+        let (cw, ch) = (atlas.cell_w, atlas.cell_h);
+        let (wu, wv) = atlas.white_uv();
+        let white = (wu, wv, wu, wv);
+
+        for span in &overlay.spans {
+            if span.row >= grid.rows {
+                continue;
+            }
+            let (fg, bg) = ext.colors(grid, span.hl);
+            let y = span.row as f32 * ch;
+            let mut col = span.col;
+            for c in span.text.chars() {
+                if col >= grid.cols {
+                    break;
+                }
+                let cells = ext_ui::char_cells(c);
+                let x = col as f32 * cw;
+                self.push_quad(x, y, cw * cells as f32, ch, white, rgb(bg, 1.0));
+                if let Some(g) = atlas.glyph(c) {
+                    self.push_quad(
+                        x + g.bearing_x,
+                        y + atlas.ascent - g.bearing_y,
+                        g.w,
+                        g.h,
+                        (g.u0, g.v0, g.u1, g.v1),
+                        rgb(fg, 1.0),
+                    );
+                }
+                col += cells;
+            }
+        }
+
+        // The external caret, inverted the same way the grid cursor is.
+        if let Some(cursor) = overlay.cursor {
+            if cursor.row < grid.rows && cursor.col < grid.cols {
+                let (fg, bg) = grid.colors(0);
+                let (x, y) = (cursor.col as f32 * cw, cursor.row as f32 * ch);
+                self.push_quad(x, y, cw, ch, white, rgb(fg, 1.0));
+                if let Some(g) = atlas.glyph(cursor.ch) {
+                    self.push_quad(
+                        x + g.bearing_x,
+                        y + atlas.ascent - g.bearing_y,
+                        g.w,
+                        g.h,
+                        (g.u0, g.v0, g.u1, g.v1),
+                        rgb(bg, 1.0),
+                    );
+                }
             }
         }
     }

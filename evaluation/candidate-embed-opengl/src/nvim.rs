@@ -28,6 +28,54 @@ pub type RedrawEvent = (String, Vec<Value>);
 /// Neovim talks to the UI, via `vim.rpcnotify(1, name, ...)`.
 pub type Notification = (String, Vec<Value>);
 
+/// Which UI surfaces this host draws itself instead of letting Neovim paint
+/// them into the grid.
+///
+/// Asking for an `ext_*` option is a promise: once it is on, Neovim stops
+/// putting that surface in the grid entirely, so a UI that requests it and then
+/// fails to draw it makes the surface disappear rather than degrade.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UiOptions {
+    pub ext_popupmenu: bool,
+    pub ext_cmdline: bool,
+    pub ext_messages: bool,
+}
+
+impl Default for UiOptions {
+    fn default() -> Self {
+        Self { ext_popupmenu: true, ext_cmdline: true, ext_messages: true }
+    }
+}
+
+impl UiOptions {
+    /// Leave every externalised surface to Neovim's own grid rendering.
+    pub fn none() -> Self {
+        Self { ext_popupmenu: false, ext_cmdline: false, ext_messages: false }
+    }
+}
+
+/// The options map for `nvim_ui_attach`.
+///
+/// `ext_linegrid` and `rgb` are unconditional: they are what makes the grid a
+/// grid of cells with true colour. `ext_messages` implies `ext_cmdline` on the
+/// Neovim side, but it is sent explicitly so the request says what it means.
+fn ui_attach_options(opts: UiOptions) -> Value {
+    let mut map = vec![
+        (Value::from("ext_linegrid"), Value::from(true)),
+        (Value::from("rgb"), Value::from(true)),
+    ];
+    for (name, on) in [
+        ("ext_popupmenu", opts.ext_popupmenu),
+        ("ext_cmdline", opts.ext_cmdline || opts.ext_messages),
+        ("ext_messages", opts.ext_messages),
+    ] {
+        if on {
+            map.push((Value::from(name), Value::from(true)));
+        }
+    }
+    Value::Map(map)
+}
+
 impl Nvim {
     pub fn spawn(extra_args: &[String]) -> std::io::Result<Self> {
         let mut cmd = Command::new(resolve_nvim()?);
@@ -116,12 +164,11 @@ impl Nvim {
         self.stdin.flush()
     }
 
-    pub fn ui_attach(&mut self, cols: u32, rows: u32) -> std::io::Result<()> {
-        let opts = Value::Map(vec![
-            (Value::from("ext_linegrid"), Value::from(true)),
-            (Value::from("rgb"), Value::from(true)),
-        ]);
-        self.request("nvim_ui_attach", vec![Value::from(cols), Value::from(rows), opts])
+    pub fn ui_attach(&mut self, cols: u32, rows: u32, opts: UiOptions) -> std::io::Result<()> {
+        self.request(
+            "nvim_ui_attach",
+            vec![Value::from(cols), Value::from(rows), ui_attach_options(opts)],
+        )
     }
 
     pub fn try_resize(&mut self, cols: u32, rows: u32) -> std::io::Result<()> {
@@ -365,6 +412,42 @@ mod tests {
         assert!(candidates.contains(&home.join(".local/bin").join(binary)));
         #[cfg(target_os = "macos")]
         assert!(candidates.contains(&PathBuf::from("/opt/homebrew/bin/nvim")));
+    }
+
+    fn attach_flag(opts: UiOptions, key: &str) -> Option<bool> {
+        let Value::Map(map) = ui_attach_options(opts) else {
+            panic!("options must be a map");
+        };
+        map.iter()
+            .find(|(k, _)| k.as_str() == Some(key))
+            .and_then(|(_, v)| v.as_bool())
+    }
+
+    #[test]
+    fn attach_requests_the_external_surfaces_this_host_draws() {
+        let opts = UiOptions::default();
+        assert_eq!(attach_flag(opts, "ext_linegrid"), Some(true));
+        assert_eq!(attach_flag(opts, "rgb"), Some(true));
+        assert_eq!(attach_flag(opts, "ext_popupmenu"), Some(true));
+        assert_eq!(attach_flag(opts, "ext_cmdline"), Some(true));
+        assert_eq!(attach_flag(opts, "ext_messages"), Some(true));
+    }
+
+    #[test]
+    fn opting_out_leaves_the_surfaces_in_the_grid() {
+        let opts = UiOptions::none();
+        assert_eq!(attach_flag(opts, "ext_linegrid"), Some(true));
+        assert_eq!(attach_flag(opts, "ext_popupmenu"), None);
+        assert_eq!(attach_flag(opts, "ext_cmdline"), None);
+        assert_eq!(attach_flag(opts, "ext_messages"), None);
+    }
+
+    #[test]
+    fn externalised_messages_carry_the_cmdline_with_them() {
+        // Neovim externalises the cmdline as soon as messages are external, so
+        // asking for messages alone would silently drop the cmdline surface.
+        let opts = UiOptions { ext_popupmenu: false, ext_cmdline: false, ext_messages: true };
+        assert_eq!(attach_flag(opts, "ext_cmdline"), Some(true));
     }
 
     #[test]
