@@ -24,6 +24,11 @@ const MAX_POPUP_ROWS: usize = 10;
 /// `msg_clear`, but a session that never clears must not grow without bound.
 const MAX_MESSAGES: usize = 64;
 
+/// Upper bound on the chunks one retained message may accumulate. `MAX_MESSAGES`
+/// bounds how many messages are kept; a run of appending `echon` calls extends a
+/// single message instead, and that path needs its own ceiling.
+const MAX_MESSAGE_CHUNKS: usize = 512;
+
 /// Columns between the `showcmd` field and the ruler, matching Vim's layout.
 const SHOWCMD_GAP: usize = 11;
 
@@ -352,7 +357,11 @@ impl ExtUi {
     /// `cmdline_special_char(c, shift, level)`.
     fn ev_cmdline_special_char(&mut self, a: &[Value]) {
         let Some(level) = u(a, 2) else { return };
-        let Some(c) = a.first().and_then(Value::as_str).and_then(|s| s.chars().next()) else {
+        let Some(c) = a
+            .first()
+            .and_then(Value::as_str)
+            .and_then(|s| s.chars().next())
+        else {
             return;
         };
         let shift = a.get(1).and_then(Value::as_bool).unwrap_or(false);
@@ -363,11 +372,11 @@ impl ExtUi {
 
     /// `cmdline_hide(level)`. Closing a level closes everything nested inside it.
     fn ev_cmdline_hide(&mut self, a: &[Value]) {
-        let Some(level) = u(a, 0) else {
-            self.cmdlines.clear();
-            self.cmdline_block.clear();
-            return;
-        };
+        // Without a usable level there is no way to know how much of the stack
+        // to unwind, and tearing all of it down would lose a command line the
+        // user is still typing into. Leave the state alone, as every other
+        // handler does on a bad parse.
+        let Some(level) = u(a, 0) else { return };
         self.cmdlines.retain(|c| c.level < level);
         if self.cmdlines.is_empty() {
             self.cmdline_block.clear();
@@ -382,7 +391,10 @@ impl ExtUi {
     }
 
     fn ev_cmdline_block_append(&mut self, a: &[Value]) {
-        let Some(line) = a.first() else { return };
+        // A mistyped argument would otherwise append a blank line to the block.
+        let Some(line) = a.first().filter(|v| v.as_array().is_some()) else {
+            return;
+        };
         self.cmdline_block.push(parse_chunks(Some(line)));
     }
 
@@ -398,6 +410,10 @@ impl ExtUi {
         if append {
             if let Some(last) = self.messages.last_mut() {
                 last.chunks.extend(chunks);
+                if last.chunks.len() > MAX_MESSAGE_CHUNKS {
+                    let overflow = last.chunks.len() - MAX_MESSAGE_CHUNKS;
+                    last.chunks.drain(..overflow);
+                }
                 return;
             }
         }
@@ -428,7 +444,11 @@ impl ExtUi {
             .filter_map(|entry| {
                 let parts = entry.as_array()?;
                 Some(Message {
-                    kind: parts.first().and_then(Value::as_str).unwrap_or("").to_string(),
+                    kind: parts
+                        .first()
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                     chunks: parse_chunks(parts.get(1)),
                 })
             })
@@ -499,28 +519,38 @@ impl ExtUi {
             }
         }
 
-        self.layout_popupmenu(cols, rows, cmdline_row, &mut overlay);
+        self.layout_popupmenu(cols, rows, shown, cmdline_row, &mut overlay);
         overlay
     }
 
     /// The lines the bottom of the screen is given over to, top to bottom.
+    ///
+    /// Everything is fitted to `cols` here rather than left for the renderer to
+    /// clip. Neovim wrapped messages and scrolled the command line itself while
+    /// it still painted those surfaces into the grid; asking for `ext_messages`
+    /// and `ext_cmdline` moves that job here, and dropping the overflow instead
+    /// would silently lose the tail of any message wider than the window.
     fn bottom_lines(&self, cols: usize) -> Vec<LayoutLine> {
-        let mut lines = Vec::new();
+        let mut unwrapped = Vec::new();
 
         if self.history_visible {
             for entry in &self.history {
-                lines.extend(chunks_to_lines(&entry.chunks));
+                unwrapped.extend(chunks_to_lines(&entry.chunks));
             }
         }
         for message in &self.messages {
-            lines.extend(chunks_to_lines(&message.chunks));
+            unwrapped.extend(chunks_to_lines(&message.chunks));
         }
         for block in &self.cmdline_block {
-            lines.extend(chunks_to_lines(block));
+            unwrapped.extend(chunks_to_lines(block));
         }
+        let mut lines: Vec<LayoutLine> = unwrapped
+            .into_iter()
+            .flat_map(|line| wrap_line(line, cols))
+            .collect();
 
         match self.active_cmdline() {
-            Some(cmdline) => lines.push(self.cmdline_line(cmdline)),
+            Some(cmdline) => lines.push(self.cmdline_line(cmdline, cols)),
             None => {
                 if let Some(line) = self.status_line(cols) {
                     lines.push(line);
@@ -531,7 +561,7 @@ impl ExtUi {
     }
 
     /// The command line itself: prefix, content, and the cursor inside it.
-    fn cmdline_line(&self, cmdline: &Cmdline) -> LayoutLine {
+    fn cmdline_line(&self, cmdline: &Cmdline, cols: usize) -> LayoutLine {
         let prefix = format!(
             "{}{}{}",
             cmdline.firstc,
@@ -540,8 +570,10 @@ impl ExtUi {
         );
         let text = cmdline.text();
         // `pos` is a byte offset; a multibyte command line would otherwise put
-        // the cursor in the middle of a character.
-        let head = text.get(..cmdline.pos.min(text.len())).unwrap_or(&text);
+        // the cursor in the middle of a character. Floor to the boundary at or
+        // before `pos` so an off-boundary offset lands next to the intended
+        // character rather than at the far end of the line.
+        let head = &text[..floor_char_boundary(&text, cmdline.pos)];
         let cursor = display_width(&prefix) + display_width(head);
 
         let mut chunks = vec![(0u64, prefix)];
@@ -550,15 +582,21 @@ impl ExtUi {
             // The literal being composed sits at the cursor and is not yet part
             // of the command line's content.
             chunks.push((0, String::new()));
-            return LayoutLine {
-                chunks: insert_at_cell(chunks, cursor, c),
+            return scroll_to_cursor(
+                LayoutLine {
+                    chunks: insert_at_cell(chunks, cursor, c),
+                    cursor: Some(cursor),
+                },
+                cols,
+            );
+        }
+        scroll_to_cursor(
+            LayoutLine {
+                chunks,
                 cursor: Some(cursor),
-            };
-        }
-        LayoutLine {
-            chunks,
-            cursor: Some(cursor),
-        }
+            },
+            cols,
+        )
     }
 
     /// The `showmode` / `showcmd` / ruler line Neovim externalises along with
@@ -585,6 +623,9 @@ impl ExtUi {
             chunks.push((0, " ".repeat(ruler_col - at)));
             chunks.extend(self.ruler.iter().cloned());
         }
+        // A `showmode` longer than the window would otherwise run off the edge.
+        // This line is positioned absolutely, so it truncates rather than wraps.
+        let (chunks, _) = split_chunks_at_cell(&chunks, cols);
         Some(LayoutLine {
             chunks,
             cursor: None,
@@ -595,6 +636,7 @@ impl ExtUi {
         &self,
         cols: usize,
         rows: usize,
+        reserved_rows: usize,
         cmdline_row: Option<usize>,
         overlay: &mut Overlay,
     ) {
@@ -611,8 +653,43 @@ impl ExtUi {
             (-1, Some(row)) => row,
             _ => menu.row,
         };
+        // A stale anchor from before a resize can sit below the screen; the menu
+        // still has to land somewhere the user can see it.
+        let anchor_row = anchor_row.min(rows - 1);
 
-        let height = menu.items.len().min(MAX_POPUP_ROWS).min(rows);
+        // Below the anchor is where Neovim expects the menu; above is the
+        // fallback when the anchor sits too close to the bottom of the screen.
+        // Whichever side is taken, the box has to fit *within* that side: it may
+        // never grow back across the anchor row, because the row under the
+        // anchor is the command line the wildmenu belongs to.
+        //
+        // Growing *downwards* is bounded by the rows the bottom surfaces already
+        // claimed, so a tall menu cannot bury the command line the user is
+        // typing into. A menu whose anchor is itself inside that region is the
+        // wildmenu: it only ever opens upwards, over the message area, which is
+        // where Vim puts it too.
+        let reserved_top = rows.saturating_sub(reserved_rows);
+        let ceiling = if anchor_row < reserved_top {
+            reserved_top
+        } else {
+            rows
+        };
+        let wanted = menu.items.len().min(MAX_POPUP_ROWS);
+        let below = ceiling.saturating_sub(anchor_row + 1);
+        let above = anchor_row;
+        let (row, height) = if wanted <= below {
+            (anchor_row + 1, wanted)
+        } else if wanted <= above {
+            (anchor_row - wanted, wanted)
+        } else if below >= above {
+            (anchor_row + 1, below)
+        } else {
+            (anchor_row - above, above)
+        };
+        if height == 0 {
+            return;
+        }
+
         let scrollable = menu.items.len() > height;
         let label_w = menu
             .items
@@ -624,14 +701,6 @@ impl ExtUi {
         let bar_w = usize::from(scrollable);
         let width = label_w.min(cols.saturating_sub(bar_w)).max(1);
         let col = anchor_row_col(menu.col, width + bar_w, cols);
-
-        // Below the anchor is where Neovim expects it; above is the fallback
-        // when the anchor sits too close to the bottom of the screen.
-        let row = if anchor_row + 1 + height <= rows {
-            anchor_row + 1
-        } else {
-            anchor_row.saturating_sub(height)
-        };
 
         let selected = menu.selected.unwrap_or(0);
         let top = selected.saturating_sub(height.saturating_sub(1));
@@ -703,7 +772,11 @@ fn chunks_to_lines(chunks: &[(u64, String)]) -> Vec<LayoutLine> {
         let mut parts = text.split('\n');
         if let Some(first) = parts.next() {
             if !first.is_empty() {
-                lines.last_mut().expect("never empty").chunks.push((*attr, first.to_string()));
+                lines
+                    .last_mut()
+                    .expect("never empty")
+                    .chunks
+                    .push((*attr, first.to_string()));
             }
         }
         for part in parts {
@@ -718,6 +791,124 @@ fn chunks_to_lines(chunks: &[(u64, String)]) -> Vec<LayoutLine> {
         }
     }
     lines
+}
+
+/// Split chunked content at cell `at`, returning the part before and the part
+/// from that cell on. A double-width glyph straddling the boundary belongs to
+/// neither side, so it becomes a space on each — half a glyph is not drawable
+/// and dropping it would shift everything after it by a cell.
+fn split_chunks_at_cell(
+    chunks: &[(u64, String)],
+    at: usize,
+) -> (Vec<(u64, String)>, Vec<(u64, String)>) {
+    let mut head = Vec::new();
+    let mut tail = Vec::new();
+    let mut cell = 0;
+    for (attr, text) in chunks {
+        let width = display_width(text);
+        if cell >= at {
+            tail.push((*attr, text.clone()));
+        } else if cell + width <= at {
+            head.push((*attr, text.clone()));
+        } else {
+            let (mut h, mut t) = (String::new(), String::new());
+            let mut c = cell;
+            for ch in text.chars() {
+                let w = char_cells(ch);
+                if c + w <= at {
+                    h.push(ch);
+                } else if c < at {
+                    h.push(' ');
+                    t.push(' ');
+                } else {
+                    t.push(ch);
+                }
+                c += w;
+            }
+            if !h.is_empty() {
+                head.push((*attr, h));
+            }
+            if !t.is_empty() {
+                tail.push((*attr, t));
+            }
+        }
+        cell += width;
+    }
+    (head, tail)
+}
+
+/// The last glyph boundary at or before `cols`, so a wrapped row never ends in
+/// half a wide character. A glyph wider than the entire screen has no such
+/// boundary; that falls back to `cols`, which loses the glyph but keeps wrapping
+/// making progress rather than looping forever on a row it can never fit.
+fn break_cell(chunks: &[(u64, String)], cols: usize) -> usize {
+    let mut cell = 0;
+    for (_, text) in chunks {
+        for c in text.chars() {
+            let next = cell + char_cells(c);
+            if next > cols {
+                return if cell == 0 { cols } else { cell };
+            }
+            cell = next;
+        }
+    }
+    cols
+}
+
+/// Break a line across as many screen rows as its content needs. A line that
+/// owns the cursor is scrolled by `scroll_to_cursor` instead and passes through
+/// untouched: wrapping the command line would move the caret off its own row.
+fn wrap_line(line: LayoutLine, cols: usize) -> Vec<LayoutLine> {
+    if line.cursor.is_some() || chunks_width(&line.chunks) <= cols {
+        return vec![line];
+    }
+    let mut out = Vec::new();
+    let mut rest = line.chunks;
+    // Every split moves at least one cell into `head`, so this terminates for
+    // `cols` >= 1, which `layout` guarantees by returning early on a zero-width
+    // screen.
+    while chunks_width(&rest) > cols {
+        let (head, tail) = split_chunks_at_cell(&rest, break_cell(&rest, cols));
+        out.push(LayoutLine {
+            chunks: head,
+            cursor: None,
+        });
+        rest = tail;
+    }
+    out.push(LayoutLine {
+        chunks: rest,
+        cursor: None,
+    });
+    out
+}
+
+/// Slide a line left until its cursor is on screen. Vim scrolls the command
+/// line horizontally rather than wrapping it, so the end of a long `:%s/…/…/`
+/// stays visible while it is being typed.
+fn scroll_to_cursor(line: LayoutLine, cols: usize) -> LayoutLine {
+    let Some(cursor) = line.cursor else {
+        return line;
+    };
+    let offset = (cursor + 1).saturating_sub(cols);
+    if offset == 0 {
+        return line;
+    }
+    let (_, chunks) = split_chunks_at_cell(&line.chunks, offset);
+    LayoutLine {
+        chunks,
+        cursor: Some(cursor - offset),
+    }
+}
+
+/// The largest character boundary at or before `at`. `str::floor_char_boundary`
+/// is still unstable, and `pos` arrives from Neovim as a byte offset that a
+/// racing `cmdline_pos` can leave pointing inside a character.
+fn floor_char_boundary(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while at > 0 && !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
 }
 
 /// Insert `c` at a cell position within already-built chunks, splitting whatever
@@ -815,7 +1006,10 @@ fn parse_chunks(value: Option<&Value>) -> Vec<(u64, String)> {
             }
             let parts = entry.as_array()?;
             let text = parts.get(1).and_then(Value::as_str)?;
-            Some((parts.first().and_then(Value::as_u64).unwrap_or(0), text.to_string()))
+            Some((
+                parts.first().and_then(Value::as_u64).unwrap_or(0),
+                text.to_string(),
+            ))
         })
         .collect()
 }
@@ -855,6 +1049,16 @@ mod tests {
     }
 
     fn popup_show(items: Vec<Value>, selected: i64, row: u64, col: u64) -> RedrawEvent {
+        popup_show_on_grid(items, selected, row, col, 1)
+    }
+
+    fn popup_show_on_grid(
+        items: Vec<Value>,
+        selected: i64,
+        row: u64,
+        col: u64,
+        grid: i64,
+    ) -> RedrawEvent {
         ev(
             "popupmenu_show",
             vec![
@@ -862,8 +1066,15 @@ mod tests {
                 Value::from(selected),
                 Value::from(row),
                 Value::from(col),
-                Value::from(1u64),
+                Value::from(grid),
             ],
+        )
+    }
+
+    fn msg_show(text: &str) -> RedrawEvent {
+        ev(
+            "msg_show",
+            vec![Value::from(""), content(&[(0, text)]), Value::from(false)],
         )
     }
 
@@ -928,7 +1139,12 @@ mod tests {
     #[test]
     fn selection_of_minus_one_means_nothing_is_selected() {
         let mut ui = ExtUi::new();
-        ui.apply(&[popup_show(vec![item("a", "", ""), item("b", "", "")], 1, 0, 0)]);
+        ui.apply(&[popup_show(
+            vec![item("a", "", ""), item("b", "", "")],
+            1,
+            0,
+            0,
+        )]);
         assert_eq!(ui.popupmenu.as_ref().unwrap().selected, Some(1));
         ui.apply(&[ev("popupmenu_select", vec![Value::from(-1i64)])]);
         assert_eq!(ui.popupmenu.as_ref().unwrap().selected, None);
@@ -953,13 +1169,26 @@ mod tests {
     #[test]
     fn popupmenu_sits_under_its_anchor_and_marks_the_selection() {
         let mut ui = ExtUi::new();
-        ui.apply(&[popup_show(vec![item("alpha", "", ""), item("beta", "", "")], 1, 2, 4)]);
+        ui.apply(&[popup_show(
+            vec![item("alpha", "", ""), item("beta", "", "")],
+            1,
+            2,
+            4,
+        )]);
         let overlay = ui.layout(40, 20);
-        let first = overlay.spans.iter().find(|s| s.row == 3).expect("row below anchor");
+        let first = overlay
+            .spans
+            .iter()
+            .find(|s| s.row == 3)
+            .expect("row below anchor");
         assert_eq!(first.col, 4);
         assert_eq!(first.text, "alpha");
         assert_eq!(first.hl, HlRef::Ui(UiHl::Pmenu));
-        let second = overlay.spans.iter().find(|s| s.row == 4).expect("second item");
+        let second = overlay
+            .spans
+            .iter()
+            .find(|s| s.row == 4)
+            .expect("second item");
         assert_eq!(second.text, "beta ");
         assert_eq!(second.hl, HlRef::Ui(UiHl::PmenuSel));
     }
@@ -968,7 +1197,11 @@ mod tests {
     fn popupmenu_flips_above_the_anchor_when_it_does_not_fit_below() {
         let mut ui = ExtUi::new();
         ui.apply(&[popup_show(
-            vec![item("one", "", ""), item("two", "", ""), item("three", "", "")],
+            vec![
+                item("one", "", ""),
+                item("two", "", ""),
+                item("three", "", ""),
+            ],
             0,
             8,
             0,
@@ -1019,6 +1252,77 @@ mod tests {
         assert_eq!(span.text.trim_end(), "push f vim.api");
     }
 
+    #[test]
+    fn popupmenu_never_grows_back_across_its_own_anchor() {
+        let items: Vec<Value> = (0..9).map(|i| item(&format!("item{i}"), "", "")).collect();
+        let mut ui = ExtUi::new();
+        // Nine items fit neither below row 5 (two rows left) nor above it (five),
+        // so the taller side wins and the box has to stop at the anchor.
+        ui.apply(&[popup_show(items, 0, 5, 0)]);
+        let overlay = ui.layout(20, 8);
+        let rows: Vec<usize> = overlay.spans.iter().map(|s| s.row).collect();
+        assert!(!rows.is_empty(), "the menu must still be drawn");
+        assert!(
+            rows.iter().all(|&r| r < 5),
+            "must not cover the anchor row or the cmdline: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn popupmenu_stops_above_the_rows_the_bottom_surfaces_claimed() {
+        let items: Vec<Value> = (0..10).map(|i| item(&format!("item{i}"), "", "")).collect();
+        let mut ui = ExtUi::new();
+        // A buffer-anchored completion menu near the top, with a message and a
+        // command line already holding the last two rows.
+        ui.apply(&[msg_show("written"), cmdline_show("w", 1, ":", 1)]);
+        ui.apply(&[popup_show(items, 0, 2, 0)]);
+        let overlay = ui.layout(20, 10);
+        assert_eq!(overlay.reserved_rows, 2);
+
+        let menu_rows: Vec<usize> = overlay
+            .spans
+            .iter()
+            .filter(|s| matches!(s.hl, HlRef::Ui(UiHl::Pmenu) | HlRef::Ui(UiHl::PmenuSel)))
+            .map(|s| s.row)
+            .collect();
+        assert!(!menu_rows.is_empty(), "the menu must still be drawn");
+        assert!(
+            menu_rows.iter().all(|&r| r < 8),
+            "must not bury the message or the cmdline: {menu_rows:?}"
+        );
+        // And the surfaces underneath are still the ones on screen.
+        assert_eq!(row_text(&overlay, 8), "written");
+        assert_eq!(row_text(&overlay, 9), ":w");
+    }
+
+    #[test]
+    fn wildmenu_anchors_to_the_row_the_cmdline_landed_on() {
+        let mut ui = ExtUi::new();
+        ui.apply(&[
+            cmdline_show("e src/", 6, ":", 1),
+            // Grid -1 is Neovim's way of saying "this menu belongs to the
+            // command line", wherever that turned out to be.
+            popup_show_on_grid(
+                vec![item("ext_ui.rs", "", ""), item("gl.rs", "", "")],
+                0,
+                0,
+                2,
+                -1,
+            ),
+        ]);
+        let overlay = ui.layout(30, 10);
+        let labels: Vec<&Span> = overlay
+            .spans
+            .iter()
+            .filter(|s| matches!(s.hl, HlRef::Ui(UiHl::Pmenu) | HlRef::Ui(UiHl::PmenuSel)))
+            .collect();
+        assert_eq!(labels.len(), 2);
+        // The cmdline owns row 9, so the menu sits directly above it.
+        assert_eq!(labels[0].row, 7);
+        assert_eq!(labels[1].row, 8);
+        assert_eq!(row_text(&overlay, 9), ":e src/");
+    }
+
     // ---- cmdline -----------------------------------------------------------
 
     #[test]
@@ -1030,7 +1334,10 @@ mod tests {
         assert_eq!(line.text(), "wq");
         assert_eq!(line.pos, 2);
 
-        ui.apply(&[ev("cmdline_pos", vec![Value::from(1u64), Value::from(1u64)])]);
+        ui.apply(&[ev(
+            "cmdline_pos",
+            vec![Value::from(1u64), Value::from(1u64)],
+        )]);
         assert_eq!(ui.active_cmdline().unwrap().pos, 1);
 
         ui.apply(&[ev("cmdline_hide", vec![Value::from(1u64)])]);
@@ -1041,7 +1348,10 @@ mod tests {
     #[test]
     fn nested_cmdline_levels_stack_and_unwind_together() {
         let mut ui = ExtUi::new();
-        ui.apply(&[cmdline_show("outer", 5, ":", 1), cmdline_show("inner", 5, "=", 2)]);
+        ui.apply(&[
+            cmdline_show("outer", 5, ":", 1),
+            cmdline_show("inner", 5, "=", 2),
+        ]);
         assert_eq!(ui.cmdlines.len(), 2);
         assert_eq!(ui.active_cmdline().unwrap().level, 2);
 
@@ -1149,11 +1459,19 @@ mod tests {
         let mut ui = ExtUi::new();
         ui.apply(&[ev(
             "msg_show",
-            vec![Value::from("echomsg"), content(&[(0, "first")]), Value::from(false)],
+            vec![
+                Value::from("echomsg"),
+                content(&[(0, "first")]),
+                Value::from(false),
+            ],
         )]);
         ui.apply(&[ev(
             "msg_show",
-            vec![Value::from("emsg"), content(&[(2, "second")]), Value::from(false)],
+            vec![
+                Value::from("emsg"),
+                content(&[(2, "second")]),
+                Value::from(false),
+            ],
         )]);
         assert_eq!(ui.messages.len(), 2);
         assert_eq!(ui.messages[1].kind, "emsg");
@@ -1161,7 +1479,11 @@ mod tests {
 
         ui.apply(&[ev(
             "msg_show",
-            vec![Value::from("emsg"), content(&[(2, "third")]), Value::from(true)],
+            vec![
+                Value::from("emsg"),
+                content(&[(2, "third")]),
+                Value::from(true),
+            ],
         )]);
         assert_eq!(ui.messages.len(), 2);
         assert_eq!(ui.messages[1].chunks[0].1, "third");
@@ -1214,11 +1536,19 @@ mod tests {
         ui.apply(&[
             ev(
                 "msg_show",
-                vec![Value::from(""), content(&[(0, "older")]), Value::from(false)],
+                vec![
+                    Value::from(""),
+                    content(&[(0, "older")]),
+                    Value::from(false),
+                ],
             ),
             ev(
                 "msg_show",
-                vec![Value::from(""), content(&[(0, "newer")]), Value::from(false)],
+                vec![
+                    Value::from(""),
+                    content(&[(0, "newer")]),
+                    Value::from(false),
+                ],
             ),
             cmdline_show("q", 1, ":", 1),
         ]);
@@ -1331,12 +1661,113 @@ mod tests {
         assert_eq!(overlay.reserved_rows, 1);
     }
 
+    // ---- fitting content to the window -------------------------------------
+
+    #[test]
+    fn a_message_wider_than_the_window_wraps_instead_of_losing_its_tail() {
+        let mut ui = ExtUi::new();
+        ui.apply(&[msg_show("0123456789abcdefghijkl")]);
+        let overlay = ui.layout(10, 5);
+        assert_eq!(row_text(&overlay, 2), "0123456789");
+        assert_eq!(row_text(&overlay, 3), "abcdefghij");
+        assert_eq!(row_text(&overlay, 4), "kl");
+        assert_eq!(overlay.reserved_rows, 3);
+    }
+
+    #[test]
+    fn wrapping_keeps_attributes_and_never_splits_a_wide_character() {
+        let mut ui = ExtUi::new();
+        ui.apply(&[ev(
+            "msg_show",
+            vec![
+                Value::from(""),
+                content(&[(0, "あい"), (7, "うえ")]),
+                Value::from(false),
+            ],
+        )]);
+        // Five columns hold two wide characters; the third has to move down
+        // whole rather than be halved across the break.
+        let overlay = ui.layout(5, 4);
+        assert_eq!(row_text(&overlay, 2), "あい");
+        assert_eq!(row_text(&overlay, 3), "うえ");
+        let carried = text_spans_on(&overlay, 3);
+        assert_eq!(carried[0].hl, HlRef::Attr(7));
+    }
+
+    #[test]
+    fn a_command_line_wider_than_the_window_scrolls_to_follow_the_cursor() {
+        let mut ui = ExtUi::new();
+        ui.apply(&[cmdline_show("0123456789abcde", 15, ":", 1)]);
+        let overlay = ui.layout(10, 3);
+        // The caret is at the end, so the end is what stays on screen.
+        assert_eq!(row_text(&overlay, 2), "6789abcde");
+        let cursor = overlay.cursor.expect("cmdline owns the cursor");
+        assert_eq!((cursor.row, cursor.col), (2, 9));
+
+        // Move the caret back to the front and the head comes into view again.
+        ui.apply(&[ev(
+            "cmdline_pos",
+            vec![Value::from(0u64), Value::from(1u64)],
+        )]);
+        let overlay = ui.layout(10, 3);
+        assert_eq!(row_text(&overlay, 2), ":0123456789abcde");
+        assert_eq!(overlay.cursor.unwrap().col, 1);
+    }
+
+    #[test]
+    fn a_showmode_longer_than_the_window_is_truncated_not_overrun() {
+        let mut ui = ExtUi::new();
+        ui.apply(&[ev(
+            "msg_showmode",
+            vec![content(&[(0, "-- VISUAL BLOCK --")])],
+        )]);
+        let overlay = ui.layout(10, 3);
+        assert_eq!(row_text(&overlay, 2), "-- VISUAL ");
+    }
+
+    #[test]
+    fn showcmd_sits_a_fixed_gap_to_the_left_of_the_ruler() {
+        let mut ui = ExtUi::new();
+        ui.apply(&[
+            ev("msg_showcmd", vec![content(&[(0, "2d")])]),
+            ev("msg_ruler", vec![content(&[(0, "1,1")])]),
+        ]);
+        let overlay = ui.layout(40, 5);
+        let spans = text_spans_on(&overlay, 4);
+        assert_eq!(spans[0].text, "2d");
+        assert_eq!(spans[0].col, 40 - 3 - SHOWCMD_GAP);
+        assert_eq!(spans[1].text, "1,1");
+        assert_eq!(spans[1].col, 37);
+    }
+
+    #[test]
+    fn every_reserved_row_is_covered_edge_to_edge() {
+        // The renderer stops painting the grid at `reserved_rows`, which is only
+        // sound because the overlay fills each of those rows itself.
+        let mut ui = ExtUi::new();
+        ui.apply(&[msg_show("short"), cmdline_show("q", 1, ":", 1)]);
+        let overlay = ui.layout(20, 6);
+        assert_eq!(overlay.reserved_rows, 2);
+        for row in 6 - overlay.reserved_rows..6 {
+            assert!(
+                overlay
+                    .spans
+                    .iter()
+                    .any(|s| s.row == row && s.col == 0 && display_width(&s.text) == 20),
+                "row {row} is not fully covered"
+            );
+        }
+    }
+
     // ---- malformed and partial events -------------------------------------
 
     #[test]
     fn malformed_events_leave_the_previous_state_intact() {
         let mut ui = ExtUi::new();
-        ui.apply(&[popup_show(vec![item("keep", "", "")], 0, 1, 1), cmdline_show("ok", 2, ":", 1)]);
+        ui.apply(&[
+            popup_show(vec![item("keep", "", "")], 0, 1, 1),
+            cmdline_show("ok", 2, ":", 1),
+        ]);
 
         ui.apply(&[
             // No arguments at all.
@@ -1348,8 +1779,21 @@ mod tests {
             ev("cmdline_special_char", vec![]),
             ev("hl_group_set", vec![]),
             // Right arity, wrong types.
-            ev("popupmenu_show", vec![Value::from("not-a-list"), Value::from(0i64)]),
-            ev("cmdline_show", vec![Value::Nil, Value::Nil, Value::Nil, Value::Nil, Value::Nil, Value::Nil]),
+            ev(
+                "popupmenu_show",
+                vec![Value::from("not-a-list"), Value::from(0i64)],
+            ),
+            ev(
+                "cmdline_show",
+                vec![
+                    Value::Nil,
+                    Value::Nil,
+                    Value::Nil,
+                    Value::Nil,
+                    Value::Nil,
+                    Value::Nil,
+                ],
+            ),
             ev("popupmenu_select", vec![Value::from("nope")]),
             ev("msg_showmode", vec![Value::from(3u64)]),
         ]);
@@ -1359,6 +1803,57 @@ mod tests {
         assert!(ui.messages.is_empty());
         assert!(ui.showmode.is_empty());
         assert!(!ui.layout(20, 5).spans.is_empty());
+    }
+
+    #[test]
+    fn malformed_cmdline_hide_and_block_events_leave_the_stack_intact() {
+        let mut ui = ExtUi::new();
+        ui.apply(&[
+            cmdline_show("echo 1", 6, ":", 1),
+            ev(
+                "cmdline_block_show",
+                vec![Value::Array(vec![content(&[(0, "function F()")])])],
+            ),
+        ]);
+
+        ui.apply(&[
+            // No level to unwind to must not tear down a command line the user
+            // is still typing into.
+            ev("cmdline_hide", vec![]),
+            ev("cmdline_hide", vec![Value::Nil]),
+            ev("cmdline_hide", vec![Value::from(-1i64)]),
+            ev("cmdline_block_show", vec![Value::from("not-a-list")]),
+            // A mistyped append must not add a blank line to the block.
+            ev("cmdline_block_append", vec![]),
+            ev("cmdline_block_append", vec![Value::Nil]),
+        ]);
+
+        assert_eq!(ui.active_cmdline().unwrap().text(), "echo 1");
+        assert_eq!(ui.cmdline_block.len(), 1);
+        assert_eq!(ui.cmdline_block[0], vec![(0, "function F()".to_string())]);
+    }
+
+    #[test]
+    fn one_message_cannot_grow_without_bound_through_append() {
+        let mut ui = ExtUi::new();
+        ui.apply(&[msg_show("start")]);
+        for i in 0..MAX_MESSAGE_CHUNKS + 10 {
+            ui.apply(&[ev(
+                "msg_show",
+                vec![
+                    Value::from(""),
+                    content(&[(0, &format!("+{i}"))]),
+                    Value::from(false),
+                    Value::from(false),
+                    Value::from(true),
+                ],
+            )]);
+        }
+        assert_eq!(ui.messages.len(), 1);
+        assert_eq!(ui.messages[0].chunks.len(), MAX_MESSAGE_CHUNKS);
+        // The newest text is the text that survives.
+        let last = &ui.messages[0].chunks.last().unwrap().1;
+        assert_eq!(last, &format!("+{}", MAX_MESSAGE_CHUNKS + 9));
     }
 
     #[test]
@@ -1412,7 +1907,10 @@ mod tests {
     #[test]
     fn a_zero_sized_screen_produces_no_spans() {
         let mut ui = ExtUi::new();
-        ui.apply(&[cmdline_show("x", 1, ":", 1), popup_show(vec![item("a", "", "")], 0, 0, 0)]);
+        ui.apply(&[
+            cmdline_show("x", 1, ":", 1),
+            popup_show(vec![item("a", "", "")], 0, 0, 0),
+        ]);
         assert_eq!(ui.layout(0, 0), Overlay::default());
         assert_eq!(ui.layout(10, 0), Overlay::default());
         assert_eq!(ui.layout(0, 10), Overlay::default());
@@ -1434,9 +1932,14 @@ mod tests {
             ],
         )]);
         let overlay = ui.layout(10, 3);
-        // Falls back to the whole string rather than panicking on a byte split.
-        assert_eq!(overlay.cursor.unwrap().col, 1 + 2);
-        ui.apply(&[ev("cmdline_pos", vec![Value::from(99u64), Value::from(1u64)])]);
+        // An offset inside the character floors to the boundary before it, so
+        // the caret lands on the character rather than skipping past the line.
+        assert_eq!(overlay.cursor.unwrap().col, 1);
+        assert_eq!(overlay.cursor.unwrap().ch, 'あ');
+        ui.apply(&[ev(
+            "cmdline_pos",
+            vec![Value::from(99u64), Value::from(1u64)],
+        )]);
         assert_eq!(ui.layout(10, 3).cursor.unwrap().col, 3);
     }
 
@@ -1481,7 +1984,10 @@ mod tests {
         let (_, sel_bg) = ui.colors(&grid, HlRef::Ui(UiHl::PmenuSel));
         assert_eq!(fg, grid.default_fg);
         assert_ne!(pmenu_bg, grid.default_bg, "the box must be distinguishable");
-        assert_ne!(sel_bg, pmenu_bg, "the selection must stand out from the box");
+        assert_ne!(
+            sel_bg, pmenu_bg,
+            "the selection must stand out from the box"
+        );
     }
 
     #[test]

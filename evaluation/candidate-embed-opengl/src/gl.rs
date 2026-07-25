@@ -127,13 +127,12 @@ impl Renderer {
         let (cw, ch) = (atlas.cell_w, atlas.cell_h);
         let (wu, wv) = atlas.white_uv();
         let white = (wu, wv, wu, wv);
-        // While the command line is open the caret the user is watching is the
-        // one inside it, so the grid must not also show a block.
-        let grid_cursor = overlay.cursor.is_none();
+        let paint = grid_paint(grid.rows, overlay);
+        let (grid_rows, grid_cursor) = (paint.rows, paint.cursor);
 
         // Pass 1: every background, including the cursor block, so glyphs drawn
         // afterwards always land on top of their own cell's background.
-        for row in 0..grid.rows {
+        for row in 0..grid_rows {
             for col in 0..grid.cols {
                 let cell = grid.cell(row, col);
                 let (fg, bg) = grid.colors(cell.hl);
@@ -144,7 +143,7 @@ impl Renderer {
         }
 
         // Pass 2: glyphs.
-        for row in 0..grid.rows {
+        for row in 0..grid_rows {
             for col in 0..grid.cols {
                 let cell = grid.cell(row, col);
                 let (fg, bg) = grid.colors(cell.hl);
@@ -325,6 +324,31 @@ impl Renderer {
     }
 }
 
+/// How much of the grid the renderer still owns once the external surfaces have
+/// had their say.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GridPaint {
+    /// Rows to paint, counted from the top.
+    pub rows: usize,
+    /// Whether the grid's own cursor block is the caret the user is watching.
+    pub cursor: bool,
+}
+
+/// Both of the renderer's grid decisions, in one place a test can reach without
+/// a GL context.
+///
+/// The bottom rows the external surfaces claimed are covered edge to edge by
+/// their own background span, so anything the grid holds there would be painted
+/// and then immediately hidden; `reserved_rows` is where the grid ends this
+/// frame. And while an external surface owns a caret — the command line being
+/// the usual one — the grid must not also show a block, or the user sees two.
+pub fn grid_paint(grid_rows: usize, overlay: &Overlay) -> GridPaint {
+    GridPaint {
+        rows: grid_rows.saturating_sub(overlay.reserved_rows),
+        cursor: overlay.cursor.is_none(),
+    }
+}
+
 fn image_quad(im: &Image) -> [f32; 48] {
     let (x, y, w, h) = (im.x, im.y, im.w, im.h);
     let mut v = [0f32; 48];
@@ -368,4 +392,96 @@ unsafe fn link(gl: &glow::Context, vs: &str, fs: &str) -> glow::Program {
         gl.get_program_info_log(program)
     );
     program
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ext_ui::{Cursor, ExtUi};
+    use crate::nvim::RedrawEvent;
+
+    fn overlay_of(events: &[RedrawEvent], cols: usize, rows: usize) -> Overlay {
+        let mut ui = ExtUi::new();
+        ui.apply(events);
+        ui.layout(cols, rows)
+    }
+
+    fn ev(name: &str, args: Vec<rmpv::Value>) -> RedrawEvent {
+        (name.to_string(), args)
+    }
+
+    #[test]
+    fn an_idle_overlay_leaves_the_whole_grid_and_its_cursor_alone() {
+        let paint = grid_paint(24, &Overlay::default());
+        assert_eq!(paint.rows, 24);
+        assert!(paint.cursor);
+    }
+
+    #[test]
+    fn the_grid_stops_where_the_external_surfaces_start() {
+        // One message row plus the command line row.
+        let overlay = overlay_of(
+            &[
+                ev(
+                    "msg_show",
+                    vec![
+                        rmpv::Value::from(""),
+                        rmpv::Value::Array(vec![rmpv::Value::Array(vec![
+                            rmpv::Value::from(0u64),
+                            rmpv::Value::from("written"),
+                        ])]),
+                        rmpv::Value::from(false),
+                    ],
+                ),
+                ev(
+                    "cmdline_show",
+                    vec![
+                        rmpv::Value::Array(vec![]),
+                        rmpv::Value::from(0u64),
+                        rmpv::Value::from(":"),
+                        rmpv::Value::from(""),
+                        rmpv::Value::from(0u64),
+                        rmpv::Value::from(1u64),
+                    ],
+                ),
+            ],
+            20,
+            24,
+        );
+        assert_eq!(overlay.reserved_rows, 2);
+        assert_eq!(grid_paint(24, &overlay).rows, 22);
+    }
+
+    #[test]
+    fn a_surface_that_owns_the_caret_suppresses_the_grid_cursor() {
+        // The command line's caret is the one the user is watching, so the grid
+        // must not draw a second block underneath it.
+        let caret = Cursor {
+            row: 23,
+            col: 1,
+            ch: 'q',
+        };
+        let with_caret = Overlay {
+            cursor: Some(caret),
+            reserved_rows: 1,
+            ..Overlay::default()
+        };
+        assert!(!grid_paint(24, &with_caret).cursor);
+
+        // A message or the ruler claims rows without claiming the caret.
+        let without_caret = Overlay {
+            reserved_rows: 1,
+            ..Overlay::default()
+        };
+        assert!(grid_paint(24, &without_caret).cursor);
+    }
+
+    #[test]
+    fn an_overlay_taller_than_the_grid_hides_it_rather_than_underflowing() {
+        let overlay = Overlay {
+            reserved_rows: 40,
+            ..Overlay::default()
+        };
+        assert_eq!(grid_paint(24, &overlay).rows, 0);
+    }
 }
