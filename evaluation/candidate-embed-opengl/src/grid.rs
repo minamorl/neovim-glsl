@@ -21,13 +21,29 @@ impl Default for Cell {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct Hl {
     pub fg: Option<u32>,
     pub bg: Option<u32>,
     pub reverse: bool,
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
+    pub undercurl: bool,
+    pub underdouble: bool,
+    pub underdotted: bool,
+    pub underdashed: bool,
+    pub strikethrough: bool,
+    /// The `sp` colour nvim attaches to underline family attributes. When unset
+    /// the decoration inherits the cell foreground.
+    pub special: Option<u32>,
+}
+
+impl Hl {
+    /// True when any underline-family decoration is set.
+    pub fn any_underline(&self) -> bool {
+        self.underline || self.undercurl || self.underdouble || self.underdotted || self.underdashed
+    }
 }
 
 pub struct Grid {
@@ -67,6 +83,21 @@ impl Grid {
             .get(row * self.cols + col)
             .copied()
             .unwrap_or_default()
+    }
+
+    /// Resolve a cell's full style (decoration attributes plus the `sp` colour).
+    /// The renderer reads this to draw bold/italic glyphs and the underline
+    /// family; colours still go through [`Grid::colors`].
+    pub fn style(&self, hl_id: u64) -> Hl {
+        self.hls.get(&hl_id).copied().unwrap_or_default()
+    }
+
+    /// The colour a decoration (underline/strikethrough) should use for `hl_id`:
+    /// the highlight's `sp` colour when present, otherwise its resolved
+    /// foreground (which already accounts for reverse video and defaults).
+    pub fn decoration_color(&self, hl_id: u64) -> u32 {
+        let hl = self.style(hl_id);
+        hl.special.unwrap_or_else(|| self.colors(hl_id).0)
     }
 
     /// Resolve a cell's colours, applying reverse video and defaults.
@@ -124,9 +155,16 @@ impl Grid {
                 match k.as_str().unwrap_or("") {
                     "foreground" => hl.fg = v.as_u64().map(|x| x as u32),
                     "background" => hl.bg = v.as_u64().map(|x| x as u32),
+                    "special" => hl.special = v.as_u64().map(|x| x as u32),
                     "reverse" => hl.reverse = v.as_bool().unwrap_or(false),
                     "bold" => hl.bold = v.as_bool().unwrap_or(false),
                     "italic" => hl.italic = v.as_bool().unwrap_or(false),
+                    "underline" => hl.underline = v.as_bool().unwrap_or(false),
+                    "undercurl" => hl.undercurl = v.as_bool().unwrap_or(false),
+                    "underdouble" => hl.underdouble = v.as_bool().unwrap_or(false),
+                    "underdotted" => hl.underdotted = v.as_bool().unwrap_or(false),
+                    "underdashed" => hl.underdashed = v.as_bool().unwrap_or(false),
+                    "strikethrough" => hl.strikethrough = v.as_bool().unwrap_or(false),
                     _ => {}
                 }
             }
@@ -204,4 +242,70 @@ fn u(a: &[Value], i: usize) -> Option<u64> {
 
 fn i(a: &[Value], idx: usize) -> Option<i64> {
     a.get(idx).and_then(|v| v.as_i64())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build an `hl_attr_define` redraw event: `[id, rgb_attrs, cterm_attrs, info]`.
+    fn hl_define(id: u64, attrs: &[(&str, Value)]) -> RedrawEvent {
+        let map = attrs
+            .iter()
+            .map(|(k, v)| (Value::from(*k), v.clone()))
+            .collect::<Vec<_>>();
+        (
+            "hl_attr_define".to_string(),
+            vec![Value::from(id), Value::Map(map), Value::Map(vec![]), Value::Array(vec![])],
+        )
+    }
+
+    #[test]
+    fn parses_the_underline_family_and_special_colour() {
+        let mut grid = Grid::new(4, 1);
+        grid.apply(&[
+            hl_define(1, &[("underline", Value::from(true)), ("special", Value::from(0xff0000u32))]),
+            hl_define(2, &[("undercurl", Value::from(true))]),
+            hl_define(3, &[("strikethrough", Value::from(true))]),
+            hl_define(4, &[("underdouble", Value::from(true))]),
+        ]);
+
+        let s1 = grid.style(1);
+        assert!(s1.underline && s1.any_underline());
+        assert_eq!(s1.special, Some(0xff0000));
+        assert!(!s1.undercurl && !s1.strikethrough);
+
+        assert!(grid.style(2).undercurl && grid.style(2).any_underline());
+        assert!(grid.style(3).strikethrough && !grid.style(3).any_underline());
+        assert!(grid.style(4).underdouble && grid.style(4).any_underline());
+    }
+
+    #[test]
+    fn keeps_bold_italic_alongside_the_new_attributes() {
+        let mut grid = Grid::new(4, 1);
+        grid.apply(&[hl_define(
+            7,
+            &[("bold", Value::from(true)), ("italic", Value::from(true)), ("underline", Value::from(true))],
+        )]);
+        let s = grid.style(7);
+        assert!(s.bold && s.italic && s.underline);
+    }
+
+    #[test]
+    fn unknown_highlight_id_is_the_default_style() {
+        let grid = Grid::new(4, 1);
+        assert_eq!(grid.style(99), Hl::default());
+        assert!(!grid.style(99).any_underline());
+    }
+
+    #[test]
+    fn decoration_color_prefers_special_then_falls_back_to_foreground() {
+        let mut grid = Grid::new(4, 1);
+        grid.apply(&[
+            hl_define(1, &[("underline", Value::from(true)), ("special", Value::from(0x00ff00u32)), ("foreground", Value::from(0x111111u32))]),
+            hl_define(2, &[("underline", Value::from(true)), ("foreground", Value::from(0x222222u32))]),
+        ]);
+        assert_eq!(grid.decoration_color(1), 0x00ff00);
+        assert_eq!(grid.decoration_color(2), 0x222222);
+    }
 }
