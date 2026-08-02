@@ -59,6 +59,29 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
   これは端末の graphics protocol 経由ではなく、renderer が全ピクセルを所有しているから
   成立している。cell 格子という制約が無い以上、置けるものは画像に限らない。
 
+- **補完 popup / command line / message が external UI として GLSL 側で描かれる。**
+  `nvim_ui_attach` に `ext_popupmenu` / `ext_cmdline` / `ext_messages` を渡すと、Neovim は
+  それらを grid へ描くのをやめ、構造化 event として送ってくる。UI 側がその state を保持し、
+  overlay として配置・描画する。grid は一切変更していない。
+  - popup menu: `popupmenu_show` / `popupmenu_select` / `popupmenu_hide`。anchor の下に置き、
+    画面下端に入らないときは上へ反転する。選択行は `PmenuSel`、候補が箱より多いときは
+    scrollbar が出る。証拠: `evidence/ext-popupmenu.png`
+    （同じ画面の最下行は `msg_showmode` 由来の `-- Keyword completion (^N^P) match 1 of 2`）
+  - command line: `cmdline_show` / `cmdline_pos` / `cmdline_special_char` / `cmdline_hide` と
+    `cmdline_block_*`。`firstc`・prompt・indent を前置し、cursor は byte offset `pos` を
+    表示 cell へ変換して置く。level は stack になっており、外側を閉じると内側も閉じる。
+    cmdline が cursor を持つ間、grid 側の cursor block は描かない。
+    証拠: `evidence/ext-cmdline.png`
+  - message: `msg_show`（`replace_last` / `append`）・`msg_clear`・`msg_showmode`・
+    `msg_showcmd`・`msg_ruler`・`msg_history_show` / `msg_history_clear`。chunk ごとの
+    highlight id をそのまま使うので、`echoerr` は `ErrorMsg` の色で出る。
+    証拠: `evidence/ext-messages.png`、`:messages` は `evidence/ext-messages-history.png`
+  - built-in UI highlight group は `hl_group_set` から取る。colour scheme が定義していない
+    group は default 背景と前景の中間色へ落とす（見えなくならないため）。
+  - `--no-ext-ui` を渡すと3つとも要求しない。その場合 Neovim が従来どおり grid へ描く。
+  - 壊れた／途中までの event（引数不足・型違い・item が array でない等）は、前の状態を
+    保ったまま無視する。UI が1フレームで落ちると編集 session ごと道連れになるため。
+
 ### まだ出来ていないこと（この候補の限界であって、project の限界ではない）
 
 - `win_external_pos`（window を別の OS ウィンドウへ出す要求）は置き場所が無い。窓を
@@ -66,8 +89,19 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 - 浮動ウィンドウの `winblend`（半透明）は cell を不透明のまま重ねている。
 - `win_viewport` / `win_viewport_margins` / `win_extmark` は受け取って捨てている。
   合成に必要な情報ではないが、scrollbar や sign 表示を作るなら要る。
-- popup menu / cmdline / message の ext 化（`ext_popupmenu` 等）は未接続。
 - 下線・斜体・太字・undercurl は highlight を読んでいるが描いていない。
+- external UI の未対応部分:
+  - `ext_tabline` / `ext_termcolors` は要求していない。tabline は grid のまま。
+  - `ext_hlstate` を要求していないので、`hl_attr_define` の `info`（`hi_name`・`kind`）は
+    読んでいない。built-in group の解決は `hl_group_set` だけに依っている。
+  - popup menu の `info`（候補の詳細説明）は state に保持しているが描いていない。
+    Neovim 側の preview window に相当する面をまだ持たない。
+  - message の `kind` は保持しているが、描画は chunk の highlight id にのみ依っている。
+    `confirm` / `return_prompt` の類も他の message と同じ扱いで、専用の modal を出さない。
+  - overlay の文字幅は「`U+2500` 未満なら1 cell」という近似で、grid 本体の cell 割当と
+    同じ規則。East Asian Ambiguous や結合文字は正しく測れない。
+  - popup の高さは 10 行上限で、`pumheight` は見ていない。
+  - message 行が画面より多いときは新しいものを残して古いものを落とす。scroll しない。
 - IME の変換候補ウィンドウ自体は macOS が描くもので、GLSL 側では描いていない。
 - macOS が `error messaging the mach port for IMKCFRunLoopWakeUpReliable` を出す。
   **`.app` bundle 化しても消えない**（bundle 版・素のバイナリ版の両方で 1 件ずつ出ることを

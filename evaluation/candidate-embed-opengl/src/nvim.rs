@@ -116,10 +116,10 @@ impl Nvim {
         self.stdin.flush()
     }
 
-    pub fn ui_attach(&mut self, cols: u32, rows: u32, multigrid: bool) -> std::io::Result<()> {
+    pub fn ui_attach(&mut self, cols: u32, rows: u32, opts: UiOptions) -> std::io::Result<()> {
         self.request(
             "nvim_ui_attach",
-            vec![Value::from(cols), Value::from(rows), attach_options(multigrid)],
+            vec![Value::from(cols), Value::from(rows), ui_attach_options(opts)],
         )
     }
 
@@ -201,18 +201,67 @@ vim.bo[buffer].modifiable = false
     }
 }
 
-/// UI capabilities we claim at attach time. `ext_multigrid` makes nvim hand out
-/// one grid per window plus placement events instead of pre-composing every
-/// window into a single screen-sized grid.
-fn attach_options(multigrid: bool) -> Value {
-    let mut opts = vec![
+/// Which UI surfaces this host draws itself instead of letting Neovim paint
+/// them into the grid.
+///
+/// Asking for an `ext_*` option is a promise: once it is on, Neovim stops
+/// putting that surface in the grid entirely, so a UI that requests it and then
+/// fails to draw it makes the surface disappear rather than degrade.
+/// `ext_multigrid` is the same kind of promise about window composition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UiOptions {
+    /// One grid per window plus placement events, instead of a single
+    /// pre-composed screen-sized grid.
+    pub ext_multigrid: bool,
+    pub ext_popupmenu: bool,
+    pub ext_cmdline: bool,
+    pub ext_messages: bool,
+}
+
+impl Default for UiOptions {
+    fn default() -> Self {
+        Self {
+            ext_multigrid: true,
+            ext_popupmenu: true,
+            ext_cmdline: true,
+            ext_messages: true,
+        }
+    }
+}
+
+impl UiOptions {
+    /// Leave every externalised surface to Neovim's own grid rendering.
+    pub fn none() -> Self {
+        Self {
+            ext_multigrid: false,
+            ext_popupmenu: false,
+            ext_cmdline: false,
+            ext_messages: false,
+        }
+    }
+}
+
+/// The options map for `nvim_ui_attach`.
+///
+/// `ext_linegrid` and `rgb` are unconditional: they are what makes the grid a
+/// grid of cells with true colour. `ext_messages` implies `ext_cmdline` on the
+/// Neovim side, but it is sent explicitly so the request says what it means.
+fn ui_attach_options(opts: UiOptions) -> Value {
+    let mut map = vec![
         (Value::from("ext_linegrid"), Value::from(true)),
         (Value::from("rgb"), Value::from(true)),
     ];
-    if multigrid {
-        opts.push((Value::from("ext_multigrid"), Value::from(true)));
+    for (name, on) in [
+        ("ext_multigrid", opts.ext_multigrid),
+        ("ext_popupmenu", opts.ext_popupmenu),
+        ("ext_cmdline", opts.ext_cmdline || opts.ext_messages),
+        ("ext_messages", opts.ext_messages),
+    ] {
+        if on {
+            map.push((Value::from(name), Value::from(true)));
+        }
     }
-    Value::Map(opts)
+    Value::Map(map)
 }
 
 fn resolve_nvim() -> std::io::Result<PathBuf> {
@@ -390,17 +439,39 @@ mod tests {
     }
 
     #[test]
-    fn multigrid_is_requested_only_when_asked_for() {
+    fn every_externalised_surface_is_requested_only_when_asked_for() {
         let has = |opts: &Value, key: &str| {
             opts.as_map()
                 .unwrap()
                 .iter()
                 .any(|(k, v)| k.as_str() == Some(key) && v.as_bool() == Some(true))
         };
-        let on = attach_options(true);
+        let on = ui_attach_options(UiOptions::default());
         assert!(has(&on, "ext_linegrid") && has(&on, "rgb") && has(&on, "ext_multigrid"));
-        let off = attach_options(false);
+        let off = ui_attach_options(UiOptions { ext_multigrid: false, ..UiOptions::default() });
         assert!(has(&off, "ext_linegrid") && has(&off, "rgb") && !has(&off, "ext_multigrid"));
+    }
+
+    #[test]
+    fn the_external_surfaces_are_requested_only_when_asked_for() {
+        let has = |opts: &Value, key: &str| {
+            opts.as_map()
+                .unwrap()
+                .iter()
+                .any(|(k, v)| k.as_str() == Some(key) && v.as_bool() == Some(true))
+        };
+        let none = ui_attach_options(UiOptions::none());
+        for key in ["ext_multigrid", "ext_popupmenu", "ext_cmdline", "ext_messages"] {
+            assert!(!has(&none, key), "{key} must not be claimed");
+        }
+        // ext_messages implies ext_cmdline on the Neovim side; say so explicitly.
+        let msgs = ui_attach_options(UiOptions {
+            ext_multigrid: false,
+            ext_popupmenu: false,
+            ext_cmdline: false,
+            ext_messages: true,
+        });
+        assert!(has(&msgs, "ext_messages") && has(&msgs, "ext_cmdline"));
     }
 
     #[test]

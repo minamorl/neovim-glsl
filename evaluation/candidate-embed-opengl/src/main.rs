@@ -4,6 +4,7 @@
 //! editing engine. This process owns only pixels and input.
 
 mod aish;
+mod ext_ui;
 mod gl;
 mod grid;
 mod nvim;
@@ -42,9 +43,9 @@ struct Args {
     aish: Option<PathBuf>,
     platform_report: Option<PathBuf>,
     root_ui_evaluation: Option<PathBuf>,
-    /// Ask Neovim for one grid per window. Off falls back to the single
-    /// pre-composed grid, which is what this UI consumed before.
-    multigrid: bool,
+    /// Which of the multigrid / popupmenu / cmdline / message surfaces this
+    /// host draws instead of letting Neovim paint them into the grid.
+    ui_options: nvim::UiOptions,
     nvim_args: Vec<String>,
 }
 
@@ -60,7 +61,7 @@ fn parse_args() -> Args {
         aish: None,
         platform_report: None,
         root_ui_evaluation: None,
-        multigrid: true,
+        ui_options: nvim::UiOptions::default(),
         nvim_args: Vec::new(),
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -85,7 +86,15 @@ fn parse_args() -> Args {
             // Injects a composition string so the preedit rendering can be checked
             // without a human driving a real IME.
             "--preedit" => { a.preedit = argv.get(i + 1).cloned(); i += 2 }
-            "--no-multigrid" => { a.multigrid = false; i += 1 }
+            "--no-multigrid" => { a.ui_options.ext_multigrid = false; i += 1 }
+            // Hands the popupmenu, command line and messages back to Neovim's
+            // own grid rendering, for comparing the two side by side.
+            "--no-ext-ui" => {
+                a.ui_options.ext_popupmenu = false;
+                a.ui_options.ext_cmdline = false;
+                a.ui_options.ext_messages = false;
+                i += 1
+            }
             "--" => { a.nvim_args.extend_from_slice(&argv[i + 1..]); break }
             other => { a.nvim_args.push(other.to_string()); i += 1 }
         }
@@ -103,6 +112,8 @@ struct App {
     renderer: Option<gl::Renderer>,
     atlas: Option<text::Atlas>,
     screen: Option<screen::Screen>,
+    /// The popupmenu, command line and messages Neovim no longer draws itself.
+    ext_ui: ext_ui::ExtUi,
     nvim: Option<nvim::Nvim>,
     aish: aish::Bridge,
     graphics_probe: Option<platform::GraphicsProbe>,
@@ -128,6 +139,7 @@ impl App {
             renderer: None,
             atlas: None,
             screen: None,
+            ext_ui: ext_ui::ExtUi::new(),
             nvim: None,
             aish,
             graphics_probe: None,
@@ -231,28 +243,50 @@ impl App {
         self.evaluation_written = requested;
     }
 
+    /// One redraw batch reaches both mirrors: the screen keeps what Neovim
+    /// still paints, and the external surfaces keep what it handed over.
+    fn apply_redraw(&mut self, events: &[nvim::RedrawEvent]) {
+        if events.is_empty() {
+            return;
+        }
+        if let Some(screen) = self.screen.as_mut() {
+            screen.apply(events);
+        }
+        self.ext_ui.apply(events);
+    }
+
     fn pump(&mut self) -> bool {
-        let closed = {
-            let (Some(nv), Some(screen)) = (self.nvim.as_mut(), self.screen.as_mut()) else {
-                return false;
-            };
-            let (events, closed) = nv.drain_redraw();
-            if !events.is_empty() {
-                screen.apply(&events);
-            }
-            closed
+        let (events, closed) = match self.nvim.as_mut() {
+            Some(nv) => nv.drain_redraw(),
+            None => return false,
         };
+        self.apply_redraw(&events);
         self.handle_notifications();
         self.handle_aish_results();
         closed
     }
 
+    /// The external surfaces, placed into the current screen.
+    fn overlay(&self) -> ext_ui::Overlay {
+        match self.screen.as_ref() {
+            Some(screen) if !self.ext_ui.is_idle() => {
+                self.ext_ui.layout(screen.cols(), screen.rows())
+            }
+            _ => ext_ui::Overlay::default(),
+        }
+    }
+
     fn render(&mut self) {
-        // Keep the candidate window under the text cursor.
+        let overlay = self.overlay();
+        // Keep the candidate window under the text cursor — which is the one
+        // inside the command line whenever that surface owns it.
         if let (Some(w), Some(atlas), Some((row, col))) = (
             self.win.as_ref(),
             self.atlas.as_ref(),
-            self.screen.as_ref().and_then(screen::Screen::cursor),
+            overlay
+                .cursor
+                .map(|c| (c.row, c.col))
+                .or_else(|| self.screen.as_ref().and_then(screen::Screen::cursor)),
         ) {
             w.set_ime_cursor_area(
                 winit::dpi::PhysicalPosition::new(
@@ -262,7 +296,8 @@ impl App {
                 winit::dpi::PhysicalSize::new(atlas.cell_w as f64, atlas.cell_h as f64),
             );
         }
-        let App { gl, renderer, atlas, screen, surface, ctx, win, preedit, images, .. } = self;
+        let App { gl, renderer, atlas, screen, surface, ctx, win, preedit, images, ext_ui, .. } =
+            self;
         let (Some(gl), Some(r), Some(atlas), Some(screen), Some(surface), Some(ctx), Some(win)) = (
             gl.as_ref(),
             renderer.as_mut(),
@@ -275,7 +310,7 @@ impl App {
             return;
         };
         let size = win.inner_size();
-        r.build(screen, atlas, preedit);
+        r.build(screen, atlas, preedit, ext_ui, &overlay);
         r.draw(gl, atlas, size.width as i32, size.height as i32, images);
         let _ = surface.swap_buffers(ctx);
     }
@@ -355,7 +390,7 @@ impl ApplicationHandler for App {
         let host_channel = nv
             .api_channel_id()
             .expect("nvim_get_api_info did not return the embedded RPC channel");
-        nv.ui_attach(self.args.cols as u32, self.args.rows as u32, self.args.multigrid)
+        nv.ui_attach(self.args.cols as u32, self.args.rows as u32, self.args.ui_options)
             .expect("ui_attach");
         nv.exec_lua_with_args(
             include_str!("../integration/aish.lua"),
@@ -489,9 +524,7 @@ impl App {
                     .as_mut()
                     .unwrap()
                     .wait_redraw(Duration::from_millis(60));
-                if let Some(screen) = self.screen.as_mut() {
-                    screen.apply(&ev);
-                }
+                self.apply_redraw(&ev);
                 self.handle_notifications();
                 self.handle_aish_results();
             }
@@ -501,9 +534,7 @@ impl App {
         let deadline = Instant::now() + Duration::from_millis(1500);
         while Instant::now() < deadline {
             let (ev, closed) = self.nvim.as_mut().unwrap().wait_redraw(Duration::from_millis(80));
-            if let Some(screen) = self.screen.as_mut() {
-                screen.apply(&ev);
-            }
+            self.apply_redraw(&ev);
             self.handle_notifications();
             self.handle_aish_results();
             if closed {
@@ -536,8 +567,15 @@ impl App {
                 "offscreen target incomplete"
             );
 
+            let overlay = self.overlay();
             let r = self.renderer.as_mut().unwrap();
-            r.build(self.screen.as_ref().unwrap(), self.atlas.as_mut().unwrap(), &self.preedit);
+            r.build(
+                self.screen.as_ref().unwrap(),
+                self.atlas.as_mut().unwrap(),
+                &self.preedit,
+                &self.ext_ui,
+                &overlay,
+            );
             r.draw(gl, self.atlas.as_mut().unwrap(), w as i32, h as i32, &self.images);
             gl.finish();
 

@@ -3,6 +3,7 @@
 
 use glow::HasContext;
 
+use crate::ext_ui::{self, ExtUi, Overlay};
 use crate::grid::{Cell, Hl};
 use crate::screen::Screen;
 use crate::text::{Atlas, ATLAS};
@@ -100,9 +101,16 @@ impl Renderer {
 
     /// Composited screen -> vertices. The scene builder itself lives
     /// outside the renderer so it stays testable without a GL context.
-    pub fn build(&mut self, screen: &Screen, atlas: &mut Atlas, preedit: &str) {
+    pub fn build(
+        &mut self,
+        screen: &Screen,
+        atlas: &mut Atlas,
+        preedit: &str,
+        ext: &ExtUi,
+        overlay: &Overlay,
+    ) {
         self.verts.clear();
-        build_scene(&mut self.verts, screen, atlas, preedit);
+        build_scene(&mut self.verts, screen, atlas, preedit, ext, overlay);
     }
 
     /// Upload arbitrary RGBA pixels as a texture usable by `draw`.
@@ -214,6 +222,10 @@ pub trait Surface {
     fn hl_style(&self, hl_id: u64) -> Hl;
     fn hl_colors(&self, hl_id: u64) -> (u32, u32);
     fn hl_decoration_color(&self, hl_id: u64) -> u32;
+    /// The default colours nvim set for the whole UI. External surfaces mix
+    /// their own shades out of these when no highlight group maps to them.
+    fn default_fg(&self) -> u32;
+    fn default_bg(&self) -> u32;
 }
 
 impl Surface for Screen {
@@ -224,35 +236,48 @@ impl Surface for Screen {
     fn hl_style(&self, hl_id: u64) -> Hl { self.style(hl_id) }
     fn hl_colors(&self, hl_id: u64) -> (u32, u32) { self.colors(hl_id) }
     fn hl_decoration_color(&self, hl_id: u64) -> u32 { self.decoration_color(hl_id) }
+    fn default_fg(&self) -> u32 { self.default_colors().0 }
+    fn default_bg(&self) -> u32 { self.default_colors().1 }
 }
 
 /// Build the whole grid scene (backgrounds, glyphs, text decorations and the
 /// IME preedit) into `verts`. Free of any GL handle so it is unit-testable on
 /// the host with only a font-backed [`Atlas`], no GPU context.
-pub fn build_scene(verts: &mut Vec<f32>, surface: &impl Surface, atlas: &mut Atlas, preedit: &str) {
+pub fn build_scene(
+    verts: &mut Vec<f32>,
+    surface: &impl Surface,
+    atlas: &mut Atlas,
+    preedit: &str,
+    ext: &ExtUi,
+    overlay: &Overlay,
+) {
     let (cw, ch) = (atlas.cell_w, atlas.cell_h);
     let (wu, wv) = atlas.white_uv();
     let white = (wu, wv, wu, wv);
+    // What is still ours to paint once the external surfaces have taken
+    // their rows and, if they own it, the caret.
+    let paint = grid_paint(surface.n_rows(), overlay);
+    let cursor = if paint.cursor { surface.cursor_pos() } else { None };
 
     // Pass 1: every background, including the cursor block, so glyphs drawn
     // afterwards always land on top of their own cell's background.
-    for row in 0..surface.n_rows() {
+    for row in 0..paint.rows {
         for col in 0..surface.n_cols() {
             let cell = surface.cell_at(row, col);
             let (fg, bg) = surface.hl_colors(cell.hl);
-            let is_cursor = surface.cursor_pos() == Some((row, col));
+            let is_cursor = cursor == Some((row, col));
             let paint = if is_cursor { fg } else { bg };
             push_quad(verts, col as f32 * cw, row as f32 * ch, cw, ch, white, rgb(paint, 1.0));
         }
     }
 
     // Pass 2: glyphs, now rasterised with the cell's synthetic bold/italic face.
-    for row in 0..surface.n_rows() {
+    for row in 0..paint.rows {
         for col in 0..surface.n_cols() {
             let cell = surface.cell_at(row, col);
             let (fg, bg) = surface.hl_colors(cell.hl);
             let st = surface.hl_style(cell.hl);
-            let is_cursor = surface.cursor_pos() == Some((row, col));
+            let is_cursor = cursor == Some((row, col));
             let ink = if is_cursor { bg } else { fg };
             let Some(g) = atlas.styled_glyph(cell.ch, st.bold, st.italic) else { continue };
             let x = col as f32 * cw + g.bearing_x;
@@ -264,7 +289,7 @@ pub fn build_scene(verts: &mut Vec<f32>, surface: &impl Surface, atlas: &mut Atl
     // Pass 2.5: underline family and strikethrough. Drawn after glyphs so the
     // decoration reads on top of the ink, in the highlight's `sp` colour (or the
     // foreground when nvim gave no special colour).
-    for row in 0..surface.n_rows() {
+    for row in 0..paint.rows {
         for col in 0..surface.n_cols() {
             let cell = surface.cell_at(row, col);
             let st = surface.hl_style(cell.hl);
@@ -275,7 +300,7 @@ pub fn build_scene(verts: &mut Vec<f32>, surface: &impl Surface, atlas: &mut Atl
             // otherwise whatever colour the glyph itself was drawn in. The cursor
             // cell inverts that ink, so its decoration inverts with it and stays
             // visible against the block instead of vanishing into it.
-            let color = if surface.cursor_pos() == Some((row, col)) {
+            let color = if cursor == Some((row, col)) {
                 st.special.unwrap_or_else(|| surface.hl_colors(cell.hl).1)
             } else {
                 surface.hl_decoration_color(cell.hl)
@@ -289,10 +314,20 @@ pub fn build_scene(verts: &mut Vec<f32>, surface: &impl Surface, atlas: &mut Atl
         }
     }
 
-    // Pass 3: the IME composition. It is not in any Neovim buffer yet, so it
+    // Pass 3: the surfaces Neovim externalised. They are drawn over the grid
+    // because that is exactly what nvim stopped drawing into it.
+    push_overlay(verts, surface, atlas, ext, overlay);
+
+    // Pass 4: the IME composition. It is not in any Neovim buffer yet, so it
     // is drawn inverted to read as "pending" rather than as text.
     if !preedit.is_empty() {
-        let Some((row, col)) = surface.cursor_pos() else { return };
+        let Some((row, col)) = overlay
+            .cursor
+            .map(|c| (c.row, c.col))
+            .or_else(|| surface.cursor_pos())
+        else {
+            return;
+        };
         let (fg, bg) = surface.hl_colors(surface.cell_at(row, col).hl);
         let y = row as f32 * ch;
         let advance = |c: char| if (c as u32) < 0x2500 { cw } else { cw * 2.0 };
@@ -313,6 +348,95 @@ pub fn build_scene(verts: &mut Vec<f32>, surface: &impl Surface, atlas: &mut Atl
             }
             x += advance(c);
         }
+    }
+}
+
+/// Draw the external UI surfaces: one background quad and one glyph per cell,
+/// in the order the layout produced them so later spans cover earlier ones.
+/// Spans are clipped to the surface rather than trusted to fit.
+fn push_overlay(
+    verts: &mut Vec<f32>,
+    surface: &impl Surface,
+    atlas: &mut Atlas,
+    ext: &ExtUi,
+    overlay: &Overlay,
+) {
+    let (cw, ch) = (atlas.cell_w, atlas.cell_h);
+    let (wu, wv) = atlas.white_uv();
+    let white = (wu, wv, wu, wv);
+
+    for span in &overlay.spans {
+        if span.row >= surface.n_rows() {
+            continue;
+        }
+        let (fg, bg) = ext.colors(surface, span.hl);
+        let y = span.row as f32 * ch;
+        let mut col = span.col;
+        for c in span.text.chars() {
+            if col >= surface.n_cols() {
+                break;
+            }
+            let cells = ext_ui::char_cells(c);
+            let x = col as f32 * cw;
+            push_quad(verts, x, y, cw * cells as f32, ch, white, rgb(bg, 1.0));
+            if let Some(g) = atlas.glyph(c) {
+                push_quad(
+                    verts,
+                    x + g.bearing_x,
+                    y + atlas.ascent - g.bearing_y,
+                    g.w,
+                    g.h,
+                    (g.u0, g.v0, g.u1, g.v1),
+                    rgb(fg, 1.0),
+                );
+            }
+            col += cells;
+        }
+    }
+
+    // The external caret, inverted the same way the grid cursor is.
+    if let Some(cursor) = overlay.cursor {
+        if cursor.row < surface.n_rows() && cursor.col < surface.n_cols() {
+            let (fg, bg) = surface.hl_colors(0);
+            let (x, y) = (cursor.col as f32 * cw, cursor.row as f32 * ch);
+            push_quad(verts, x, y, cw, ch, white, rgb(fg, 1.0));
+            if let Some(g) = atlas.glyph(cursor.ch) {
+                push_quad(
+                    verts,
+                    x + g.bearing_x,
+                    y + atlas.ascent - g.bearing_y,
+                    g.w,
+                    g.h,
+                    (g.u0, g.v0, g.u1, g.v1),
+                    rgb(bg, 1.0),
+                );
+            }
+        }
+    }
+}
+
+/// How much of the screen the renderer still owns once the external surfaces
+/// have had their say.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GridPaint {
+    /// Rows to paint, counted from the top.
+    pub rows: usize,
+    /// Whether the grid's own cursor block is the caret the user is watching.
+    pub cursor: bool,
+}
+
+/// Both of the renderer's grid decisions, in one place a test can reach without
+/// a GL context.
+///
+/// The bottom rows the external surfaces claimed are covered edge to edge by
+/// their own background span, so anything the grid holds there would be painted
+/// and then immediately hidden; `reserved_rows` is where the grid ends this
+/// frame. And while an external surface owns a caret — the command line being
+/// the usual one — the grid must not also show a block, or the user sees two.
+pub fn grid_paint(grid_rows: usize, overlay: &Overlay) -> GridPaint {
+    GridPaint {
+        rows: grid_rows.saturating_sub(overlay.reserved_rows),
+        cursor: overlay.cursor.is_none(),
     }
 }
 
@@ -454,7 +578,9 @@ unsafe fn link(gl: &glow::Context, vs: &str, fs: &str) -> glow::Program {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ext_ui::Cursor;
     use crate::grid::{Cell, Grid, Hl, Styles};
+    use crate::nvim::RedrawEvent;
     use crate::text::Atlas;
 
     /// One flat grid with its own styles and cursor: what the renderer saw
@@ -480,6 +606,8 @@ mod tests {
         fn hl_style(&self, hl_id: u64) -> Hl { self.styles.style(hl_id) }
         fn hl_colors(&self, hl_id: u64) -> (u32, u32) { self.styles.colors(hl_id) }
         fn hl_decoration_color(&self, hl_id: u64) -> u32 { self.styles.decoration_color(hl_id) }
+        fn default_fg(&self) -> u32 { self.styles.default_fg }
+        fn default_bg(&self) -> u32 { self.styles.default_bg }
     }
 
     const QUAD_FLOATS: usize = 48; // 6 verts * 8 floats
@@ -518,7 +646,7 @@ mod tests {
         flat.styles.hls.insert(1, hl);
         flat.grid.cells[0] = Cell { ch: 'x', hl: 1 };
         let mut verts = Vec::new();
-        build_scene(&mut verts, &flat, &mut atlas, "");
+        build_scene(&mut verts, &flat, &mut atlas, "", &ExtUi::new(), &Overlay::default());
         verts
     }
 
@@ -539,7 +667,7 @@ mod tests {
         flat.grid.cells[0] = Cell { ch: 'x', hl: 1 };
         flat.grid.cells[1] = Cell { ch: 'x', hl: 1 };
         let mut verts = Vec::new();
-        build_scene(&mut verts, &flat, &mut atlas, "");
+        build_scene(&mut verts, &flat, &mut atlas, "", &ExtUi::new(), &Overlay::default());
         verts
     }
 
@@ -951,4 +1079,111 @@ mod tests {
         assert_eq!(bold_g.h, plain_g.h, "styling must not change glyph height");
         assert_eq!(italic_g.h, plain_g.h);
     }
+
+    // ---- what the external surfaces leave the grid -------------------------
+
+    fn overlay_of(events: &[RedrawEvent], cols: usize, rows: usize) -> Overlay {
+        let mut ui = ExtUi::new();
+        ui.apply(events);
+        ui.layout(cols, rows)
+    }
+
+    fn ev(name: &str, args: Vec<rmpv::Value>) -> RedrawEvent {
+        (name.to_string(), args)
+    }
+
+    #[test]
+    fn an_idle_overlay_leaves_the_whole_grid_and_its_cursor_alone() {
+        let paint = grid_paint(24, &Overlay::default());
+        assert_eq!(paint.rows, 24);
+        assert!(paint.cursor);
+    }
+
+    #[test]
+    fn the_grid_stops_where_the_external_surfaces_start() {
+        // One message row plus the command line row.
+        let overlay = overlay_of(
+            &[
+                ev(
+                    "msg_show",
+                    vec![
+                        rmpv::Value::from(""),
+                        rmpv::Value::Array(vec![rmpv::Value::Array(vec![
+                            rmpv::Value::from(0u64),
+                            rmpv::Value::from("written"),
+                        ])]),
+                        rmpv::Value::from(false),
+                    ],
+                ),
+                ev(
+                    "cmdline_show",
+                    vec![
+                        rmpv::Value::Array(vec![]),
+                        rmpv::Value::from(0u64),
+                        rmpv::Value::from(":"),
+                        rmpv::Value::from(""),
+                        rmpv::Value::from(0u64),
+                        rmpv::Value::from(1u64),
+                    ],
+                ),
+            ],
+            20,
+            24,
+        );
+        assert_eq!(overlay.reserved_rows, 2);
+        assert_eq!(grid_paint(24, &overlay).rows, 22);
+    }
+
+    #[test]
+    fn a_surface_that_owns_the_caret_suppresses_the_grid_cursor() {
+        // The command line's caret is the one the user is watching, so the grid
+        // must not draw a second block underneath it.
+        let caret = Cursor { row: 23, col: 1, ch: 'q' };
+        let with_caret = Overlay {
+            cursor: Some(caret),
+            reserved_rows: 1,
+            ..Overlay::default()
+        };
+        assert!(!grid_paint(24, &with_caret).cursor);
+
+        // A message or the ruler claims rows without claiming the caret.
+        let without_caret = Overlay {
+            reserved_rows: 1,
+            ..Overlay::default()
+        };
+        assert!(grid_paint(24, &without_caret).cursor);
+    }
+
+    #[test]
+    fn an_overlay_taller_than_the_grid_hides_it_rather_than_underflowing() {
+        let overlay = Overlay {
+            reserved_rows: 40,
+            ..Overlay::default()
+        };
+        assert_eq!(grid_paint(24, &overlay).rows, 0);
+    }
+
+    #[test]
+    fn the_grid_cursor_disappears_while_a_surface_owns_the_caret() {
+        // Same law, but observed through the real scene builder rather than
+        // through grid_paint alone: no cell may be painted in cursor colours.
+        let mut atlas = Atlas::new(20.0);
+        let mut flat = Flat::new(2, 1);
+        flat.cursor = (0, 0);
+        flat.styles.hls.insert(1, plain());
+        flat.grid.cells[0] = Cell { ch: 'x', hl: 1 };
+
+        let overlay = Overlay {
+            cursor: Some(Cursor { row: 0, col: 1, ch: ':' }),
+            ..Overlay::default()
+        };
+        let mut verts = Vec::new();
+        build_scene(&mut verts, &flat, &mut atlas, "", &ExtUi::new(), &overlay);
+
+        let (fg, bg) = flat.styles.colors(1);
+        let backgrounds = &quads(&verts)[..2];
+        assert_eq!(backgrounds[0].col, rgb(bg, 1.0), "cell 0 keeps its own bg");
+        assert_ne!(backgrounds[0].col, rgb(fg, 1.0), "no second cursor block");
+    }
+
 }

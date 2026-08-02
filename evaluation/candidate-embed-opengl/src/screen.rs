@@ -151,6 +151,11 @@ impl Screen {
         self.styles.colors(hl_id)
     }
 
+    /// The default colours nvim set for the whole UI, which every grid shares.
+    pub fn default_colors(&self) -> (u32, u32) {
+        (self.styles.default_fg, self.styles.default_bg)
+    }
+
     pub fn decoration_color(&self, hl_id: u64) -> u32 {
         self.styles.decoration_color(hl_id)
     }
