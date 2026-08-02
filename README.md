@@ -1,17 +1,23 @@
 # neovim-glsl
 
-Neovim の画面を GLSL で描く実験。
+Neovim protocol を喋る自前 host で、Neovim 系の編集体験を GLSL へ接続する実験。
 
-Neovim 本体には手を入れていない。`nvim --embed` として動かし、編集エンジンはそのまま
-Neovim が担当する。このプログラムが持つのは画面と入力だけで、Neovim から送られてくる
-画面情報を OpenGL / GLSL で描画する。
+spec v0.6 で選ばれた architecture は **own host speaking Neovim protocol** である。
+Neovim の core process を editor basis として `nvim --embed` で動かす案は、採用案ではなく
+この repository の `evaluation/` に残っている実測済み candidate になった。
+
+protocol のどの面を喋るか（UI protocol の server 面だけか、API protocol も含むか）、
+transport、editing core、Lua runtime の有無、telescope の実現形はまだ未決である。
+この README はそれらを先に決めない。
 
 ![text と画像が同じ画面に共存している様子](evaluation/evidence/image-and-text-coexist.png)
 
-## 動くもの
+## 実測済み candidate
 
-このスクリーンショットの文字はすべて実際に打ち込んだもので、画像は Neovim 内の Lua が
-配置したもの。以下は実機（Apple M4 Max / macOS 26 / Neovim 0.11.5）で確認済み。
+以下は採用 architecture ではなく、`evaluation/candidate-embed-opengl` で測った
+embed + OpenGL candidate の証拠である。このスクリーンショットの文字はすべて実際に
+打ち込んだもので、画像は Neovim 内の Lua が配置したもの。実機（Apple M4 Max /
+macOS 26 / Neovim 0.11.5）で確認済み。
 
 - 実際の Neovim の画面が GLSL 経由で出る。行番号、ステータスライン、コマンドライン、
   ハイライト色、カーソルの反転表示
@@ -43,9 +49,9 @@ highlight が続く間は cell 境界で模様が途切れない。
   --cols 111 --rows 3 --lua "$(cat ../evidence/text-attributes.lua)" -- --clean
 ```
 
-## 動かないもの
+## candidate で動かないもの
 
-実験段階なので足りていないものは多い。
+embed + OpenGL candidate の限界として足りていないものは多い。
 
 - 別 OS ウィンドウへ出す window（`win_external_pos`）。このプログラムは窓を一つしか
   持たないので、置き場所が無い分は画面に出さない
@@ -56,6 +62,7 @@ highlight が続く間は cell 境界で模様が途切れない。
 
 ## 使い方
 
+これは採用 architecture の使い方ではなく、実測済み candidate を再現するための手順である。
 必要なもの: Neovim 0.11 以降、Rust（rustup）、macOS。
 
 ```bash
@@ -185,17 +192,25 @@ Finder から `.app` を起動した場合は shell の `PATH` を引き継が�
 
 ## 状態
 
-実験プロトタイプであり、完成品ではない。構成の選択（Neovim をどう繋ぐか、どの
-グラフィックス API を使うか、どこまでを GLSL で描くか）はまだ確定しておらず、
-`evaluation/` 以下はそれを判断するために実際に動かして測ったもの。
+実験プロトタイプであり、完成品ではない。構成のうち、host 選択は 2026-08-02 の
+spec v0.6 で **own_host_speaking_neovim_protocol** に決まった。どの graphics API を
+使うか、どこまでを GLSL で描くか、protocol surface をどこまで実装するかはまだ確定して
+いない。
 
 未決の設計判断は [UNDECIDED.md](UNDECIDED.md) に、開いている選択肢は
 [DESIGN-SPACE.md](DESIGN-SPACE.md) に置いてある。
 
 2026-08-02、spec v0.5 の人間ゲートで **editor 基盤が Neovim であるという pin は緩和された**。
-別 host を建てる案も再実装案も、もう基盤 pin では弾かれない。ただし
-「Neovim 資産の全面破棄」だけは依然できず（`neovim_asset_not_discarded`）、
-「NeoVim は離れない」は編集体験・操作体系の保持として満たすことになった
-（`neovim_retention_mode = editing_experience_preservation`）。Emacs 系への置換は
-別の明示的拒否として残っている。この実装が今も `nvim --embed` を使っているのは、
-基盤が強制されているからではなく、そこが今のところ最も安い経路だからである。
+同じ日、spec v0.6 の人間ゲート回答 `own_host_protocol` により、実際の host は
+自前 host + Neovim protocol に決まった。Neovim 資産の全面破棄は依然できず
+（`neovim_asset_not_discarded`）、v0.6 で protocol の継承だけが確定した
+（`asset_reuse_includes_protocol`）。plugin 生態系、Lua runtime、keymap 意味論の実装深度、
+既存 UI client 実装の去就はまだ未決である。
+
+`evaluation/candidate-embed-opengl` は、Neovim 0.11.5 を `nvim --embed` で動かし、
+画面と入力を OpenGL / GLSL 側で扱う candidate の実測結果である。v0.6 では
+`neovim_core_process_as_editor_basis => not_selected` になったため、この candidate は
+選ばれた architecture ではない。UI client 資産として温存するか、廃棄するかは
+`open_question neovim_glsl.embed_candidate_disposition` のまま残っている。
+
+Emacs 系への置換は、v0.5 で退役した basis pin とは独立した明示的拒否として今も残っている。
