@@ -191,3 +191,11 @@ Finder から `.app` を起動した場合は shell の `PATH` を引き継が�
 
 未決の設計判断は [UNDECIDED.md](UNDECIDED.md) に、開いている選択肢は
 [DESIGN-SPACE.md](DESIGN-SPACE.md) に置いてある。
+
+2026-08-02、spec v0.5 の人間ゲートで **editor 基盤が Neovim であるという pin は緩和された**。
+別 host を建てる案も再実装案も、もう基盤 pin では弾かれない。ただし
+「Neovim 資産の全面破棄」だけは依然できず（`neovim_asset_not_discarded`）、
+「NeoVim は離れない」は編集体験・操作体系の保持として満たすことになった
+（`neovim_retention_mode = editing_experience_preservation`）。Emacs 系への置換は
+別の明示的拒否として残っている。この実装が今も `nvim --embed` を使っているのは、
+基盤が強制されているからではなく、そこが今のところ最も安い経路だからである。

@@ -1,8 +1,10 @@
 # TRACEABILITY — pin id と成果物の対応
 
-`pins/domains/neovim-glsl.spec@0.1` を `pins/house_style.pin@1.8` まで flatten した全 pin と、この repository のどこがそれを満たすかの対応表。1 行で辿れることが目的 (`impl.traceable`)。
+`pins/domains/neovim-glsl.spec@0.5` を `pins/house_style.pin@1.8` まで flatten した pin と、この repository のどこがそれを満たすかの対応表。1 行で辿れることが目的 (`impl.traceable`)。
 
-内訳: domain pin 7、property 2、example 4、house_style から継承した pin 28。合計 41 項目。
+v0.5 の人間ゲート回答 `relax` で退役した pin は、行を消さず `RETIRED@0.5` として残す。設立時に何を約束していたかと、いつ誰が緩めたかの両方が 1 行で辿れる必要があるため。
+
+内訳: domain pin 7 (うち 2 は RETIRED@0.5) + v0.5 で追加 2、property 2 (両方 RETIRED@0.5) + v0.5 で追加 1、example 4 (うち 1 は RETIRED@0.5) + v0.5 で追加 3、house_style から継承した pin 28。
 
 表の cell は機械処理しやすいよう ASCII のみ。補足は表の下の注記に置く。
 
@@ -10,8 +12,10 @@
 
 | pin id                                 | statement                                               | honored at                                                                        |
 | -------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| neovim_glsl.editor_basis               | require neovim_glsl.editor.basis = neovim               | founding/record.json frozen_pins[0]; README.md (frozen)                           |
-| neovim_glsl.no_editor_substitution     | forbid neovim_glsl.editor.substitution = allowed        | founding/record.json frozen_pins[1]; README.md (frozen)                           |
+| neovim_glsl.editor_basis               | RETIRED@0.5 (was: require editor.basis = neovim)        | founding/record.json superseded_at_v0_5.retired[0]; spec v0.5 free editor_basis   |
+| neovim_glsl.no_editor_substitution     | RETIRED@0.5 (was: forbid editor.substitution = allowed) | founding/record.json superseded_at_v0_5.retired[1]                                |
+| neovim_glsl.neovim_asset_not_discarded | forbid neovim_glsl.neovim_assets.disposition = discarded| evaluation/ が Neovim を embed して動いていること自体; spec v0.5                  |
+| neovim_glsl.neovim_retention_mode      | require neovim.retention_mode = editing_experience_preservation | evaluation/candidate-embed-opengl (nvim の keymap/編集意味論をそのまま通す) |
 | neovim_glsl.emacs_alternative_rejected | forbid neovim_glsl.editor.basis = emacs_family          | founding/record.json frozen_pins[2]; README.md (frozen)                           |
 | neovim_glsl.project_established        | require neovim_glsl.project.establishment = required    | this repository as a whole; founding/record.json frozen_pins[3] and establishment |
 | neovim_glsl.project_subject            | require neovim_glsl.project.subject = neovim_to_glsl    | founding/record.json frozen_pins[4] and establishment.subject; README.md (title)  |
@@ -22,9 +26,13 @@
 
 | id                                  | kind     | statement                                                          | honored at                                                    |
 | ----------------------------------- | -------- | ------------------------------------------------------------------ | ------------------------------------------------------------- |
-| neovim_glsl.editor_basis_witness    | property | forall stage . editor_basis(stage) == neovim                       | founding/record.json properties[0]; README.md                 |
-| neovim_glsl.no_substitution_witness | property | forall candidate . editor_substitution(candidate) == rejected      | founding/record.json properties[1]; README.md                 |
-| neovim_glsl.editor_retained         | example  | editor_basis_choice => neovim                                      | founding/record.json witnesses[0]; README.md                  |
+| neovim_glsl.editor_basis_witness    | property | RETIRED@0.5 (was: forall stage . editor_basis(stage) == neovim)    | founding/record.json superseded_at_v0_5.retired[2]            |
+| neovim_glsl.no_substitution_witness | property | RETIRED@0.5 (was: forall candidate . editor_substitution == rejected) | founding/record.json superseded_at_v0_5.retired[3]         |
+| neovim_glsl.retention_witness       | property | forall stage . neovim_assets_disposition(stage) != discarded       | evaluation/ が nvim --embed を使い続けていること               |
+| neovim_glsl.editor_retained         | example  | RETIRED@0.5 (was: editor_basis_choice => neovim)                   | founding/record.json superseded_at_v0_5.retired[4]            |
+| neovim_glsl.basis_free              | example  | non_neovim_host_proposal => not_rejected_by_basis_pin              | spec v0.5 (この repository はまだ別 host を建てていない)       |
+| neovim_glsl.asset_kept              | example  | proposal_discarding_all_neovim_assets => rejected                  | spec v0.5                                                      |
+| neovim_glsl.emacs_still_rejected    | example  | emacs_family_editor_substitution => rejected                       | spec v0.5; emacs_alternative_rejected は退役していない          |
 | neovim_glsl.emacs_alternative       | example  | emacs_family_editor_substitution => rejected                       | founding/record.json witnesses[1]; README.md                  |
 | neovim_glsl.founding                | example  | this_instruction_deliverable => established_neovim_to_glsl_project | founding/record.json witnesses[2]; this repository; README.md |
 | neovim_glsl.shading_language        | example  | project_target_shading_language => glsl                            | founding/record.json witnesses[3]; README.md                  |

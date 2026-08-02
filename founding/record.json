@@ -7,10 +7,11 @@
   "source_of_truth": {
     "system": "spec-system",
     "domain_spec": "pins/domains/neovim-glsl.spec",
-    "domain_spec_version": "0.1",
     "imported_pin_file": "pins/house_style.pin",
     "imported_pin_version": "1.8",
-    "rule": "spec が真実。食い違ったらこの record を直す。pin を緩めない。"
+    "rule": "spec が真実。食い違ったらこの record を直す。pin を結衣の判断で緩めない — 緩和は人間ゲートの回答としてのみ起こり、起きたら superseded_at_v0_5 に理由付きで記録する。",
+    "domain_spec_version_at_founding": "0.1",
+    "domain_spec_version_current": "0.5"
   },
   "friction": {
     "date": "2026-07-25",
@@ -328,6 +329,63 @@
       "neovim_glsl.performance.numeric_targets",
       "neovim_glsl.post_establishment_scope",
       "neovim_glsl.downstream_operation_model"
+    ]
+  },
+  "superseded_at_v0_5": {
+    "gate": "neovim_glsl.neovim_basis_decision",
+    "answer": "relax",
+    "answered_at": "2026-08-02",
+    "answered_by": "human",
+    "friction": "手書きメモ IMG_6539「ベースにしたら neovim でなくてもいいが、資産として使うべきな気がする」",
+    "note": "この record の frozen_pins / properties / witnesses は 2026-07-24 の設立時点の凍結内容であり、履歴としてそのまま残す。下に挙げたものは v0.5 で退役したので、現在の spec には存在しない。",
+    "retired": [
+      {
+        "id": "neovim_glsl.editor_basis",
+        "was": "require neovim_glsl.editor.basis = neovim",
+        "now": "free neovim_glsl.editor_basis (設計判断へ降格)"
+      },
+      {
+        "id": "neovim_glsl.no_editor_substitution",
+        "was": "forbid neovim_glsl.editor.substitution = allowed",
+        "now": "退役。ただし emacs_family への置換は emacs_alternative_rejected で依然 forbid"
+      },
+      {
+        "id": "neovim_glsl.editor_basis_witness",
+        "kind": "property",
+        "was": "forall stage . editor_basis(stage) == neovim",
+        "now": "退役 (witness していた pin が無い)"
+      },
+      {
+        "id": "neovim_glsl.no_substitution_witness",
+        "kind": "property",
+        "was": "forall candidate . editor_substitution(candidate) == rejected",
+        "now": "退役 (witness していた pin が無い)"
+      },
+      {
+        "id": "neovim_glsl.editor_retained",
+        "kind": "example",
+        "was": "editor_basis_choice => neovim",
+        "now": "退役"
+      }
+    ],
+    "added": [
+      {
+        "id": "neovim_glsl.neovim_asset_not_discarded",
+        "statement": "forbid neovim_glsl.neovim_assets.disposition = discarded",
+        "why": "「資産として使うべき」の最弱の観測可能形。程度は pin しないが全面破棄は選べない。"
+      },
+      {
+        "id": "neovim_glsl.neovim_retention_mode",
+        "statement": "require neovim_glsl.neovim.retention_mode = editing_experience_preservation",
+        "why": "「NeoVim は離れない」を実装継続ではなく編集体験の保持で満たすと確定した。"
+      }
+    ],
+    "still_frozen": [
+      "neovim_glsl.emacs_alternative_rejected",
+      "neovim_glsl.project_established",
+      "neovim_glsl.project_subject",
+      "neovim_glsl.establishment_order",
+      "neovim_glsl.target_shading_language"
     ]
   }
 }
