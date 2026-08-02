@@ -5,16 +5,25 @@ This reads pixels, not intentions. Every number it prints comes out of the PNG
 the host actually wrote, so a regression in the panel pass shows up here rather
 than in prose nobody re-ran.
 
-It answers exactly three questions and refuses to answer any others:
+It answers exactly four questions and refuses to answer any others:
 
 1. Does the panel backdrop blend with what is under it, or replace it?
 2. Does the panel edge land where a fractional coordinate puts it, off the
    cell raster the grid is confined to?
 3. Does grid text under the panel survive as a distinguishable colour?
+4. Does the locus the host recorded agree with the pixels and with itself?
 
-It does not decide whether a free surface is the right home for navigation.
-That is `open_question neovim_glsl.navigation_surface_decision`, and this file
-only supplies evidence for it.
+Question 4 arrived with spec v0.8, which turned the home of the navigation
+surface from a free axis into a requirement: the surface is a GLSL surface over
+the grid in the same window, drawn by the host, and not the grid, not another
+window, not another process. The host now records that as an observation in
+`out/locus.json`, and a recorded observation nobody re-checks is just a sentence.
+So the locus is read back here against the same PNG: the value it claims, the
+renderer it names, and the shared vertex buffer it rests on.
+
+Where the surface *lives* is now settled. What it is *for* is not: the mechanism,
+the owner of the picker state and the input path are all still open, and this
+file keeps out of them.
 """
 import json
 import pathlib
@@ -27,6 +36,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 PNG = HERE / "out" / "free-surface-over-grid.png"
 PANELS = HERE / "panels.json"
 MEASUREMENT = HERE / "out" / "measurement.json"
+# Written by `--locus-report`. Absent for a run that did not ask for it, in which
+# case the locus checks are skipped and say so rather than passing vacuously.
+LOCUS = HERE / "out" / "locus.json"
 
 # Panel coordinates live in the renderer's own pixel space, which is the
 # framebuffer's: the shader is handed the physical size, so nothing is rescaled
@@ -205,12 +217,75 @@ def main():
     if found < 50:
         failures.append("grid text under the panel is not visible through it")
 
+    # 5. The locus the host recorded, checked rather than trusted.
+    #
+    #    Three things have to agree: the recorded locus must be the one v0.8
+    #    pins, the renderer must be the host, and the surface quads must have
+    #    landed in the grid's own vertex buffer. That last one is what makes
+    #    "same window, same process" an observation instead of an assertion — a
+    #    separate window or process has no way to append to this buffer, so the
+    #    gap between the two counts is the evidence.
+    if LOCUS.exists():
+        locus = json.loads(LOCUS.read_text())
+        print(f"\nrecorded locus: {locus['locus']}, renderer {locus['renderer']}")
+        print(
+            f"  vertices: {locus['grid_vertices']} after the grid pass, "
+            f"{locus['total_vertices']} after the surface pass"
+        )
+        if locus["locus"] != "glsl_surface_over_grid":
+            failures.append(
+                f"recorded locus {locus['locus']!r} is not the one v0.8 pins"
+            )
+        if locus["renderer"] != "host":
+            failures.append(f"recorded renderer {locus['renderer']!r} is not the host")
+        if locus["total_vertices"] <= locus["grid_vertices"]:
+            failures.append(
+                "the surface pass added no vertices to the grid's buffer, so nothing "
+                "witnesses that both drew into the same window"
+            )
+
+        # The panels the locus report describes must be the panels drawn. If the
+        # two files describe different rectangles, one of them is stale and the
+        # agreement above was between a report and itself.
+        for idx, (p, obs) in enumerate(zip(panels, locus["surfaces"])):
+            if (obs["x"], obs["y"], obs["w"], obs["h"]) != (p["x"], p["y"], p["w"], p["h"]):
+                failures.append(
+                    f"panel {idx}: locus report describes a different rectangle "
+                    f"than panels.json"
+                )
+            # Addressing is still free in v0.8, so an on-raster origin is not a
+            # failure. What would be a failure is the two files disagreeing about
+            # which it was.
+            if obs["origin_on_cell_raster"] == stats[idx]["origin_off_grid"]:
+                failures.append(
+                    f"panel {idx}: locus and measurement disagree about whether the "
+                    f"origin sits on the cell raster"
+                )
+        if len(locus["surfaces"]) != len(panels):
+            failures.append(
+                f"locus report covers {len(locus['surfaces'])} surfaces, "
+                f"{len(panels)} were drawn"
+            )
+        still_open = locus.get("still_open", [])
+        print(f"  still open alongside this evidence: {len(still_open)}")
+        if not still_open:
+            failures.append(
+                "the locus report lists no open questions; v0.8 left the mechanism, "
+                "the state owner and the input path undecided"
+            )
+    else:
+        print(f"\nno locus report at {LOCUS.name}; skipping the v0.8 locus checks")
+
     print()
     if failures:
         for f in failures:
             print(f"FAIL {f}")
         return 1
-    print("ok: backdrops blend, origins sit off the cell raster, grid text shows through")
+    tail = "" if not LOCUS.exists() else ", and the recorded locus matches the pixels"
+    print(
+        "ok: backdrops blend, origins sit off the cell raster, grid text shows through"
+        + tail
+    )
     return 0
 
 

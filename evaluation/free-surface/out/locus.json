@@ -1,0 +1,78 @@
+{
+  "schema": "neovim-glsl.navigation-surface-locus/v1",
+  "records_for": {
+    "domain": "neovim-glsl",
+    "spec_version": "0.8",
+    "pins": [
+      "neovim_glsl.navigation_locus_choice",
+      "neovim_glsl.navigation_not_in_grid",
+      "neovim_glsl.navigation_not_separate_window",
+      "neovim_glsl.navigation_not_separate_process",
+      "neovim_glsl.navigation_surface_renderer"
+    ]
+  },
+  "locus": "glsl_surface_over_grid",
+  "renderer": "host",
+  "locus_basis": "the surface quads were appended to the same vertex buffer as the grid's, by this process, in pixel coordinates over the composited screen; a separate window or process could not append to this buffer",
+  "grid_vertices": 36366,
+  "total_vertices": 39090,
+  "shared_vertex_buffer": true,
+  "cell_raster": {
+    "cell_w": 19.0,
+    "cell_h": 36.0
+  },
+  "surfaces": [
+    {
+      "x": 275.5,
+      "y": 192.25,
+      "w": 1180.0,
+      "h": 690.0,
+      "origin_on_cell_raster": false,
+      "origin_in_cells": [
+        14.5,
+        5.3402777
+      ],
+      "row_height_px": 62.5,
+      "row_height_in_cells": 1.7361112,
+      "stats": {
+        "quads": 361,
+        "clipped_quads": 59,
+        "rows_visible": 11,
+        "rows_scrolled_out": 0,
+        "first_row_clip_px": 23.5,
+        "last_row_clip_px": 49.5,
+        "origin_off_grid": true
+      }
+    },
+    {
+      "x": 1520.25,
+      "y": 192.25,
+      "w": 640.0,
+      "h": 330.0,
+      "origin_on_cell_raster": false,
+      "origin_in_cells": [
+        80.01316,
+        5.3402777
+      ],
+      "row_height_px": 44.0,
+      "row_height_in_cells": 1.2222222,
+      "stats": {
+        "quads": 93,
+        "clipped_quads": 0,
+        "rows_visible": 4,
+        "rows_scrolled_out": 0,
+        "first_row_clip_px": 0.0,
+        "last_row_clip_px": 0.0,
+        "origin_off_grid": true
+      }
+    }
+  ],
+  "still_open": [
+    "free neovim_glsl.navigation_surface_addressing",
+    "free neovim_glsl.navigation_surface_geometry",
+    "free neovim_glsl.navigation_surface_compositing",
+    "open_question neovim_glsl.navigation_state_owner",
+    "open_question neovim_glsl.navigation_input_routing",
+    "open_question neovim_glsl.navigation_mechanism_selection"
+  ]
+}

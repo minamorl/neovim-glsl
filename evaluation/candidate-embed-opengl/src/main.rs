@@ -14,6 +14,7 @@ mod perf;
 mod platform;
 mod root_ui;
 mod screen;
+mod surface_locus;
 mod text;
 
 use std::path::PathBuf;
@@ -52,6 +53,9 @@ struct Args {
     panels: Option<PathBuf>,
     /// Where to write what the panel pass actually emitted.
     panel_report: Option<PathBuf>,
+    /// Where to write the observed locus of those surfaces. Evidence for the
+    /// v0.8 pins that made the locus a requirement; see `surface_locus`.
+    locus_report: Option<PathBuf>,
     /// Which of the multigrid / popupmenu / cmdline / message surfaces this
     /// host draws instead of letting Neovim paint them into the grid.
     ui_options: nvim::UiOptions,
@@ -91,6 +95,7 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         root_ui_evaluation: None,
         panels: None,
         panel_report: None,
+        locus_report: None,
         ui_options: nvim::UiOptions::default(),
         perf: false,
         perf_report: None,
@@ -121,6 +126,10 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             "--panels" => { a.panels = argv.get(i + 1).map(PathBuf::from); i += 2 }
             "--panel-report" => {
                 a.panel_report = argv.get(i + 1).map(PathBuf::from);
+                i += 2
+            }
+            "--locus-report" => {
+                a.locus_report = argv.get(i + 1).map(PathBuf::from);
                 i += 2
             }
             // Measurement. Absent flags mean absent measurement, and an
@@ -194,6 +203,12 @@ struct App {
     panels: Vec<panel::Panel>,
     /// What the last panel pass emitted, kept for `--panel-report`.
     panel_stats: Vec<panel::PanelStats>,
+    /// Vertices in the buffer after the grid pass and after the surface pass, in
+    /// that order. Recorded at the two points where they are true rather than
+    /// recomputed later: what they witness is that both passes write into one
+    /// buffer, and a recomputation would keep saying so after they stopped.
+    grid_vertices: usize,
+    total_vertices: usize,
 }
 
 impl App {
@@ -222,6 +237,8 @@ impl App {
             images: Vec::new(),
             panels: Vec::new(),
             panel_stats: Vec::new(),
+            grid_vertices: 0,
+            total_vertices: 0,
         }
     }
 
@@ -237,6 +254,29 @@ impl App {
         {
             Ok(panels) => self.panels = panels,
             Err(error) => eprintln!("panel file {} unusable: {error}", path.display()),
+        }
+    }
+
+    /// Write where the surfaces were drawn, as observed rather than asserted.
+    ///
+    /// Separate from the panel report on purpose. That one counts what the pass
+    /// emitted and is evidence for a question; this one records the locus, which
+    /// v0.8 turned into a requirement. Mixing them would let a change to the
+    /// measurement quietly rewrite the conformance record.
+    fn write_locus_report(&mut self) {
+        let Some(path) = self.args.locus_report.clone() else { return };
+        let Some(atlas) = self.atlas.as_ref() else { return };
+        let observation = surface_locus::observe(
+            &self.panels,
+            &self.panel_stats,
+            self.grid_vertices,
+            self.total_vertices,
+            atlas.cell_w,
+            atlas.cell_h,
+        );
+        match surface_locus::write(&path, &observation) {
+            Ok(()) => eprintln!("WROTE {}", path.display()),
+            Err(error) => eprintln!("locus report write failed: {error}"),
         }
     }
 
@@ -474,7 +514,7 @@ impl App {
         }
         let App {
             gl, renderer, atlas, screen, surface, ctx, win, preedit, images, ext_ui, perf,
-            panels, panel_stats, ..
+            panels, panel_stats, grid_vertices, total_vertices, ..
         } = self;
         let (Some(gl), Some(r), Some(atlas), Some(screen), Some(surface), Some(ctx), Some(win)) = (
             gl.as_ref(),
@@ -492,9 +532,13 @@ impl App {
         let frame = perf.span();
         let build = perf.span();
         r.build(screen, atlas, preedit, ext_ui, &overlay);
+        // Read between the passes, not after: the gap between these two counts is
+        // the whole evidence that the surfaces went into the grid's own buffer.
+        *grid_vertices = r.vertex_count();
         if !panels.is_empty() {
             *panel_stats = r.push_panels(panels, atlas);
         }
+        *total_vertices = r.vertex_count();
         perf.record_vertex_build(build);
         let vertices = r.vertex_count();
 
@@ -824,9 +868,11 @@ impl App {
                 &self.ext_ui,
                 &overlay,
             );
+            self.grid_vertices = r.vertex_count();
             if !self.panels.is_empty() {
                 self.panel_stats = r.push_panels(&self.panels, self.atlas.as_mut().unwrap());
             }
+            self.total_vertices = r.vertex_count();
             self.perf.record_vertex_build(build);
             let vertices = r.vertex_count();
 
@@ -849,6 +895,7 @@ impl App {
             buf
         };
         self.write_panel_report();
+        self.write_locus_report();
         write_png(path, &buf, w, h);
         eprintln!("WROTE {path} ({w}x{h})");
     }

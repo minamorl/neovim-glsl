@@ -1,16 +1,24 @@
-# free-surface — evidence, not a decision
+# free-surface — the evidence, and now the conformance record
 
 This directory measures what a surface can do when it stops speaking in cells.
 
-It exists for two open questions in the spec:
+It was written for two undecided things in the spec:
 
 - `open_question neovim_glsl.navigation_surface_decision`
 - `quarantine neovim_glsl.external_surface_boundary`
 
-It answers neither. `navigation_mechanism_selection`, `navigation_surface_decision`
-and `external_surface_boundary` all remain open after this measurement, and
-nothing here is wired to a key, a matcher or a file list. What is here is the
-*surface* a picker would need, drawn and counted.
+**Both closed at v0.8**, in favour of what is drawn here: the navigation surface
+is a GLSL surface over the grid in the same window, rendered by the host, and not
+the grid, not a separate OS window, not a separate process. So this directory
+changed job without changing content. It was evidence for a choice; it is now
+also the record that the choice is met, which is why `out/locus.json` exists and
+why `verify.py` reads it back instead of taking the host's word for it.
+
+What stayed open is everything about what the surface is *for*: which mechanism
+supplies the rows (`navigation_mechanism_selection`), who owns the picker state
+(`navigation_state_owner`), and where the keystrokes go while it is open
+(`navigation_input_routing`). Nothing here is wired to a key, a matcher or a file
+list, and nothing here should be read as deciding those.
 
 ## Why this is worth measuring at all
 
@@ -36,6 +44,7 @@ cargo run -- --cols 120 --rows 34 \
   --snapshot ../free-surface/out/free-surface-over-grid.png \
   --panels ../free-surface/panels.json \
   --panel-report ../free-surface/out/measurement.json \
+  --locus-report ../free-surface/out/locus.json \
   --lua "$(cat ../free-surface/bed.lua)" -- --clean
 ```
 
@@ -78,9 +87,33 @@ Cell height on this run is 36 px and cell width 19 px, so:
   coordinates cut by the same proportion, so half a quad shows half a glyph
   rather than a squeezed whole one.
 
+## Where the surface was, as observed
+
+`out/locus.json` records the locus rather than asserting it. The host does not
+have a setting called "locus" that it prints back; the value comes out of where
+the quads went:
+
+| field | value on this run | why it is the evidence |
+|---|---|---|
+| `locus` | `glsl_surface_over_grid` | the pinned one |
+| `renderer` | `host` | outside the grid is unaddressable by Neovim |
+| `grid_vertices` | 36366 | count after the grid pass |
+| `total_vertices` | 39090 | count after the surface pass |
+| `shared_vertex_buffer` | `true` | one buffer, so one window and one process |
+
+The 2724-vertex gap is the load-bearing number. A surface in another window or
+another process could not have appended to this buffer at all, so "same window,
+same process" is a measured relation here and not a claim. The report also
+carries the six things v0.8 left open, so a reader who finds this file later
+cannot mistake it for a decision about the picker.
+
+Addressing stayed free at v0.8, so `origin_on_cell_raster` is reported and never
+required. A surface that happened to land on a cell boundary would not be in
+violation of anything — it would only have declined a freedom it had.
+
 ## Verifying it
 
-`verify.py` reads the PNG back and checks the three claims that matter, against
+`verify.py` reads the PNG back and checks the four claims that matter, against
 pixels rather than against this prose:
 
 ```bash
@@ -98,13 +131,23 @@ panel 0: origin (275.5, 192.25) size 1180.0x690.0 alpha 0.62
 grid text outside the panel: (224, 226, 234)
 through panel 0 it should read (107, 116, 134); matching pixels inside: 1170
 
-ok: backdrops blend, origins sit off the cell raster, grid text shows through
+recorded locus: glsl_surface_over_grid, renderer host
+  vertices: 36366 after the grid pass, 39090 after the surface pass
+  still open alongside this evidence: 6
+
+ok: backdrops blend, origins sit off the cell raster, grid text shows through, and the recorded locus matches the pixels
 ```
 
 The blend arithmetic is the load-bearing part. If the panel had *replaced* what
 was under it, the interior would read as `(36, 48, 73)` exactly. It reads as the
 mix, which is only possible because the surface is composited rather than
 written into cells.
+
+`src/surface_locus.rs` carries 7 more that hold the locus itself: that the
+observed locus is the pinned one and differs from each forbidden one, that an
+off-raster origin is reported in cells as well as pixels, that an on-raster
+origin is *not* treated as a violation, that the two vertex counts arrive in the
+order the passes ran, and that the open questions travel with the evidence.
 
 `src/panel.rs` carries 11 unit tests covering the same laws without a GPU:
 fractional origin survival, proportional UV rescaling on clip, fractional
@@ -118,9 +161,9 @@ emitted geometry.
   does not drive panels. Measuring this properly needs its own harness.
 - **Interaction.** No key handling, no matcher, no source, no action. This is a
   surface, not a picker.
-- **Where the surface should live.** Grid-internal, an overlay in the same
-  window (what this does), a separate OS window, or a separate process are all
-  still open under `quarantine neovim_glsl.external_surface_boundary`.
+- **What the surface is for.** The mechanism that supplies its rows, the owner
+  of its state, and the route its keystrokes take are all still open. Only the
+  *place* was decided at v0.8.
 - **Whether GLSL's advantage was "used".** There is no threshold for that, which
   is why `quarantine neovim_glsl.glsl_advantage_criterion` exists. What is
   recorded above is a list of expressible things, not a verdict.
@@ -132,3 +175,4 @@ emitted geometry.
 - `verify.py` — reads the PNG back and checks the claims.
 - `out/free-surface-over-grid.png` — the snapshot.
 - `out/measurement.json` — what the panel pass emitted, counts only.
+- `out/locus.json` — where it was drawn, as observed. The v0.8 conformance record.
