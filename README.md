@@ -7,13 +7,17 @@ Neovim の core process を editor basis として `nvim --embed` で動かす�
 この repository の `evaluation/` に残っている実測済み candidate になった。
 
 protocol のどの面を喋るか（UI protocol の server 面だけか、API protocol も含むか）、
-transport、editing core、Lua runtime の有無、そして navigation をどう実現しどこへ描くかは
+transport、editing core、Lua runtime の有無、そして navigation を何で実現するかは
 まだ未決である。この README はそれらを先に決めない。
 
 spec v0.7 で `file_navigation.mechanism = telescope` は退役し、残っているのは
 「移動のための機構が在ること」だけになった。telescope は禁止されたのではなく、
-候補の一つに戻っただけである。`evaluation/free-surface/` は、その機構が grid の
-内側に居る必要があるのかを測った証拠であって、選択ではない。
+候補の一つに戻っただけである。
+
+spec v0.8 で、その機構を**どこへ描くか**は決まった。navigation の面は terminal grid の
+内側ではなく、grid と同じ window に重なる GLSL surface であり、描く主体は host である。
+grid の外は Neovim が描けない領域なので、これは選択の含意でもある。面の座標系・幾何・
+合成方法、state の所在、入力の経路はどれも未決のまま。
 
 ![text と画像が同じ画面に共存している様子](evaluation/evidence/image-and-text-coexist.png)
 
@@ -198,9 +202,10 @@ Finder から `.app` を起動した場合は shell の `PATH` を引き継が�
 ## 状態
 
 実験プロトタイプであり、完成品ではない。構成のうち、host 選択は 2026-08-02 の
-spec v0.6 で **own_host_speaking_neovim_protocol** に決まった。どの graphics API を
-使うか、どこまでを GLSL で描くか、protocol surface をどこまで実装するか、navigation を
-何でどこに作るかはまだ確定していない。
+spec v0.6 で **own_host_speaking_neovim_protocol** に決まった。navigation の面をどこへ
+描くかは 2026-08-03 の spec v0.8 で **grid の外、同じ window に重なる host 描画の
+GLSL surface** に決まった。どの graphics API を使うか、どこまでを GLSL で描くか、
+protocol surface をどこまで実装するか、navigation を**何で**作るかはまだ確定していない。
 
 未決の設計判断は [UNDECIDED.md](UNDECIDED.md) に、開いている選択肢は
 [DESIGN-SPACE.md](DESIGN-SPACE.md) に置いてある。どちらも spec から機械生成される
@@ -229,6 +234,16 @@ spec v0.6 で **own_host_speaking_neovim_protocol** に決まった。どの gra
 `evaluation/free-surface` は、その機構が grid の内側に居なければならないのかを測った証拠で
 ある。grid の外なら、cell に乗らない原点・cell と無関係な行送り・端数のスクロール・
 下のテキストが透ける背景・cell 境界と無関係な切り取りが表現できる、というところまでが観測。
-どこに置くかは `open_question neovim_glsl.navigation_surface_decision` のまま。
+
+同じ日、spec v0.8 の人間ゲート回答 `glsl_overlay` で、**その面の居場所は決まった**。
+navigation の面は terminal grid の内側でなく、別 OS window でも別 process でもなく、
+grid と同じ window に重なる GLSL surface である（`navigation_locus_choice`）。grid の外は
+Neovim が描けない領域なので、描画主体は host に確定している（`navigation_surface_renderer`）。
+plugin が自分の floating window を picker の面として描く形はこの pin と両立しないが、
+plugin が面へ行を供給する形は却下されていない。
+
+面の座標系（pixel のままか cell に揃えるか）、幾何、grid と同じ draw call に乗せるか、
+picker の state を誰が持つか（`navigation_state_owner`）、開いている間の入力を host が
+直接受けるか Neovim へ送って戻すか（`navigation_input_routing`）は、いずれも未決である。
 
 Emacs 系への置換は、v0.5 で退役した basis pin とは独立した明示的拒否として今も残っている。

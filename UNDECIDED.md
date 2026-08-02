@@ -1,9 +1,9 @@
 # UNDECIDED — 決まっていない事項
 
-`pins/domains/neovim-glsl.spec@0.7` の `quarantine` と `open_question` を、spec の文言のまま
+`pins/domains/neovim-glsl.spec@0.8` の `quarantine` と `open_question` を、spec の文言のまま
 機械転記したもの。**ここにあるものは決まっていない。** 実装で埋めてはならない。
 
-入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.7.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
+入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.8.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
 
 規律:
 
@@ -40,11 +40,11 @@
 - `neovim_glsl.aishell_naming`: 曖昧 — メモの「aishell」が v0.2 で pin 済みの aish(ai-native-shell)と同一対象を指すのか、別の shell surface を指すのかは字面だけでは一意に定まらない。同一と仮定して新規 pin を作らず、v0.2 の pin を再利用する。
 - `neovim_glsl.protocol_speaking_direction_residue`: 曖昧 — 「protocol を喋る」の面が、UI protocol(ui_attach / redraw)の server 側なのか、API protocol(nvim_* RPC)の server 側なのか、その双方なのかは回答の字面だけでは一意に定まらない。三択の中で core process を持たない案が選ばれた以上、自前 host が Neovim 側の端に座ること自体は確定するが、どの面を実装するかは未定として隔離する。
 - `neovim_glsl.embed_artifact_disposition`: 未確定 — own_host を採ったとき、実測済みの embed candidate(9,878 行、Neovim 0.11.5 実機検証済み)を廃棄するのか、UI client 側の資産として温存し host だけ差し替えるのかは述べられていない。pin neovim_asset_not_discarded は Neovim 資産の全面破棄を禁じるが、この repository 内の評価 artifact の去就までは縛らない。
-- `neovim_glsl.external_surface_boundary`: 曖昧 — 「外部に出す」の「外部」が指す境界が一意でない。terminal grid の外(GLSL で描く独自 surface)・editor process の外・独立した OS window・独立した製品としての切り出し、のいずれとも読める。読みによって設計も配布境界も変わるため、どれか一つを選ばず隔離する。
 - `neovim_glsl.glsl_advantage_criterion`: 主観 — 「glsl の利点を活かす」に observable な受け入れ基準(何が描けれ ば活かしたと言えるか、grid 制約からの解放をどう測るか)が無い。v0.3 の vscode_defeat、v0.4 の ide_level_criterion と同型。
 - `neovim_glsl.navigation_object_scope`: 未確定 — navigation の対象が file なのか markdown note なのか両方なのかが未固定。v0.4 で主 object が markdown note へ移り、user_facing.file_awareness = not_required も pin された以上、「ファイルの移動」を note の移動として読む余地が生じている。v0.4 の逐語は file だが、v0.7 で機構名が外れたことで対象側の二義性が露出した。
+- `neovim_glsl.navigation_mechanism_residue`: 曖昧 — 面が host 描画に確定したことで、v0.7 が候補に残した telescope は「行を供給する側」としてしか残れない。plugin が自分の floating window を picker の面として描く形は pin navigation_locus_choice と両立しないが、同じ plugin の finder / sorter を headless に使い host 描画の面へ行を供給する形は却下されない。どちらを指して「telescope を使う」と言うかが未固定。
 
-## open_question — 人間ゲート待ち (30 件)
+## open_question — 人間ゲート待ち (31 件)
 
 決めるべきだが情報がない箇所。
 
@@ -77,50 +77,25 @@
 - `neovim_glsl.protocol_version_baseline`: どの Neovim version の protocol を baseline とし、上流の変更をどう追従するか(固定 pin / 追従 / 自前拡張の許容範囲)。
 - `neovim_glsl.embed_candidate_disposition`: 実測済み embed candidate を UI client 資産として温存するか、廃棄するか。温存するなら host 差し替えの seam をどこに置くか。
 - `neovim_glsl.navigation_mechanism_selection`: navigation の機構として実際に何を採るか。telescope を選び直すこともできる(必然性が無いだけで禁止ではない)。
-- `neovim_glsl.navigation_surface_decision`: picker を grid 内の TUI として描くか、GLSL surface として grid の外へ出すか。許可は出たが選択はされていない。quarantine external_surface_boundary の人間ゲート。
+- `neovim_glsl.navigation_state_owner`: picker の state(query・候補列・選択位置)を host が持つか、Neovim 側の plugin が持って host は描くだけか。面の locus は決まったが state の所在は決まっていない。
+- `neovim_glsl.navigation_input_routing`: picker が開いている間の入力を host が直接受けるか、Neovim へ送って戻すか。pin keymap_preservation(keymap.baseline = current_keymap)との整合をどちらで担保するかも含む。
 
 ## 未決のまま残した結果
 
 この repository に GLSL 化範囲・性能基準などを表す**決定**が無いのは欠落ではなく、
 上の隔離をそのまま守った結果である。埋めた瞬間に設計空間が先に潰れる。
 
-architecture については v0.6 で `own_host_speaking_neovim_protocol` が選ばれた。
-ただし protocol のどの面を喋るか、transport、editing core、Lua runtime、telescope の
-実現形、実測済み embed candidate の扱いは、上の未決項目または free 軸に残っている。
-
 `evaluation/` にあるものは決定ではない:
 
 - 性能の**測定**は隔離と矛盾しない。隔離しているのは性能**基準**（何 ms なら合格か）であって
   観測ではない。`neovim_glsl.performance_acceptance` を人間ゲートで決めるには観測が要る。
   測定結果は閾値を含まず、閾値は実行時に人間が渡した値としてのみ report に載る。
-- embed + OpenGL の候補実装は、v0.6 では採用 architecture ではなく実測済み evidence である。
+- 実装済みの候補・実測は、採用された architecture の実体ではなく evidence である。
   `neovim_glsl.embed_candidate_disposition` が未決なので、UI client 資産として温存するか
   廃棄するかもこの repository では決めない。
 - Root-ui projection も同様に、`root_ui_integration_adoption` を決めていない。
 
-## v0.6 で決着したもの（参考）
+## 決着したもの
 
-spec v0.6 の人間ゲート回答 `own_host_protocol` により、次は**もう未決ではない**:
-
-- `neovim_glsl.basis_selection` — 実際の host は `own_host_speaking_neovim_protocol`。
-- `neovim_glsl.architecture_decision` — architecture は
-  `own_host_speaking_neovim_protocol`。
-- `neovim_glsl.architecture`（quarantine）— 解空間が固まり退役。
-- `free neovim_glsl.editor_basis` — `pin neovim_glsl.editor_basis_own_host` へ lift。
-
-代わりに v0.6 が新しく開いた問いと隔離は上の一覧に含まれている
-（protocol surface/version、telescope realization、embed candidate disposition）。
-
-## v0.5 で決着したもの（参考）
-
-spec v0.5 の人間ゲート回答 `relax` により、次は**もう未決ではない**:
-
-- `neovim_glsl.neovim_basis_decision` — editor 基盤は Neovim 固定を緩和。
-  `free neovim_glsl.editor_basis` へ降格した。ただし emacs_family は依然 forbid。
-- `neovim_glsl.neovim_retention_decision` — 「NeoVim は離れない」は編集体験・操作体系の
-  保持で満たす（`pin neovim_glsl.neovim_retention_mode`）。実装の継続は要求しない。
-- `neovim_glsl.neovim_basis_relaxation`（quarantine）— ゲート通過により解消。
-
-代わりに v0.5 が新しく開いた問いのうち、`neovim_asset_reuse_scope` は v0.6 で
-protocol 継承だけが確定し、残りの範囲を問う形へ narrowing された。`basis_selection` は
-v0.6 で解決済み。
+この生成は mirror 入力なので closure marker を持たない。決着の一覧は
+`pins/domains/neovim-glsl.spec` を入力にして再生成すると出る。

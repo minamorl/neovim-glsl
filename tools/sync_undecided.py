@@ -4,6 +4,17 @@
 The input may be either the real spec file or a local spec-mirror transcription
 that contains only live ``quarantine`` / ``open_question`` lines. The mirror is
 not authoritative; it exists only for worktrees that cannot read spec-system.
+
+The closure section ("what stopped being undecided, and when") is derived too.
+It used to be hand-written, and by v0.7 it had gone stale in exactly the way the
+whole document was written to avoid: it still described v0.6 as the newest gate
+while the spec had closed two more questions. A closure list that is transcribed
+by hand rots on the same schedule as the list it is attached to, so it is read
+out of the spec's own ``# RESOLVED at vX.Y`` / ``# RETIRED at vX.Y`` markers.
+
+Those markers only survive in the real spec file. A mirror carries what is still
+open, not the history of what closed, so when the input is a mirror the closure
+section is omitted rather than guessed at.
 """
 import io
 import pathlib
@@ -24,8 +35,9 @@ else:
         raise SystemExit("cannot determine spec version; add '@meta version: X.Y'")
     version = name_match.group(1)
 
+from_mirror = "spec-mirror" in SPEC.parts
 source_note = ""
-if "spec-mirror" in SPEC.parts:
+if from_mirror:
     source_note = (
         "\n入力は `{}` ではなく `{}`。これは外部 spec ledger からの転記であり、"
         "正本ではない。食い違ったら spec が勝つ。"
@@ -41,6 +53,39 @@ for line in spec.split("\n"):
         body = line[len("open_question "):]
         name, _, desc = body.partition(":")
         questions.append((name.strip(), desc.strip()))
+
+
+def closures(text):
+    """Read the spec's own closure markers.
+
+    A marker is ``# RESOLVED at vX.Y[ (gate note)]: <subject>``, where the
+    subject may sit on the marker line or on the continuation line beneath it.
+    Only the subject is carried across: the reason lives in the spec, and
+    duplicating it here would create a second place for it to drift.
+    """
+    lines = text.split("\n")
+    found = {}
+    pattern = re.compile(
+        r"^# (RESOLVED|RETIRED) at v([0-9.]+)(?: \(([^)]*)\))?:[ \t]*(.*)$"
+    )
+    for i, line in enumerate(lines):
+        m = pattern.match(line)
+        if not m:
+            continue
+        verb, ver, note, subject = m.groups()
+        subject = subject.strip()
+        if not subject and i + 1 < len(lines):
+            nxt = lines[i + 1]
+            if nxt.startswith("#"):
+                subject = nxt.lstrip("#").strip()
+        if not subject:
+            continue
+        entry = found.setdefault(ver, {"note": None, "items": []})
+        if note and not entry["note"]:
+            entry["note"] = note.strip()
+        entry["items"].append((verb, subject))
+    return dict(sorted(found.items(), key=lambda kv: [int(p) for p in kv[0].split(".")], reverse=True))
+
 
 head = """# UNDECIDED — 決まっていない事項
 
@@ -72,47 +117,36 @@ tail = """
 この repository に GLSL 化範囲・性能基準などを表す**決定**が無いのは欠落ではなく、
 上の隔離をそのまま守った結果である。埋めた瞬間に設計空間が先に潰れる。
 
-architecture については v0.6 で `own_host_speaking_neovim_protocol` が選ばれた。
-ただし protocol のどの面を喋るか、transport、editing core、Lua runtime、telescope の
-実現形、実測済み embed candidate の扱いは、上の未決項目または free 軸に残っている。
-
 `evaluation/` にあるものは決定ではない:
 
 - 性能の**測定**は隔離と矛盾しない。隔離しているのは性能**基準**（何 ms なら合格か）であって
   観測ではない。`neovim_glsl.performance_acceptance` を人間ゲートで決めるには観測が要る。
   測定結果は閾値を含まず、閾値は実行時に人間が渡した値としてのみ report に載る。
-- embed + OpenGL の候補実装は、v0.6 では採用 architecture ではなく実測済み evidence である。
+- 実装済みの候補・実測は、採用された architecture の実体ではなく evidence である。
   `neovim_glsl.embed_candidate_disposition` が未決なので、UI client 資産として温存するか
   廃棄するかもこの repository では決めない。
 - Root-ui projection も同様に、`root_ui_integration_adoption` を決めていない。
-
-## v0.6 で決着したもの（参考）
-
-spec v0.6 の人間ゲート回答 `own_host_protocol` により、次は**もう未決ではない**:
-
-- `neovim_glsl.basis_selection` — 実際の host は `own_host_speaking_neovim_protocol`。
-- `neovim_glsl.architecture_decision` — architecture は
-  `own_host_speaking_neovim_protocol`。
-- `neovim_glsl.architecture`（quarantine）— 解空間が固まり退役。
-- `free neovim_glsl.editor_basis` — `pin neovim_glsl.editor_basis_own_host` へ lift。
-
-代わりに v0.6 が新しく開いた問いと隔離は上の一覧に含まれている
-（protocol surface/version、telescope realization、embed candidate disposition）。
-
-## v0.5 で決着したもの（参考）
-
-spec v0.5 の人間ゲート回答 `relax` により、次は**もう未決ではない**:
-
-- `neovim_glsl.neovim_basis_decision` — editor 基盤は Neovim 固定を緩和。
-  `free neovim_glsl.editor_basis` へ降格した。ただし emacs_family は依然 forbid。
-- `neovim_glsl.neovim_retention_decision` — 「NeoVim は離れない」は編集体験・操作体系の
-  保持で満たす（`pin neovim_glsl.neovim_retention_mode`）。実装の継続は要求しない。
-- `neovim_glsl.neovim_basis_relaxation`（quarantine）— ゲート通過により解消。
-
-代わりに v0.5 が新しく開いた問いのうち、`neovim_asset_reuse_scope` は v0.6 で
-protocol 継承だけが確定し、残りの範囲を問う形へ narrowing された。`basis_selection` は
-v0.6 で解決済み。
 """
 
+closure = closures(spec)
+if closure:
+    tail += "\n## 決着したもの（参考・spec の closure marker から機械生成）\n\n"
+    tail += (
+        "各項目は spec 側で `# RESOLVED at vX.Y` / `# RETIRED at vX.Y` と記録された行の主題だけを\n"
+        "写している。理由は spec にあり、ここには複製しない。\n"
+    )
+    for ver, entry in closure.items():
+        note = " — {}".format(entry["note"]) if entry["note"] else ""
+        tail += "\n### v{}{}\n\n".format(ver, note)
+        for verb, subject in entry["items"]:
+            tail += "- {}: {}\n".format(verb.capitalize(), subject)
+elif from_mirror:
+    tail += (
+        "\n## 決着したもの\n\n"
+        "この生成は mirror 入力なので closure marker を持たない。決着の一覧は\n"
+        "`pins/domains/neovim-glsl.spec` を入力にして再生成すると出る。\n"
+    )
+
 io.open(OUT, "w", encoding="utf-8").write(head + body + tail)
-print("wrote", OUT, "quarantine", len(quarantines), "open_question", len(questions))
+print("wrote", OUT, "quarantine", len(quarantines), "open_question", len(questions),
+      "closure versions", len(closure))

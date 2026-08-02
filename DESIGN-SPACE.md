@@ -1,9 +1,9 @@
 # DESIGN-SPACE — 開いたままにする軸
 
-`pins/domains/neovim-glsl.spec@0.7` の `free` 項目を、spec の文言のまま機械転記したもの。
+`pins/domains/neovim-glsl.spec@0.8` の `free` 項目を、spec の文言のまま機械転記したもの。
 **free は free のまま。** 実装・設定・依存・慣習のどれによっても、ここの軸を事実上固定してはならない。
 
-入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.7.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
+入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.8.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
 
 規律:
 
@@ -13,7 +13,7 @@
 - 正本は spec。この転記が spec と食い違ったら spec が勝つ。転記側を直す。
 - この file は `python3 tools/sync_design_space.py <spec-or-mirror>` で再生成する。手で書き足さない。
 
-## free 軸 (42 件)
+## free 軸 (44 件)
 
 - `neovim_glsl.integration_strategy`: Neovim の embed / external UI protocol 接続 / 再実装 / fork 等の実現手段。指示文は一つも選択していない。
 - `neovim_glsl.host_implementation_language`: host および周辺実装の言語・runtime・build system(Rust 等を含む)。特定言語を必須条件にしない。
@@ -54,9 +54,11 @@
 - `neovim_glsl.host_editing_core_design`: 自前 host 内部の編集 core 設計(buffer 表現、undo tree、text object 実装)。protocol の外側なので observable な要求が無い。
 - `neovim_glsl.lua_runtime_presence`: 自前 host が Lua runtime を内蔵するか否か。v0.7 で telescope の必然性が外れたため、Lua runtime を要求する主要な圧力も消えた。ただし「要らない」も述べられていないので free のまま。
 - `neovim_glsl.navigation_mechanism_choice`: navigation を実現する機構(telescope 継続 / Neovim plugin 一般 / 自前 picker / 外部 surface)。v0.4 の名指しが外れたので、どれも要求でも禁止でもない。
-- `neovim_glsl.navigation_ui_locus`: picker UI が座る場所(terminal grid の内側 / grid の外の GLSL surface / 別 window)。「外部に出してもいい」は許可であって要求ではないため、内側に留まる設計も却下されない。
 - `neovim_glsl.navigation_customization`: picker の sorter / action / preview / 見た目の設計。御主人様は v0.4 で「カスタムまかせる」と述べており、内容を要求していない。
 - `neovim_glsl.navigation_input_model`: navigation の入力モデル(fuzzy 検索 / 階層ブラウズ / 履歴 / 意味検索)と、その結果として開く object の種類。
+- `neovim_glsl.navigation_surface_addressing`: 面の座標系(pixel でそのまま置くか、cell に揃えるか)。grid を出たことは pixel 配置を可能にするが要求しない。
+- `neovim_glsl.navigation_surface_geometry`: 面の位置・大きさ・段組・行送り・余白・透明度・装飾・animation。
+- `neovim_glsl.navigation_surface_compositing`: 面を grid と同じ vertex 列 / draw call に載せるか、別 pass として描くか。同じ window に重なることだけが要求。
 
 ## この repository 自身が free を踏んでいないことの確認
 
