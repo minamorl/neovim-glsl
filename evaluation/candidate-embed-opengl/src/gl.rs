@@ -5,6 +5,7 @@ use glow::HasContext;
 
 use crate::ext_ui::{self, ExtUi, Overlay};
 use crate::grid::{Cell, Hl};
+use crate::panel::{Panel, PanelStats};
 use crate::screen::Screen;
 use crate::text::{Atlas, ATLAS};
 
@@ -118,6 +119,15 @@ impl Renderer {
     /// Vertices the last [`Renderer::build`] produced.
     pub fn vertex_count(&self) -> usize {
         self.verts.len() / VERTEX_FLOATS
+    }
+
+    /// Append free surfaces over the scene just built.
+    ///
+    /// They join the same vertex stream and the same draw call as the grid, so
+    /// a panel is not a second renderer bolted on — it is the same shader
+    /// asked for quads the cell raster has no way to name.
+    pub fn push_panels(&mut self, panels: &[Panel], atlas: &mut Atlas) -> Vec<PanelStats> {
+        panels.iter().map(|p| p.push(&mut self.verts, atlas)).collect()
     }
 
     /// Upload arbitrary RGBA pixels as a texture usable by `draw`.

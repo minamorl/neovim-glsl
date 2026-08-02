@@ -1,9 +1,9 @@
 # UNDECIDED — 決まっていない事項
 
-`pins/domains/neovim-glsl.spec@0.6` の `quarantine` と `open_question` を、spec の文言のまま
+`pins/domains/neovim-glsl.spec@0.7` の `quarantine` と `open_question` を、spec の文言のまま
 機械転記したもの。**ここにあるものは決まっていない。** 実装で埋めてはならない。
 
-入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.6.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
+入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.7.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
 
 規律:
 
@@ -13,7 +13,7 @@
 - 正本は spec。この転記が spec と食い違ったら spec が勝つ。転記側を直す。
 - この file は `python3 tools/sync_undecided.py <spec-or-mirror>` で再生成する。手で書き足さない。
 
-## quarantine — 隔離 (24 件)
+## quarantine — 隔離 (26 件)
 
 曖昧 (語義が二義的)・未確定 (解空間が未固定)・主観 (検証可能な基準が無い) を分けて隔離してある。
 
@@ -39,10 +39,12 @@
 - `neovim_glsl.root_ui_hardening_definition`: 未確定 — 「root-ui をしっかりした」の完了条件が定義されていない。順序の前提となる状態が観測不能なままである。
 - `neovim_glsl.aishell_naming`: 曖昧 — メモの「aishell」が v0.2 で pin 済みの aish(ai-native-shell)と同一対象を指すのか、別の shell surface を指すのかは字面だけでは一意に定まらない。同一と仮定して新規 pin を作らず、v0.2 の pin を再利用する。
 - `neovim_glsl.protocol_speaking_direction_residue`: 曖昧 — 「protocol を喋る」の面が、UI protocol(ui_attach / redraw)の server 側なのか、API protocol(nvim_* RPC)の server 側なのか、その双方なのかは回答の字面だけでは一意に定まらない。三択の中で core process を持たない案が選ばれた以上、自前 host が Neovim 側の端に座ること自体は確定するが、どの面を実装するかは未定として隔離する。
-- `neovim_glsl.telescope_under_own_host`: 未確定 — v0.4 pin file_navigation.mechanism = telescope は Neovim の Lua runtime と API 上で動く plugin を名指ししている。自前 host が UI protocol の server 面だけを喋る場合、その plugin はそのままでは動かない。「telescope」が (a) あの plugin そのものの動作を要求するのか (b) あの操作体験を持つ picker を要求するのかは、v0.4 の指示文だけでは一意に定まらない。両解釈に共通するのは picker 機構が telescope であること(既に pin 済み)なので、新規 pin を作らず隔離する。
 - `neovim_glsl.embed_artifact_disposition`: 未確定 — own_host を採ったとき、実測済みの embed candidate(9,878 行、Neovim 0.11.5 実機検証済み)を廃棄するのか、UI client 側の資産として温存し host だけ差し替えるのかは述べられていない。pin neovim_asset_not_discarded は Neovim 資産の全面破棄を禁じるが、この repository 内の評価 artifact の去就までは縛らない。
+- `neovim_glsl.external_surface_boundary`: 曖昧 — 「外部に出す」の「外部」が指す境界が一意でない。terminal grid の外(GLSL で描く独自 surface)・editor process の外・独立した OS window・独立した製品としての切り出し、のいずれとも読める。読みによって設計も配布境界も変わるため、どれか一つを選ばず隔離する。
+- `neovim_glsl.glsl_advantage_criterion`: 主観 — 「glsl の利点を活かす」に observable な受け入れ基準(何が描けれ ば活かしたと言えるか、grid 制約からの解放をどう測るか)が無い。v0.3 の vscode_defeat、v0.4 の ide_level_criterion と同型。
+- `neovim_glsl.navigation_object_scope`: 未確定 — navigation の対象が file なのか markdown note なのか両方なのかが未固定。v0.4 で主 object が markdown note へ移り、user_facing.file_awareness = not_required も pin された以上、「ファイルの移動」を note の移動として読む余地が生じている。v0.4 の逐語は file だが、v0.7 で機構名が外れたことで対象側の二義性が露出した。
 
-## open_question — 人間ゲート待ち (26 件)
+## open_question — 人間ゲート待ち (30 件)
 
 決めるべきだが情報がない箇所。
 
@@ -50,13 +52,16 @@
 - `neovim_glsl.graphics_stack_decision`: GLSL をどの graphics API / driver stack / platform で実行するか。単一 backend か複数か、fallback の有無も未確定。
 - `neovim_glsl.performance_acceptance`: 性能をどの workload・観測量・閾値で受け入れるか。指示文に数値は無いため人間ゲートで決める。
 - `neovim_glsl.plugin_config_compat_boundary`: 既存の Neovim 設定・plugin・keymap をどこまで維持するか。
+- `neovim_glsl.establishment_definition`: 「project を立てる」の完了条件は何か。何が存在すれば設立済みと判定するか。
 - `neovim_glsl.post_establishment_roadmap`: 設立の次に何を要求するか。今回の指示文は設立までしか述べていない。
+- `neovim_glsl.downstream_operation_model_link`: この project を第一段とする、より大きな操作モデル構想との接続点をどう定義するか。今回の指示の対象外であり、この spec は後段を pin しない。
 - `neovim_glsl.aish_integration_mechanism_decision`: aish 統合の実現手段はどれを採るか(Lua / Neovim plugin / 直接 process 起動 / aish の既存 typed protocol)。「Luaでもいい」は許可にすぎないので、選定は人間ゲートで行う。
 - `neovim_glsl.aish_integration_depth_decision`: aish の typed object を neovim-glsl 側で第一級 object として保持するか、aish の実行結果を描画するに留めるか。統合の深さは未確定。
 - `neovim_glsl.aish_effect_confirmation_surface`: aish 側が凍結している effect 分類と実行前の明示確認を、neovim-glsl の UI 側でどう表現し、迂回していないことをどう観測するか。
 - `neovim_glsl.aish_integration_completion_definition`: 「統合を開始」の次に、何が存在すれば統合済みと判定するか。完了条件は未指定。
 - `neovim_glsl.aish_visibility_future`: aish の repository を将来公開するのか、恒久的に非公開とするか。「まず」の含意が未確定なので、公開側への変更は人間ゲートを通す。
 - `neovim_glsl.aish_integration_code_ownership_decision`: 統合 code をどの repository が所有するか(neovim-glsl 側 / aish 側 / 第三の repository)。
+- `neovim_glsl.own_repository_visibility_decision`: neovim-glsl 自身の repository を公開するか非公開にするか。今回の指示文は aish についてのみ非公開を述べている。
 - `neovim_glsl.mac_stage_completion_criterion`: Mac first-stage が何をもって完了と判定されるか。observable milestone、acceptance test、人間判断のいずれで区切るか。
 - `neovim_glsl.zeno_evaluation_outcome`: Zeno evaluation の結果を何をもって accept / defer / reject と判定するか。evaluation 後に Zeno を canonical target として採用するか optional path にするか。
 - `neovim_glsl.multi_target_parity`: multi-target portability が全 platform で同一 feature set を要求するか、platform-specific subset を許容するか。parity baseline と divergence acceptance は未定。
@@ -70,8 +75,9 @@
 - `neovim_glsl.neovim_asset_reuse_scope`: Neovim 資産のどこを継承するか。v0.6 で protocol の継承だけが確定した(pin asset_reuse_includes_protocol)。残る未確定は plugin 生態系・Lua runtime・keymap 意味論の実装深度・既存 UI client 実装の去就。
 - `neovim_glsl.protocol_surface_scope`: 自前 host が Neovim protocol のどの面を喋るか。UI protocol(ui_attach / redraw / ext_* option)の server 面だけか、API protocol(nvim_buf_* / nvim_exec_lua 等)の server 面も含むか。既存の UI client 資産が繋がるのは前者、plugin 生態系が繋がるのは後者。
 - `neovim_glsl.protocol_version_baseline`: どの Neovim version の protocol を baseline とし、上流の変更をどう追従するか(固定 pin / 追従 / 自前拡張の許容範囲)。
-- `neovim_glsl.telescope_realization_decision`: telescope を plugin そのものとして動かすか、同じ操作体験を持つ自前 picker として実現するか。quarantine telescope_under_own_host の人間ゲート。
 - `neovim_glsl.embed_candidate_disposition`: 実測済み embed candidate を UI client 資産として温存するか、廃棄するか。温存するなら host 差し替えの seam をどこに置くか。
+- `neovim_glsl.navigation_mechanism_selection`: navigation の機構として実際に何を採るか。telescope を選び直すこともできる(必然性が無いだけで禁止ではない)。
+- `neovim_glsl.navigation_surface_decision`: picker を grid 内の TUI として描くか、GLSL surface として grid の外へ出すか。許可は出たが選択はされていない。quarantine external_surface_boundary の人間ゲート。
 
 ## 未決のまま残した結果
 

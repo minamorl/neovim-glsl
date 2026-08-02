@@ -9,6 +9,7 @@ mod ext_ui;
 mod gl;
 mod grid;
 mod nvim;
+mod panel;
 mod perf;
 mod platform;
 mod root_ui;
@@ -45,6 +46,12 @@ struct Args {
     aish: Option<PathBuf>,
     platform_report: Option<PathBuf>,
     root_ui_evaluation: Option<PathBuf>,
+    /// A JSON file of free surfaces to draw over the grid. Evidence for
+    /// `open_question neovim_glsl.navigation_surface_decision`; absent by
+    /// default, because a host that always draws a panel has decided something.
+    panels: Option<PathBuf>,
+    /// Where to write what the panel pass actually emitted.
+    panel_report: Option<PathBuf>,
     /// Which of the multigrid / popupmenu / cmdline / message surfaces this
     /// host draws instead of letting Neovim paint them into the grid.
     ui_options: nvim::UiOptions,
@@ -82,6 +89,8 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         aish: None,
         platform_report: None,
         root_ui_evaluation: None,
+        panels: None,
+        panel_report: None,
         ui_options: nvim::UiOptions::default(),
         perf: false,
         perf_report: None,
@@ -107,6 +116,11 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             }
             "--root-ui-evaluation" => {
                 a.root_ui_evaluation = argv.get(i + 1).map(PathBuf::from);
+                i += 2
+            }
+            "--panels" => { a.panels = argv.get(i + 1).map(PathBuf::from); i += 2 }
+            "--panel-report" => {
+                a.panel_report = argv.get(i + 1).map(PathBuf::from);
                 i += 2
             }
             // Measurement. Absent flags mean absent measurement, and an
@@ -176,6 +190,10 @@ struct App {
     preedit: String,
     /// Non-text surfaces placed by Lua. Neovim's grid knows nothing about these.
     images: Vec<gl::Image>,
+    /// Free surfaces loaded from `--panels`, drawn over the grid in pixels.
+    panels: Vec<panel::Panel>,
+    /// What the last panel pass emitted, kept for `--panel-report`.
+    panel_stats: Vec<panel::PanelStats>,
 }
 
 impl App {
@@ -202,6 +220,40 @@ impl App {
             mods: ModifiersState::empty(),
             preedit: String::new(),
             images: Vec::new(),
+            panels: Vec::new(),
+            panel_stats: Vec::new(),
+        }
+    }
+
+    /// Read the panel file, if one was asked for. A malformed file is reported
+    /// and then ignored: a broken evidence input must not take the session with
+    /// it, and silently drawing nothing would look like a panel that emitted
+    /// nothing.
+    fn load_panels(&mut self) {
+        let Some(path) = self.args.panels.clone() else { return };
+        match std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str::<Vec<panel::Panel>>(&t).map_err(|e| e.to_string()))
+        {
+            Ok(panels) => self.panels = panels,
+            Err(error) => eprintln!("panel file {} unusable: {error}", path.display()),
+        }
+    }
+
+    /// Write what the panel pass emitted. Counts only; no thresholds, no verdict.
+    fn write_panel_report(&mut self) {
+        let Some(path) = self.args.panel_report.clone() else { return };
+        let report = serde_json::json!({
+            "schema": "neovim-glsl.free-surface-measurement/v1",
+            "panels": self.panels.len(),
+            "stats": self.panel_stats,
+        });
+        match serde_json::to_string_pretty(&report)
+            .map_err(|e| e.to_string())
+            .and_then(|t| std::fs::write(&path, t + "\n").map_err(|e| e.to_string()))
+        {
+            Ok(()) => eprintln!("WROTE {}", path.display()),
+            Err(error) => eprintln!("panel report write failed: {error}"),
         }
     }
 
@@ -421,7 +473,8 @@ impl App {
             );
         }
         let App {
-            gl, renderer, atlas, screen, surface, ctx, win, preedit, images, ext_ui, perf, ..
+            gl, renderer, atlas, screen, surface, ctx, win, preedit, images, ext_ui, perf,
+            panels, panel_stats, ..
         } = self;
         let (Some(gl), Some(r), Some(atlas), Some(screen), Some(surface), Some(ctx), Some(win)) = (
             gl.as_ref(),
@@ -439,6 +492,9 @@ impl App {
         let frame = perf.span();
         let build = perf.span();
         r.build(screen, atlas, preedit, ext_ui, &overlay);
+        if !panels.is_empty() {
+            *panel_stats = r.push_panels(panels, atlas);
+        }
         perf.record_vertex_build(build);
         let vertices = r.vertex_count();
 
@@ -550,6 +606,7 @@ impl ApplicationHandler for App {
         self.screen = Some(screen);
         self.nvim = Some(nv);
         self.graphics_probe = Some(graphics_probe);
+        self.load_panels();
 
         if let Some(path) = self.args.snapshot.clone() {
             self.run_snapshot(&path, win_w, win_h);
@@ -767,6 +824,9 @@ impl App {
                 &self.ext_ui,
                 &overlay,
             );
+            if !self.panels.is_empty() {
+                self.panel_stats = r.push_panels(&self.panels, self.atlas.as_mut().unwrap());
+            }
             self.perf.record_vertex_build(build);
             let vertices = r.vertex_count();
 
@@ -788,6 +848,7 @@ impl App {
             );
             buf
         };
+        self.write_panel_report();
         write_png(path, &buf, w, h);
         eprintln!("WROTE {path} ({w}x{h})");
     }
