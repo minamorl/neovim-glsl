@@ -142,23 +142,28 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 
 | 観測量 | p50 | p99 | max |
 |---|---|---|---|
-| frame 全体 | 0.3137 ms | 0.8683 ms | 1.8738 ms |
-| vertex 構築 | 0.3098 ms | 0.8513 ms | 1.865 ms |
-| redraw batch 適用 | 0.004 ms | 0.0109 ms | 0.0405 ms |
+| frame 全体 | 0.3729 ms | 0.393 ms | 0.4005 ms |
+| vertex 構築 | 0.3645 ms | 0.384 ms | 0.3913 ms |
+| redraw batch 適用 | 0.0077 ms | 0.0133 ms | 0.014 ms |
 
 丸めていないのはわざとである。散文が JSON から 1 桁ずれても気付けるようにしてある。
 
 - frame 全体はこの経路では vertex 構築でほぼ説明が付く。`frame_total_stages` の 2 段のうち
   適用側は 1 桁 µs で、残りが構築である。
-- vertex は 1 frame あたり約 57,000（背景 quad が cell 数だけ必ず出るため）
-- glyph atlas: lookup 2640000 回に対して rasterize は 116 回、hit_ratio 1.0（丸め後）、
-  atlas 使用高さ 35px / 1024px
+- vertex は 1 frame あたり p50 63318（背景 quad が cell 数だけ必ず出るため）
+- glyph atlas: lookup 2640000 回に対して rasterize は 348 回、hit_ratio 0.9999、
+  atlas 使用高さ 85px / 1024px
 - `uploads` は `null`。headless には upload する先の GPU が無いので、「0 回 upload した」
   ではなく「その path を通っていない」と出る。
 - `--perf-frame-budget-ms 16.67` を渡した実行では超過 0 件。
   **この 16.67 は実行時に人間が渡した値であって、この repository が定めた基準ではない。**
   超過が 0 件なので `worst_overrun_ms` は `null` である（0.0 ではない。観測されなかった量に
   数を置かない）。
+
+これらは **multigrid 合成・external UI overlay・bold/italic 合成字形を全部載せた後**の
+tree で測り直した値である。合流前の同じ benchmark は frame 全体 p50 0.3137 ms・
+vertex 構築 p50 0.3098 ms だったので、3 機能を足して p50 で約 0.06 ms 増えた勘定になる。
+**これを速い・遅いとは言わない。**閾値が無いので比較はここまでである。
 
 上の数値は `evidence/perf-headless-bench.json` から引いたものである。散文と artefact が
 食い違ったままにならないよう、表の 3 行と atlas の 3 数は `perf.rs` の
@@ -167,18 +172,19 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 `evidence/perf-live-session.json` — 実際の Neovim + 実 GPU（`GL_RENDERER = Apple M4 Max`,
 `4.1 Metal - 90.5`）。snapshot 経路で計測したので frame 数は 2 と少ない:
 
-- GPU 提出は 1 frame 目が 24.4101 ms、2 frame 目が 0.2283 ms。初回は shader/pipeline と
+- GPU 提出は 1 frame 目が 31.1998 ms、2 frame 目が 0.46 ms。初回は shader/pipeline と
   atlas texture の初期化を含む。
-- redraw batch 適用は p50 0.0593 ms・max 0.0832 ms。**ここに待ち時間は入っていない。**
+- redraw batch 適用は p50 0.0384 ms・max 0.0495 ms。**ここに待ち時間は入っていない。**
   入っていた頃は同じ経路が p50 1.81 ms・max 12.69 ms を出していたが、あれは適用の cost では
   なく Neovim が黙っていた時間だった（span を `wait_ready` の後ろへ移した）。2 桁違う。
-- redraw event を種別ごとに数えている。実測では `hl_group_set` 136 件、`grid_line` 50 件、
-  `option_set` 25 件など 17 種類。どの traffic が frame を重くしたかを後から辿れる。
+- redraw event を種別ごとに数えている。実測では `hl_group_set` 136 件、`hl_attr_define` 58 件、
+  `option_set` 25 件、`grid_line` 24 件など 19 種類。どの traffic が frame を重くしたかを
+  後から辿れる。
 - 提示レートを frame rate と呼ばないようにしてある。
-  `presentations_per_wall_clock_second` は 0.8384 だが、これは「描く能力」ではなく
+  `presentations_per_wall_clock_second` は 1.2821 だが、これは「描く能力」ではなく
   提示回数 ÷ 実時間そのもので、snapshot 経路が画面を落ち着かせるために持つ固定の
   待ち時間がそのまま効いている。間隔から出した
-  `presentation_rate_hz` は 56.6983。どちらも `measurement.presentation_model`
+  `presentation_rate_hz` は 43.2168。どちらも `measurement.presentation_model`
   （ここでは `on_demand_redraw`）と併せて読むこと。on-demand renderer は要求された
   ときにしか描かないので、この 2 つが答えるのは「どれだけ描く必要があったか」であって
   「どれだけ速く描けるか」ではない。

@@ -1,6 +1,6 @@
 {
   "schema": "nvimgl.perf-observation/v2",
-  "trace_id": "01KYCKQJSTFHK8CHDTJV0YN9G1",
+  "trace_id": "01KZ185D04AF8WYWGH5DS07388",
   "evaluation_candidate": true,
   "canonical_performance_criteria": false,
   "performance_acceptance": "unset_awaiting_human_gate",
@@ -36,59 +36,59 @@
   "frame": {
     "frames_recorded": 500,
     "warmup_frames_excluded": 50,
-    "wall_clock_ms": 188.8037,
+    "wall_clock_ms": 197.8018,
     "total_ms": {
       "count": 500,
-      "min": 0.2852,
-      "mean": 0.3412,
-      "p50": 0.3137,
-      "p90": 0.369,
-      "p95": 0.5618,
-      "p99": 0.8683,
-      "max": 1.8738
+      "min": 0.3385,
+      "mean": 0.3726,
+      "p50": 0.3729,
+      "p90": 0.3834,
+      "p95": 0.3868,
+      "p99": 0.393,
+      "max": 0.4005
     },
     "event_apply_ms": {
       "count": 500,
-      "min": 0.0,
-      "mean": 0.0043,
-      "p50": 0.004,
-      "p90": 0.0076,
-      "p95": 0.009,
-      "p99": 0.0109,
-      "max": 0.0405
+      "min": 0.0043,
+      "mean": 0.008,
+      "p50": 0.0077,
+      "p90": 0.0106,
+      "p95": 0.0115,
+      "p99": 0.0133,
+      "max": 0.014
     },
     "vertex_build_ms": {
       "count": 500,
-      "min": 0.2838,
-      "mean": 0.3368,
-      "p50": 0.3098,
-      "p90": 0.3575,
-      "p95": 0.5599,
-      "p99": 0.8513,
-      "max": 1.865
+      "min": 0.3325,
+      "mean": 0.3646,
+      "p50": 0.3645,
+      "p90": 0.3753,
+      "p95": 0.3782,
+      "p99": 0.384,
+      "max": 0.3913
     },
     "gpu_submit_ms": null,
     "present_interval_ms": {
       "count": 499,
-      "min": 0.2941,
-      "mean": 0.3776,
-      "p50": 0.3445,
-      "p90": 0.4357,
-      "p95": 0.6237,
-      "p99": 0.9979,
-      "max": 1.9466
+      "min": 0.3435,
+      "mean": 0.3956,
+      "p50": 0.3958,
+      "p90": 0.4135,
+      "p95": 0.4195,
+      "p99": 0.4298,
+      "max": 0.4371
     },
     "presentation_rate_hz": {
       "count": 499,
-      "min": 513.7207,
-      "mean": 2793.7934,
-      "p50": 2902.7576,
-      "p90": 3155.8185,
-      "p95": 3216.2925,
-      "p99": 3365.5869,
-      "max": 3400.4006
+      "min": 2287.6752,
+      "mean": 2531.4002,
+      "p50": 2526.8478,
+      "p90": 2653.3997,
+      "p95": 2686.6698,
+      "p99": 2808.6653,
+      "max": 2911.5642
     },
-    "presentations_per_wall_clock_second": 2648.2531
+    "presentations_per_wall_clock_second": 2527.783
   },
   "redraw": {
     "batches": 500,
@@ -105,13 +105,13 @@
     },
     "batch_apply_ms": {
       "count": 500,
-      "min": 0.0,
-      "mean": 0.0043,
-      "p50": 0.004,
-      "p90": 0.0076,
-      "p95": 0.009,
-      "p99": 0.0109,
-      "max": 0.0405
+      "min": 0.0043,
+      "mean": 0.008,
+      "p50": 0.0077,
+      "p90": 0.0106,
+      "p95": 0.0115,
+      "p99": 0.0133,
+      "max": 0.014
     },
     "events_by_kind": {
       "flush": 500,
@@ -123,30 +123,30 @@
   "glyph_atlas": {
     "counters_window": "process_lifetime_including_warmup",
     "lookups": 2640000,
-    "hits": 2639883,
-    "misses": 117,
-    "rasterizations": 116,
-    "empty_glyphs": 1,
+    "hits": 2639649,
+    "misses": 351,
+    "rasterizations": 348,
+    "empty_glyphs": 3,
     "rejections_atlas_full": 0,
     "uploads": null,
-    "hit_ratio": 1.0,
-    "cached_entries": 117,
+    "hit_ratio": 0.9999,
+    "cached_entries": 351,
     "atlas_side_px": 1024,
-    "packed_height_px": 35,
-    "packed_height_ratio": 0.0342
+    "packed_height_px": 85,
+    "packed_height_ratio": 0.083
   },
   "vertices": {
     "per_frame": {
       "count": 500,
-      "min": 56394.0,
-      "mean": 57280.692,
-      "p50": 57354.0,
-      "p90": 57396.0,
-      "p95": 57402.0,
-      "p99": 57450.0,
-      "max": 57468.0
+      "min": 62040.0,
+      "mean": 63258.924,
+      "p50": 63318.0,
+      "p90": 63618.0,
+      "p95": 63702.0,
+      "p99": 63816.0,
+      "max": 63972.0
     },
-    "total": 28640346
+    "total": 31629462
   },
   "slow_frames": {
     "criterion": "caller_supplied_frame_budget_ms",
