@@ -82,6 +82,17 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
   - 壊れた／途中までの event（引数不足・型違い・item が array でない等）は、前の状態を
     保ったまま無視する。UI が1フレームで落ちると編集 session ごと道連れになるため。
 
+- **上の4つが同時に成立することを一枚で実測した。** 合流後の tree で、`:vsplit` の分割と
+  `zindex` 120 の float（multigrid 合成）、bold+italic+underline / undercurl / strikethrough
+  （text attributes）、external message 面、日本語 fallback を同一 snapshot に出した。
+  証拠: `evidence/merged-all-features.png`
+  同じ実行の root-ui projection（`--root-ui-evaluation`）も採ってあり、grid 4 枚
+  （global 90x26・window 45x25・window 44x25・float 12x1 @row5,col20 zindex120）が
+  一枚の cell 面へ合成されていることが JSON 側からも読める。
+  証拠: `evidence/merged-root-ui-projection.json`
+  この projection の `editor_basis` は `neovim`、`adoption_decision` は
+  `awaiting_human_gate` のまま。実装は判断を先取りしていない。
+
 ### 性能: 測定はする。合否は決めない
 
 `quarantine neovim_glsl.performance_criteria` と `free neovim_glsl.performance.numeric_targets`
