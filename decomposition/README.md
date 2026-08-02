@@ -37,9 +37,21 @@ python3 -m unittest discover -s decomposition/tests -p 'test_*.py'
 
 ## Honesty note on this host
 
-`cargo`/`rustc` are absent on the observing host, so the Rust Mac-stage
-candidate's *build/run* status is reported `unresolved` — present source and
-evidence files are recorded as verified, but "it builds" is never claimed.
+The build/run claim is only as good as the toolchain the observer can see.
+`build_capability` reports `unresolved` when `cargo`/`rustc` are absent and
+`verifiable` when they are present, so "it builds" is never claimed on a host
+that cannot build it.
+
+On this Mac the Homebrew `rustc` aborts (libLLVM ABI mismatch), so the rustup
+toolchain has to be **first on PATH** before the check reports `verifiable`:
+
+```sh
+export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
+python3 decomposition/check.py   # baseline.build_capability.build_runs == "verifiable"
+```
+
+Without that export the same command reports `unresolved`, which is the honest
+answer for an observer that cannot compile the candidate.
 
 ## Parallel-worktree provenance
 
