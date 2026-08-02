@@ -9,9 +9,9 @@
     "domain_spec": "pins/domains/neovim-glsl.spec",
     "imported_pin_file": "pins/house_style.pin",
     "imported_pin_version": "1.8",
-    "rule": "spec が真実。食い違ったらこの record を直す。pin を結衣の判断で緩めない — 緩和は人間ゲートの回答としてのみ起こり、起きたら superseded_at_v0_5 に理由付きで記録する。",
+    "rule": "spec が真実。食い違ったらこの record を直す。pin を結衣の判断で緩めない — 緩和は人間ゲートの回答としてのみ起こり、起きたら superseded_at_v0_5 / superseded_at_v0_6 に理由付きで記録する。",
     "domain_spec_version_at_founding": "0.1",
-    "domain_spec_version_current": "0.5"
+    "domain_spec_version_current": "0.6"
   },
   "friction": {
     "date": "2026-07-25",
@@ -379,6 +379,105 @@
         "statement": "require neovim_glsl.neovim.retention_mode = editing_experience_preservation",
         "why": "「NeoVim は離れない」を実装継続ではなく編集体験の保持で満たすと確定した。"
       }
+    ],
+    "still_frozen": [
+      "neovim_glsl.emacs_alternative_rejected",
+      "neovim_glsl.project_established",
+      "neovim_glsl.project_subject",
+      "neovim_glsl.establishment_order",
+      "neovim_glsl.target_shading_language"
+    ]
+  },
+  "superseded_at_v0_6": {
+    "gate": "neovim_glsl.basis_selection",
+    "answer": "own_host_protocol",
+    "answered_at": "2026-08-02",
+    "answered_by": "human",
+    "friction": "basis が free になった上で、実際にどの host を採るか (Neovim embed 継続 / 自前 host + Neovim protocol / 完全自前)",
+    "note": "v0.5 で architecture_decision と同時に決めるとされていたため、この単一回答で architecture quarantine と architecture_decision も閉じた。frozen_pins は 2026-07-24 の設立時点の凍結内容であり、履歴としてそのまま残す。",
+    "retired": [
+      {
+        "id": "neovim_glsl.editor_basis",
+        "was": "free neovim_glsl.editor_basis",
+        "now": "pin neovim_glsl.editor_basis_own_host (require neovim_glsl.editor.basis = own_host)"
+      },
+      {
+        "id": "neovim_glsl.architecture",
+        "kind": "quarantine",
+        "was": "未確定 — 解空間が固まっておらず正統な要求が未成立。",
+        "now": "RETIRED@0.6 (解空間が固まった)"
+      },
+      {
+        "id": "neovim_glsl.architecture_decision",
+        "kind": "open_question",
+        "was": "実現手段(embed + external UI protocol / 新規 host / 再実装 / fork)のどれを採るか。",
+        "now": "RESOLVED@0.6 by own_host_protocol"
+      },
+      {
+        "id": "neovim_glsl.basis_selection",
+        "kind": "open_question",
+        "was": "basis が free になった上で、実際にどの host を採るか。",
+        "now": "RESOLVED@0.6 by own_host_protocol"
+      },
+      {
+        "id": "neovim_glsl.basis_free",
+        "kind": "example",
+        "was": "non_neovim_host_proposal => not_rejected_by_basis_pin",
+        "now": "RETIRED@0.6 (editor_basis is pinned to own_host)"
+      }
+    ],
+    "added": [
+      {
+        "id": "neovim_glsl.editor_basis_own_host",
+        "statement": "require neovim_glsl.editor.basis = own_host"
+      },
+      {
+        "id": "neovim_glsl.architecture_choice",
+        "statement": "require neovim_glsl.architecture = own_host_speaking_neovim_protocol"
+      },
+      {
+        "id": "neovim_glsl.host_protocol_dialect",
+        "statement": "require neovim_glsl.host.protocol.dialect = neovim"
+      },
+      {
+        "id": "neovim_glsl.asset_reuse_includes_protocol",
+        "statement": "require neovim_glsl.neovim_assets.reuse_scope includes protocol"
+      },
+      {
+        "id": "neovim_glsl.host_protocol_witness",
+        "kind": "property",
+        "statement": "forall session . host_protocol_dialect(session) == neovim"
+      },
+      {
+        "id": "neovim_glsl.basis_witness",
+        "kind": "property",
+        "statement": "forall stage . editor_basis(stage) == own_host"
+      },
+      {
+        "id": "neovim_glsl.host_choice",
+        "kind": "example",
+        "statement": "editor_host_selection => own_host_speaking_neovim_protocol"
+      },
+      {
+        "id": "neovim_glsl.embed_not_selected",
+        "kind": "example",
+        "statement": "neovim_core_process_as_editor_basis => not_selected"
+      },
+      {
+        "id": "neovim_glsl.full_scratch_not_selected",
+        "kind": "example",
+        "statement": "host_discarding_neovim_protocol => rejected"
+      },
+      {
+        "id": "neovim_glsl.protocol_asset",
+        "kind": "example",
+        "statement": "neovim_protocol_as_reused_asset => accepted"
+      }
+    ],
+    "new_free": [
+      "neovim_glsl.host_protocol_transport",
+      "neovim_glsl.host_editing_core_design",
+      "neovim_glsl.lua_runtime_presence"
     ],
     "still_frozen": [
       "neovim_glsl.emacs_alternative_rejected",

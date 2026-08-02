@@ -1,41 +1,61 @@
 # TRACEABILITY — pin id と成果物の対応
 
-`pins/domains/neovim-glsl.spec@0.5` を `pins/house_style.pin@1.8` まで flatten した pin と、この repository のどこがそれを満たすかの対応表。1 行で辿れることが目的 (`impl.traceable`)。
+`pins/domains/neovim-glsl.spec@0.6` を `pins/house_style.pin@1.8` まで flatten した pin と、この repository のどこがそれを満たすかの対応表。1 行で辿れることが目的 (`impl.traceable`)。
 
-v0.5 の人間ゲート回答 `relax` で退役した pin は、行を消さず `RETIRED@0.5` として残す。設立時に何を約束していたかと、いつ誰が緩めたかの両方が 1 行で辿れる必要があるため。
+v0.5 の人間ゲート回答 `relax` と v0.6 の人間ゲート回答 `own_host_protocol` で退役・解決した行は、行を消さず `RETIRED@0.5` / `RETIRED@0.6` / `RESOLVED@0.6` として残す。設立時に何を約束していたかと、いつ誰が緩めたかの両方が 1 行で辿れる必要があるため。
 
-内訳: domain pin 7 (うち 2 は RETIRED@0.5) + v0.5 で追加 2、property 2 (両方 RETIRED@0.5) + v0.5 で追加 1、example 4 (うち 1 は RETIRED@0.5) + v0.5 で追加 3、house_style から継承した pin 28。
+内訳: domain pin 7 (うち 2 は RETIRED@0.5) + v0.5 で追加 2 + v0.6 で追加 4、property 2 (両方 RETIRED@0.5) + v0.5 で追加 1 + v0.6 で追加 2、example 4 (うち 1 は RETIRED@0.5) + v0.5 で追加 3 (うち 1 は RETIRED@0.6) + v0.6 で追加 4、house_style から継承した pin 28。
 
 表の cell は機械処理しやすいよう ASCII のみ。補足は表の下の注記に置く。
 
-## domain pin (7)
+## domain pin (13)
 
 | pin id                                 | statement                                               | honored at                                                                        |
 | -------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | neovim_glsl.editor_basis               | RETIRED@0.5 (was: require editor.basis = neovim)        | founding/record.json superseded_at_v0_5.retired[0]; spec v0.5 free editor_basis   |
 | neovim_glsl.no_editor_substitution     | RETIRED@0.5 (was: forbid editor.substitution = allowed) | founding/record.json superseded_at_v0_5.retired[1]                                |
-| neovim_glsl.neovim_asset_not_discarded | forbid neovim_glsl.neovim_assets.disposition = discarded| evaluation/ が Neovim を embed して動いていること自体; spec v0.5                  |
-| neovim_glsl.neovim_retention_mode      | require neovim.retention_mode = editing_experience_preservation | evaluation/candidate-embed-opengl (nvim の keymap/編集意味論をそのまま通す) |
+| neovim_glsl.neovim_asset_not_discarded | forbid neovim_glsl.neovim_assets.disposition = discarded| spec v0.6; protocol reuse is pinned; all-asset discard remains forbidden           |
+| neovim_glsl.neovim_retention_mode      | require neovim.retention_mode = editing_experience_preservation | evaluation/candidate-embed-opengl records the measured Neovim editing path |
+| neovim_glsl.editor_basis_own_host      | require neovim_glsl.editor.basis = own_host             | witness pending - no own-host artefact yet; README.md records selected architecture |
+| neovim_glsl.architecture_choice        | require neovim_glsl.architecture = own_host_speaking_neovim_protocol | witness pending - no own-host artefact yet; README.md and founding/record.json superseded_at_v0_6 |
+| neovim_glsl.host_protocol_dialect      | require neovim_glsl.host.protocol.dialect = neovim      | witness pending - no protocol-speaking own host session yet                         |
+| neovim_glsl.asset_reuse_includes_protocol | require neovim_glsl.neovim_assets.reuse_scope includes protocol | README.md; UNDECIDED.md narrowed neovim_asset_reuse_scope                         |
 | neovim_glsl.emacs_alternative_rejected | forbid neovim_glsl.editor.basis = emacs_family          | founding/record.json frozen_pins[2]; README.md (frozen)                           |
 | neovim_glsl.project_established        | require neovim_glsl.project.establishment = required    | this repository as a whole; founding/record.json frozen_pins[3] and establishment |
 | neovim_glsl.project_subject            | require neovim_glsl.project.subject = neovim_to_glsl    | founding/record.json frozen_pins[4] and establishment.subject; README.md (title)  |
 | neovim_glsl.establishment_order        | require neovim_glsl.project.establishment.order = first | founding/record.json frozen_pins[5] and establishment.order; README.md (frozen)   |
 | neovim_glsl.target_shading_language    | require neovim_glsl.target.shading_language = glsl      | founding/record.json frozen_pins[6]; README.md (frozen)                           |
 
-## property と example (2 + 4)
+## property と example (5 + 11)
 
 | id                                  | kind     | statement                                                          | honored at                                                    |
 | ----------------------------------- | -------- | ------------------------------------------------------------------ | ------------------------------------------------------------- |
 | neovim_glsl.editor_basis_witness    | property | RETIRED@0.5 (was: forall stage . editor_basis(stage) == neovim)    | founding/record.json superseded_at_v0_5.retired[2]            |
 | neovim_glsl.no_substitution_witness | property | RETIRED@0.5 (was: forall candidate . editor_substitution == rejected) | founding/record.json superseded_at_v0_5.retired[3]         |
-| neovim_glsl.retention_witness       | property | forall stage . neovim_assets_disposition(stage) != discarded       | evaluation/ が nvim --embed を使い続けていること               |
+| neovim_glsl.retention_witness       | property | forall stage . neovim_assets_disposition(stage) != discarded       | protocol reuse pin; evaluation/ remains measured Neovim evidence |
+| neovim_glsl.host_protocol_witness   | property | forall session . host_protocol_dialect(session) == neovim          | witness pending - no protocol-speaking own host session yet    |
+| neovim_glsl.basis_witness           | property | forall stage . editor_basis(stage) == own_host                     | witness pending - no own-host stage artefact yet               |
 | neovim_glsl.editor_retained         | example  | RETIRED@0.5 (was: editor_basis_choice => neovim)                   | founding/record.json superseded_at_v0_5.retired[4]            |
-| neovim_glsl.basis_free              | example  | non_neovim_host_proposal => not_rejected_by_basis_pin              | spec v0.5 (この repository はまだ別 host を建てていない)       |
-| neovim_glsl.asset_kept              | example  | proposal_discarding_all_neovim_assets => rejected                  | spec v0.5                                                      |
-| neovim_glsl.emacs_still_rejected    | example  | emacs_family_editor_substitution => rejected                       | spec v0.5; emacs_alternative_rejected は退役していない          |
+| neovim_glsl.basis_free              | example  | RETIRED@0.6 (was: non_neovim_host_proposal => not_rejected_by_basis_pin) | founding/record.json superseded_at_v0_6.retired[0]       |
+| neovim_glsl.asset_kept              | example  | proposal_discarding_all_neovim_assets => rejected                  | spec v0.6; asset_reuse_includes_protocol                       |
+| neovim_glsl.emacs_still_rejected    | example  | emacs_family_editor_substitution => rejected                       | spec v0.6; emacs_alternative_rejected は退役していない          |
+| neovim_glsl.host_choice             | example  | editor_host_selection => own_host_speaking_neovim_protocol         | founding/record.json superseded_at_v0_6.added; README.md      |
+| neovim_glsl.embed_not_selected      | example  | neovim_core_process_as_editor_basis => not_selected                | founding/record.json superseded_at_v0_6.added; README.md      |
+| neovim_glsl.full_scratch_not_selected | example | host_discarding_neovim_protocol => rejected                        | founding/record.json superseded_at_v0_6.added; README.md      |
+| neovim_glsl.protocol_asset          | example  | neovim_protocol_as_reused_asset => accepted                        | founding/record.json superseded_at_v0_6.added; README.md      |
 | neovim_glsl.emacs_alternative       | example  | emacs_family_editor_substitution => rejected                       | founding/record.json witnesses[1]; README.md                  |
 | neovim_glsl.founding                | example  | this_instruction_deliverable => established_neovim_to_glsl_project | founding/record.json witnesses[2]; this repository; README.md |
 | neovim_glsl.shading_language        | example  | project_target_shading_language => glsl                            | founding/record.json witnesses[3]; README.md                  |
+
+## retired / resolved v0.6 non-pin entries
+
+| id                                      | kind          | status        | trace                                                                 |
+| --------------------------------------- | ------------- | ------------- | --------------------------------------------------------------------- |
+| neovim_glsl.editor_basis                | free          | RETIRED@0.6   | lifted into neovim_glsl.editor_basis_own_host                         |
+| neovim_glsl.architecture                | quarantine    | RETIRED@0.6   | resolved by gate answer own_host_protocol                             |
+| neovim_glsl.architecture_decision       | open_question | RESOLVED@0.6  | resolved by gate answer own_host_protocol                             |
+| neovim_glsl.basis_selection             | open_question | RESOLVED@0.6  | resolved by gate answer own_host_protocol                             |
+| neovim_glsl.neovim_asset_reuse_scope    | open_question | NARROWED@0.6  | protocol is pinned; remaining scope stays live in UNDECIDED.md        |
 
 ## house_style@1.8 から継承した pin (28)
 
@@ -90,11 +110,11 @@ v0.5 の人間ゲート回答 `relax` で退役した pin は、行を消さず 
 
 | group         | count | treatment                 | recorded at                                                                        |
 | ------------- | ----- | ------------------------- | ---------------------------------------------------------------------------------- |
-| quarantine    | 5     | not implemented; verbatim | UNDECIDED.md section quarantine; founding/record.json not_decided.quarantine       |
-| open_question | 9     | not implemented; verbatim | UNDECIDED.md section open_question; founding/record.json not_decided.open_question |
-| free          | 11    | not locked; verbatim      | DESIGN-SPACE.md; founding/record.json not_locked.free                              |
+| quarantine    | 24    | not implemented; verbatim | UNDECIDED.md section quarantine; spec-mirror/neovim-glsl-0.6.lines                 |
+| open_question | 26    | not implemented; verbatim | UNDECIDED.md section open_question; spec-mirror/neovim-glsl-0.6.lines              |
+| free          | 14    | not locked; verbatim      | DESIGN-SPACE.md plus v0.6 delta in this document and founding/record.json          |
 
-未決を実装しないこと自体が `impl.defer_open` の遵守であり、free を固定しないこと自体が `impl.free_not_locked` の遵守である。この repository に architecture・GLSL 化範囲・性能基準・shader・build 設定が無いのは欠落ではない。
+未決を実装しないこと自体が `impl.defer_open` の遵守であり、free を固定しないこと自体が `impl.free_not_locked` の遵守である。この repository に GLSL 化範囲・性能基準・shader・build 設定が無いのは欠落ではない。architecture は v0.6 で `own_host_speaking_neovim_protocol` に決まったが、protocol surface、transport、editing core、Lua runtime、telescope の実現形、embed candidate の去就はまだ固定しない。
 
 `evaluation/` 配下の性能測定はこの行を変えない。あそこにあるのは観測であって基準ではなく、
 `quarantine neovim_glsl.performance_criteria` と `free neovim_glsl.performance.numeric_targets`
