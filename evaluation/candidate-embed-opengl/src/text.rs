@@ -24,11 +24,15 @@ pub struct Glyph {
     pub bearing_y: f32,
 }
 
+/// Cache key for a rasterised glyph: the character plus the synthetic style
+/// applied to it (fontdue has no bold/italic faces, so we synthesise them).
+pub type StyleKey = (char, bool, bool);
+
 pub struct Atlas {
     pub pixels: Vec<u8>,
     pub dirty: bool,
     fonts: Vec<Font>,
-    cache: HashMap<char, Option<Glyph>>,
+    cache: HashMap<StyleKey, Option<Glyph>>,
     px: f32,
     shelf_x: usize,
     shelf_y: usize,
@@ -92,16 +96,26 @@ impl Atlas {
         (0.5 / ATLAS as f32, 0.5 / ATLAS as f32)
     }
 
+    /// Upright, unweighted glyph. Kept for callers that do not carry a style
+    /// (e.g. the IME preedit pass).
     pub fn glyph(&mut self, ch: char) -> Option<Glyph> {
-        if let Some(g) = self.cache.get(&ch) {
+        self.styled_glyph(ch, false, false)
+    }
+
+    /// Glyph rasterised with synthetic `bold` (horizontal dilation) and/or
+    /// `italic` (shear). Each (char, bold, italic) triple is atlas-cached
+    /// independently, so the same character can appear plain and styled at once.
+    pub fn styled_glyph(&mut self, ch: char, bold: bool, italic: bool) -> Option<Glyph> {
+        let key: StyleKey = (ch, bold, italic);
+        if let Some(g) = self.cache.get(&key) {
             return *g;
         }
-        let g = self.rasterize(ch);
-        self.cache.insert(ch, g);
+        let g = self.rasterize(ch, bold, italic);
+        self.cache.insert(key, g);
         g
     }
 
-    fn rasterize(&mut self, ch: char) -> Option<Glyph> {
+    fn rasterize(&mut self, ch: char, bold: bool, italic: bool) -> Option<Glyph> {
         if ch == ' ' || ch == '\0' {
             return None;
         }
@@ -109,45 +123,101 @@ impl Atlas {
             .fonts
             .iter()
             .find(|f| f.lookup_glyph_index(ch) != 0)?;
-        let (m, bitmap) = font.rasterize(ch, self.px);
+        let (m, base) = font.rasterize(ch, self.px);
         if m.width == 0 || m.height == 0 {
             return None;
         }
-        if m.width >= ATLAS || m.height >= ATLAS {
+
+        // Synthesise the requested face from the upright coverage bitmap. The
+        // cell advance is fixed by the grid, so styling only reshapes ink; it
+        // never changes how many columns the character occupies.
+        let (bitmap, w, h) = synthesize(&base, m.width, m.height, bold, italic);
+        if w == 0 || h == 0 || w >= ATLAS || h >= ATLAS {
             return None;
         }
 
-        if self.shelf_x + m.width >= ATLAS {
+        if self.shelf_x + w >= ATLAS {
             self.shelf_x = 0;
             self.shelf_y += self.shelf_h + 1;
             self.shelf_h = 0;
         }
-        if self.shelf_y + m.height >= ATLAS {
+        if self.shelf_y + h >= ATLAS {
             return None; // Atlas full; v0.1 does not evict.
         }
 
         let (ox, oy) = (self.shelf_x, self.shelf_y);
-        for row in 0..m.height {
+        for row in 0..h {
             let dst = (oy + row) * ATLAS + ox;
-            self.pixels[dst..dst + m.width]
-                .copy_from_slice(&bitmap[row * m.width..(row + 1) * m.width]);
+            self.pixels[dst..dst + w].copy_from_slice(&bitmap[row * w..(row + 1) * w]);
         }
-        self.shelf_x += m.width + 1;
-        self.shelf_h = self.shelf_h.max(m.height);
+        self.shelf_x += w + 1;
+        self.shelf_h = self.shelf_h.max(h);
         self.dirty = true;
 
         let s = ATLAS as f32;
         Some(Glyph {
             u0: ox as f32 / s,
             v0: oy as f32 / s,
-            u1: (ox + m.width) as f32 / s,
-            v1: (oy + m.height) as f32 / s,
-            w: m.width as f32,
-            h: m.height as f32,
+            u1: (ox + w) as f32 / s,
+            v1: (oy + h) as f32 / s,
+            w: w as f32,
+            h: h as f32,
             bearing_x: m.xmin as f32,
-            bearing_y: (m.height as i32 + m.ymin) as f32,
+            bearing_y: (h as i32 + m.ymin) as f32,
         })
     }
+}
+
+/// Faux emboldening slant, in ink-columns per row of height. Chosen to read as
+/// oblique without pushing ink outside a monospace cell for typical faces.
+const ITALIC_SLANT: f32 = 0.22;
+
+/// Synthesise a bold and/or italic coverage bitmap from an upright one.
+///
+/// * bold  — dilate horizontally: `out[x] = max(in[x], in[x-1])`, widening ink
+///           by one column so strokes read heavier.
+/// * italic— shear rows above the baseline to the right by `slant * dist`.
+///
+/// Returns `(pixels, width, height)`. With `bold == italic == false` it returns
+/// the input unchanged. Pure and font-free so it is unit-testable off-GPU.
+pub fn synthesize(base: &[u8], w: usize, h: usize, bold: bool, italic: bool) -> (Vec<u8>, usize, usize) {
+    if !bold && !italic {
+        return (base.to_vec(), w, h);
+    }
+
+    // Bold first: dilate within a one-column-wider canvas.
+    let (mut src, mut sw) = if bold {
+        let nw = w + 1;
+        let mut out = vec![0u8; nw * h];
+        for r in 0..h {
+            for x in 0..nw {
+                let a = if x < w { base[r * w + x] } else { 0 };
+                let b = if x >= 1 && x - 1 < w { base[r * w + (x - 1)] } else { 0 };
+                out[r * nw + x] = a.max(b);
+            }
+        }
+        (out, nw)
+    } else {
+        (base.to_vec(), w)
+    };
+
+    if italic {
+        // Max rightward shift is at the top row (furthest above the baseline).
+        let max_shift = (ITALIC_SLANT * h as f32).round() as usize;
+        let nw = sw + max_shift;
+        let mut out = vec![0u8; nw * h];
+        for r in 0..h {
+            let dist_above = (h - 1 - r) as f32; // 0 at bottom, h-1 at top
+            let shift = (ITALIC_SLANT * dist_above).round() as usize;
+            for x in 0..sw {
+                out[r * nw + (x + shift)] = src[r * sw + x];
+            }
+        }
+        src = out;
+        sw = nw;
+    }
+
+    (src, sw, h)
 }
 
 fn candidate_font_paths() -> Vec<(PathBuf, u32)> {
@@ -187,4 +257,58 @@ fn candidate_font_paths() -> Vec<(PathBuf, u32)> {
     }
 
     paths
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn total_ink(px: &[u8]) -> u32 {
+        px.iter().map(|&v| v as u32).sum()
+    }
+
+    #[test]
+    fn plain_synthesis_is_identity() {
+        let base = vec![0, 255, 0, 128];
+        let (out, w, h) = synthesize(&base, 2, 2, false, false);
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(out, base);
+    }
+
+    #[test]
+    fn bold_widens_by_one_column_and_adds_ink() {
+        // A single lit column should smear right, so coverage grows.
+        let base = vec![255, 0, 0, 255, 0, 0]; // 3 wide, 2 tall, col 0 lit
+        let (out, w, h) = synthesize(&base, 3, 2, true, false);
+        assert_eq!((w, h), (4, 2));
+        assert!(total_ink(&out) > total_ink(&base));
+        // Column 1 becomes lit from the dilation of column 0.
+        assert_eq!(out[1], 255);
+    }
+
+    #[test]
+    fn italic_shears_top_rows_further_than_the_baseline_row() {
+        // 1px lit at x=0 in every row; after shear the top row shifts right more
+        // than the bottom (baseline) row.
+        let h = 4;
+        let w = 1;
+        let base = vec![255u8; w * h];
+        let (out, nw, oh) = synthesize(&base, w, h, false, true);
+        assert_eq!(oh, h);
+        assert!(nw > w);
+        // Bottom row (r = h-1): shift 0 -> lit at x=0.
+        assert_eq!(out[(h - 1) * nw + 0], 255);
+        // Top row (r = 0): shifted right, so x=0 is now empty but some x>0 is lit.
+        assert_eq!(out[0], 0);
+        assert!((0..nw).any(|x| out[x] == 255));
+    }
+
+    #[test]
+    fn bold_italic_compose_without_panicking_and_preserve_height() {
+        let base = vec![200u8; 5 * 6];
+        let (out, w, h) = synthesize(&base, 5, 6, true, true);
+        assert_eq!(h, 6);
+        assert!(w >= 6); // widened by bold (+1) and shear
+        assert_eq!(out.len(), w * h);
+    }
 }
