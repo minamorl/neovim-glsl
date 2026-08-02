@@ -33,6 +33,13 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
   software fallback ではない。証拠: `evidence/glsl-gpu-probe.png`
 - 実際の Neovim 0.11.5 の画面が GLSL 経由で出る。行番号、`~` filler、status line、
   command line、highlight 色が正しく反映される。証拠: `evidence/nvim-grid-japanese.png`
+- **`ext_multigrid` が繋がっている。** Neovim は window ごとに別 grid を渡し、置き場所を
+  `win_pos` / `win_float_pos` / `msg_set_pos` で言ってくる。UI 側はそれを z 順に並べ、
+  各 window が申告した範囲と画面の外へはみ出す分でクリップして、一枚の cell 面へ合成
+  してから描く。`:vsplit` → `:split` の 3 分割と、重なった float 2 枚（`zindex` 50 と 120）を
+  同一画面で実測した。証拠: `evidence/multigrid-splits-and-floats.png`
+  合成の結果は描画の前段で決まるので、renderer は今も一枚の grid しか知らない。
+  `--no-multigrid` を付ければ、Neovim が全部を一枚に描いていた従来の経路へ戻る。
 - 日本語が出る。SF Mono に無い字は Hiragino へ字形単位で fallback する。
 - cursor が反転表示される（block の下の字が背景色で描かれる）。
   証拠: `evidence/nvim-cursor-inversion.png`
@@ -54,7 +61,11 @@ nvim --embed  ──msgpack-RPC──▶  grid 状態  ──▶  GLSL (OpenGL 4
 
 ### まだ出来ていないこと（この候補の限界であって、project の限界ではない）
 
-- `ext_multigrid` 未対応。分割 window は単一 grid として来るものだけ扱う。
+- `win_external_pos`（window を別の OS ウィンドウへ出す要求）は置き場所が無い。窓を
+  一つしか持たない構成なので、誤った位置へ描くより画面から外す方を選んでいる。
+- 浮動ウィンドウの `winblend`（半透明）は cell を不透明のまま重ねている。
+- `win_viewport` / `win_viewport_margins` / `win_extmark` は受け取って捨てている。
+  合成に必要な情報ではないが、scrollbar や sign 表示を作るなら要る。
 - popup menu / cmdline / message の ext 化（`ext_popupmenu` 等）は未接続。
 - 下線・斜体・太字・undercurl は highlight を読んでいるが描いていない。
 - IME の変換候補ウィンドウ自体は macOS が描くもので、GLSL 側では描いていない。

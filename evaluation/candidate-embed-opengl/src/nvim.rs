@@ -116,12 +116,11 @@ impl Nvim {
         self.stdin.flush()
     }
 
-    pub fn ui_attach(&mut self, cols: u32, rows: u32) -> std::io::Result<()> {
-        let opts = Value::Map(vec![
-            (Value::from("ext_linegrid"), Value::from(true)),
-            (Value::from("rgb"), Value::from(true)),
-        ]);
-        self.request("nvim_ui_attach", vec![Value::from(cols), Value::from(rows), opts])
+    pub fn ui_attach(&mut self, cols: u32, rows: u32, multigrid: bool) -> std::io::Result<()> {
+        self.request(
+            "nvim_ui_attach",
+            vec![Value::from(cols), Value::from(rows), attach_options(multigrid)],
+        )
     }
 
     pub fn try_resize(&mut self, cols: u32, rows: u32) -> std::io::Result<()> {
@@ -200,6 +199,20 @@ vim.bo[buffer].modifiable = false
         out.append(&mut rest);
         (out, closed)
     }
+}
+
+/// UI capabilities we claim at attach time. `ext_multigrid` makes nvim hand out
+/// one grid per window plus placement events instead of pre-composing every
+/// window into a single screen-sized grid.
+fn attach_options(multigrid: bool) -> Value {
+    let mut opts = vec![
+        (Value::from("ext_linegrid"), Value::from(true)),
+        (Value::from("rgb"), Value::from(true)),
+    ];
+    if multigrid {
+        opts.push((Value::from("ext_multigrid"), Value::from(true)));
+    }
+    Value::Map(opts)
 }
 
 fn resolve_nvim() -> std::io::Result<PathBuf> {
@@ -317,21 +330,29 @@ impl Drop for Nvim {
     }
 }
 
+fn collect(v: &Value, out: &mut Vec<RedrawEvent>, custom: &mut Vec<Notification>) {
+    let (mut events, mut notes) = split_notification(v);
+    out.append(&mut events);
+    custom.append(&mut notes);
+}
+
 /// A notification is `[2, method, params]`; for `redraw`, params is a list of
 /// `[event_name, args…]` where each `args` is itself one invocation. Anything
 /// else is a message from Lua and is passed through untouched.
-fn collect(v: &Value, out: &mut Vec<RedrawEvent>, custom: &mut Vec<Notification>) {
-    let Some(arr) = v.as_array() else { return };
+pub fn split_notification(v: &Value) -> (Vec<RedrawEvent>, Vec<Notification>) {
+    let mut out = Vec::new();
+    let mut custom = Vec::new();
+    let Some(arr) = v.as_array() else { return (out, custom) };
     if arr.len() != 3 || arr[0].as_u64() != Some(2) {
-        return;
+        return (out, custom);
     }
     if arr[1].as_str() != Some("redraw") {
         if let (Some(name), Some(params)) = (arr[1].as_str(), arr[2].as_array()) {
             custom.push((name.to_string(), params.clone()));
         }
-        return;
+        return (out, custom);
     }
-    let Some(events) = arr[2].as_array() else { return };
+    let Some(events) = arr[2].as_array() else { return (out, custom) };
     for ev in events {
         let Some(parts) = ev.as_array() else { continue };
         let Some(name) = parts.first().and_then(|n| n.as_str()) else { continue };
@@ -341,6 +362,7 @@ fn collect(v: &Value, out: &mut Vec<RedrawEvent>, custom: &mut Vec<Notification>
             }
         }
     }
+    (out, custom)
 }
 
 #[cfg(test)]
@@ -365,6 +387,20 @@ mod tests {
         assert!(candidates.contains(&home.join(".local/bin").join(binary)));
         #[cfg(target_os = "macos")]
         assert!(candidates.contains(&PathBuf::from("/opt/homebrew/bin/nvim")));
+    }
+
+    #[test]
+    fn multigrid_is_requested_only_when_asked_for() {
+        let has = |opts: &Value, key: &str| {
+            opts.as_map()
+                .unwrap()
+                .iter()
+                .any(|(k, v)| k.as_str() == Some(key) && v.as_bool() == Some(true))
+        };
+        let on = attach_options(true);
+        assert!(has(&on, "ext_linegrid") && has(&on, "rgb") && has(&on, "ext_multigrid"));
+        let off = attach_options(false);
+        assert!(has(&off, "ext_linegrid") && has(&off, "rgb") && !has(&off, "ext_multigrid"));
     }
 
     #[test]

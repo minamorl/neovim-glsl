@@ -3,7 +3,8 @@
 
 use glow::HasContext;
 
-use crate::grid::Grid;
+use crate::grid::{Cell, Hl};
+use crate::screen::Screen;
 use crate::text::{Atlas, ATLAS};
 
 pub const VS: &str = r#"#version 330 core
@@ -97,9 +98,11 @@ impl Renderer {
         }
     }
 
-    pub fn build(&mut self, grid: &Grid, atlas: &mut Atlas, preedit: &str) {
+    /// Composited screen -> vertices. The scene builder itself lives
+    /// outside the renderer so it stays testable without a GL context.
+    pub fn build(&mut self, screen: &Screen, atlas: &mut Atlas, preedit: &str) {
         self.verts.clear();
-        build_scene(&mut self.verts, grid, atlas, preedit);
+        build_scene(&mut self.verts, screen, atlas, preedit);
     }
 
     /// Upload arbitrary RGBA pixels as a texture usable by `draw`.
@@ -196,33 +199,60 @@ fn push_quad(
     }
 }
 
+/// What the scene builder needs from whatever it is drawing.
+///
+/// Two things satisfy it: a bare [`Grid`] (one flat grid, which is what the
+/// unit tests drive) and a [`Screen`] (every grid nvim placed, already
+/// composited). Keeping the builder generic means multigrid composition and
+/// styled-text rendering share exactly one implementation.
+pub trait Surface {
+    fn n_rows(&self) -> usize;
+    fn n_cols(&self) -> usize;
+    fn cell_at(&self, row: usize, col: usize) -> Cell;
+    /// `None` when the cursor is not on screen at all.
+    fn cursor_pos(&self) -> Option<(usize, usize)>;
+    fn hl_style(&self, hl_id: u64) -> Hl;
+    fn hl_colors(&self, hl_id: u64) -> (u32, u32);
+    fn hl_decoration_color(&self, hl_id: u64) -> u32;
+}
+
+impl Surface for Screen {
+    fn n_rows(&self) -> usize { self.rows() }
+    fn n_cols(&self) -> usize { self.cols() }
+    fn cell_at(&self, row: usize, col: usize) -> Cell { self.cell(row, col) }
+    fn cursor_pos(&self) -> Option<(usize, usize)> { self.cursor() }
+    fn hl_style(&self, hl_id: u64) -> Hl { self.style(hl_id) }
+    fn hl_colors(&self, hl_id: u64) -> (u32, u32) { self.colors(hl_id) }
+    fn hl_decoration_color(&self, hl_id: u64) -> u32 { self.decoration_color(hl_id) }
+}
+
 /// Build the whole grid scene (backgrounds, glyphs, text decorations and the
 /// IME preedit) into `verts`. Free of any GL handle so it is unit-testable on
 /// the host with only a font-backed [`Atlas`], no GPU context.
-pub fn build_scene(verts: &mut Vec<f32>, grid: &Grid, atlas: &mut Atlas, preedit: &str) {
+pub fn build_scene(verts: &mut Vec<f32>, surface: &impl Surface, atlas: &mut Atlas, preedit: &str) {
     let (cw, ch) = (atlas.cell_w, atlas.cell_h);
     let (wu, wv) = atlas.white_uv();
     let white = (wu, wv, wu, wv);
 
     // Pass 1: every background, including the cursor block, so glyphs drawn
     // afterwards always land on top of their own cell's background.
-    for row in 0..grid.rows {
-        for col in 0..grid.cols {
-            let cell = grid.cell(row, col);
-            let (fg, bg) = grid.colors(cell.hl);
-            let is_cursor = grid.cursor == (row, col);
+    for row in 0..surface.n_rows() {
+        for col in 0..surface.n_cols() {
+            let cell = surface.cell_at(row, col);
+            let (fg, bg) = surface.hl_colors(cell.hl);
+            let is_cursor = surface.cursor_pos() == Some((row, col));
             let paint = if is_cursor { fg } else { bg };
             push_quad(verts, col as f32 * cw, row as f32 * ch, cw, ch, white, rgb(paint, 1.0));
         }
     }
 
     // Pass 2: glyphs, now rasterised with the cell's synthetic bold/italic face.
-    for row in 0..grid.rows {
-        for col in 0..grid.cols {
-            let cell = grid.cell(row, col);
-            let (fg, bg) = grid.colors(cell.hl);
-            let st = grid.style(cell.hl);
-            let is_cursor = grid.cursor == (row, col);
+    for row in 0..surface.n_rows() {
+        for col in 0..surface.n_cols() {
+            let cell = surface.cell_at(row, col);
+            let (fg, bg) = surface.hl_colors(cell.hl);
+            let st = surface.hl_style(cell.hl);
+            let is_cursor = surface.cursor_pos() == Some((row, col));
             let ink = if is_cursor { bg } else { fg };
             let Some(g) = atlas.styled_glyph(cell.ch, st.bold, st.italic) else { continue };
             let x = col as f32 * cw + g.bearing_x;
@@ -234,10 +264,10 @@ pub fn build_scene(verts: &mut Vec<f32>, grid: &Grid, atlas: &mut Atlas, preedit
     // Pass 2.5: underline family and strikethrough. Drawn after glyphs so the
     // decoration reads on top of the ink, in the highlight's `sp` colour (or the
     // foreground when nvim gave no special colour).
-    for row in 0..grid.rows {
-        for col in 0..grid.cols {
-            let cell = grid.cell(row, col);
-            let st = grid.style(cell.hl);
+    for row in 0..surface.n_rows() {
+        for col in 0..surface.n_cols() {
+            let cell = surface.cell_at(row, col);
+            let st = surface.hl_style(cell.hl);
             if !st.any_underline() && !st.strikethrough {
                 continue;
             }
@@ -245,10 +275,10 @@ pub fn build_scene(verts: &mut Vec<f32>, grid: &Grid, atlas: &mut Atlas, preedit
             // otherwise whatever colour the glyph itself was drawn in. The cursor
             // cell inverts that ink, so its decoration inverts with it and stays
             // visible against the block instead of vanishing into it.
-            let color = if grid.cursor == (row, col) {
-                st.special.unwrap_or_else(|| grid.colors(cell.hl).1)
+            let color = if surface.cursor_pos() == Some((row, col)) {
+                st.special.unwrap_or_else(|| surface.hl_colors(cell.hl).1)
             } else {
-                grid.decoration_color(cell.hl)
+                surface.hl_decoration_color(cell.hl)
             };
             let color = rgb(color, 1.0);
             push_cell_decorations(
@@ -262,8 +292,8 @@ pub fn build_scene(verts: &mut Vec<f32>, grid: &Grid, atlas: &mut Atlas, preedit
     // Pass 3: the IME composition. It is not in any Neovim buffer yet, so it
     // is drawn inverted to read as "pending" rather than as text.
     if !preedit.is_empty() {
-        let (row, col) = grid.cursor;
-        let (fg, bg) = grid.colors(grid.cell(row, col).hl);
+        let Some((row, col)) = surface.cursor_pos() else { return };
+        let (fg, bg) = surface.hl_colors(surface.cell_at(row, col).hl);
         let y = row as f32 * ch;
         let advance = |c: char| if (c as u32) < 0x2500 { cw } else { cw * 2.0 };
 
@@ -424,8 +454,33 @@ unsafe fn link(gl: &glow::Context, vs: &str, fs: &str) -> glow::Program {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grid::{Cell, Grid, Hl};
+    use crate::grid::{Cell, Grid, Hl, Styles};
     use crate::text::Atlas;
+
+    /// One flat grid with its own styles and cursor: what the renderer saw
+    /// before ext_multigrid, kept here so the scene-building laws are still
+    /// checked without standing up a whole composited [`Screen`].
+    struct Flat {
+        grid: Grid,
+        styles: Styles,
+        cursor: (usize, usize),
+    }
+
+    impl Flat {
+        fn new(cols: usize, rows: usize) -> Self {
+            Self { grid: Grid::new(cols, rows), styles: Styles::new(), cursor: (0, 0) }
+        }
+    }
+
+    impl Surface for Flat {
+        fn n_rows(&self) -> usize { self.grid.rows }
+        fn n_cols(&self) -> usize { self.grid.cols }
+        fn cell_at(&self, row: usize, col: usize) -> Cell { self.grid.cell(row, col) }
+        fn cursor_pos(&self) -> Option<(usize, usize)> { Some(self.cursor) }
+        fn hl_style(&self, hl_id: u64) -> Hl { self.styles.style(hl_id) }
+        fn hl_colors(&self, hl_id: u64) -> (u32, u32) { self.styles.colors(hl_id) }
+        fn hl_decoration_color(&self, hl_id: u64) -> u32 { self.styles.decoration_color(hl_id) }
+    }
 
     const QUAD_FLOATS: usize = 48; // 6 verts * 8 floats
 
@@ -458,12 +513,12 @@ mod tests {
     /// cursor at `cursor`. Returns the vertex buffer.
     fn scene_with(hl: Hl, cursor: (usize, usize)) -> Vec<f32> {
         let mut atlas = Atlas::new(20.0);
-        let mut grid = Grid::new(2, 1);
-        grid.cursor = cursor;
-        grid.hls.insert(1, hl);
-        grid.cells[0] = Cell { ch: 'x', hl: 1 };
+        let mut flat = Flat::new(2, 1);
+        flat.cursor = cursor;
+        flat.styles.hls.insert(1, hl);
+        flat.grid.cells[0] = Cell { ch: 'x', hl: 1 };
         let mut verts = Vec::new();
-        build_scene(&mut verts, &grid, &mut atlas, "");
+        build_scene(&mut verts, &flat, &mut atlas, "");
         verts
     }
 
@@ -478,13 +533,13 @@ mod tests {
     /// path. Cursor parked off-grid.
     fn run_scene(hl: Hl) -> Vec<f32> {
         let mut atlas = Atlas::new(20.0);
-        let mut grid = Grid::new(2, 1);
-        grid.cursor = (0, 5);
-        grid.hls.insert(1, hl);
-        grid.cells[0] = Cell { ch: 'x', hl: 1 };
-        grid.cells[1] = Cell { ch: 'x', hl: 1 };
+        let mut flat = Flat::new(2, 1);
+        flat.cursor = (0, 5);
+        flat.styles.hls.insert(1, hl);
+        flat.grid.cells[0] = Cell { ch: 'x', hl: 1 };
+        flat.grid.cells[1] = Cell { ch: 'x', hl: 1 };
         let mut verts = Vec::new();
-        build_scene(&mut verts, &grid, &mut atlas, "");
+        build_scene(&mut verts, &flat, &mut atlas, "");
         verts
     }
 

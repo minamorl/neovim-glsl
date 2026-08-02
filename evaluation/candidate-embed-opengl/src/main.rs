@@ -9,6 +9,7 @@ mod grid;
 mod nvim;
 mod platform;
 mod root_ui;
+mod screen;
 mod text;
 
 use std::path::PathBuf;
@@ -41,6 +42,9 @@ struct Args {
     aish: Option<PathBuf>,
     platform_report: Option<PathBuf>,
     root_ui_evaluation: Option<PathBuf>,
+    /// Ask Neovim for one grid per window. Off falls back to the single
+    /// pre-composed grid, which is what this UI consumed before.
+    multigrid: bool,
     nvim_args: Vec<String>,
 }
 
@@ -56,6 +60,7 @@ fn parse_args() -> Args {
         aish: None,
         platform_report: None,
         root_ui_evaluation: None,
+        multigrid: true,
         nvim_args: Vec::new(),
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
@@ -80,6 +85,7 @@ fn parse_args() -> Args {
             // Injects a composition string so the preedit rendering can be checked
             // without a human driving a real IME.
             "--preedit" => { a.preedit = argv.get(i + 1).cloned(); i += 2 }
+            "--no-multigrid" => { a.multigrid = false; i += 1 }
             "--" => { a.nvim_args.extend_from_slice(&argv[i + 1..]); break }
             other => { a.nvim_args.push(other.to_string()); i += 1 }
         }
@@ -96,7 +102,7 @@ struct App {
     gl: Option<glow::Context>,
     renderer: Option<gl::Renderer>,
     atlas: Option<text::Atlas>,
-    grid: Option<grid::Grid>,
+    screen: Option<screen::Screen>,
     nvim: Option<nvim::Nvim>,
     aish: aish::Bridge,
     graphics_probe: Option<platform::GraphicsProbe>,
@@ -121,7 +127,7 @@ impl App {
             gl: None,
             renderer: None,
             atlas: None,
-            grid: None,
+            screen: None,
             nvim: None,
             aish,
             graphics_probe: None,
@@ -201,11 +207,11 @@ impl App {
             return;
         }
         let mut requested = false;
-        if let (Some(path), Some(grid)) =
-            (self.args.root_ui_evaluation.as_deref(), self.grid.as_ref())
+        if let (Some(path), Some(screen)) =
+            (self.args.root_ui_evaluation.as_deref(), self.screen.as_ref())
         {
             requested = true;
-            if let Err(error) = root_ui::write_evaluation(path, grid) {
+            if let Err(error) = root_ui::write_evaluation(path, screen) {
                 eprintln!("root-ui evaluation write failed: {error}");
             } else {
                 eprintln!("WROTE {}", path.display());
@@ -227,12 +233,12 @@ impl App {
 
     fn pump(&mut self) -> bool {
         let closed = {
-            let (Some(nv), Some(g)) = (self.nvim.as_mut(), self.grid.as_mut()) else {
+            let (Some(nv), Some(screen)) = (self.nvim.as_mut(), self.screen.as_mut()) else {
                 return false;
             };
             let (events, closed) = nv.drain_redraw();
             if !events.is_empty() {
-                g.apply(&events);
+                screen.apply(&events);
             }
             closed
         };
@@ -243,10 +249,11 @@ impl App {
 
     fn render(&mut self) {
         // Keep the candidate window under the text cursor.
-        if let (Some(w), Some(atlas), Some(grid)) =
-            (self.win.as_ref(), self.atlas.as_ref(), self.grid.as_ref())
-        {
-            let (row, col) = grid.cursor;
+        if let (Some(w), Some(atlas), Some((row, col))) = (
+            self.win.as_ref(),
+            self.atlas.as_ref(),
+            self.screen.as_ref().and_then(screen::Screen::cursor),
+        ) {
             w.set_ime_cursor_area(
                 winit::dpi::PhysicalPosition::new(
                     col as f64 * atlas.cell_w as f64,
@@ -255,12 +262,12 @@ impl App {
                 winit::dpi::PhysicalSize::new(atlas.cell_w as f64, atlas.cell_h as f64),
             );
         }
-        let App { gl, renderer, atlas, grid, surface, ctx, win, preedit, images, .. } = self;
-        let (Some(gl), Some(r), Some(atlas), Some(grid), Some(surface), Some(ctx), Some(win)) = (
+        let App { gl, renderer, atlas, screen, surface, ctx, win, preedit, images, .. } = self;
+        let (Some(gl), Some(r), Some(atlas), Some(screen), Some(surface), Some(ctx), Some(win)) = (
             gl.as_ref(),
             renderer.as_mut(),
             atlas.as_mut(),
-            grid.as_ref(),
+            screen.as_ref(),
             surface.as_ref(),
             ctx.as_ref(),
             win.as_ref(),
@@ -268,7 +275,7 @@ impl App {
             return;
         };
         let size = win.inner_size();
-        r.build(grid, atlas, preedit);
+        r.build(screen, atlas, preedit);
         r.draw(gl, atlas, size.width as i32, size.height as i32, images);
         let _ = surface.swap_buffers(ctx);
     }
@@ -348,7 +355,8 @@ impl ApplicationHandler for App {
         let host_channel = nv
             .api_channel_id()
             .expect("nvim_get_api_info did not return the embedded RPC channel");
-        nv.ui_attach(self.args.cols as u32, self.args.rows as u32).expect("ui_attach");
+        nv.ui_attach(self.args.cols as u32, self.args.rows as u32, self.args.multigrid)
+            .expect("ui_attach");
         nv.exec_lua_with_args(
             include_str!("../integration/aish.lua"),
             vec![rmpv::Value::from(host_channel)],
@@ -357,7 +365,7 @@ impl ApplicationHandler for App {
         if let Some(code) = self.args.lua.clone() {
             nv.exec_lua(&code).expect("exec_lua");
         }
-        let grid = grid::Grid::new(self.args.cols, self.args.rows);
+        let screen = screen::Screen::new(self.args.cols, self.args.rows);
 
         self.win = Some(window);
         self.ctx = Some(ctx);
@@ -365,7 +373,7 @@ impl ApplicationHandler for App {
         self.gl = Some(glc);
         self.renderer = Some(renderer);
         self.atlas = Some(atlas);
-        self.grid = Some(grid);
+        self.screen = Some(screen);
         self.nvim = Some(nv);
         self.graphics_probe = Some(graphics_probe);
 
@@ -453,9 +461,9 @@ impl ApplicationHandler for App {
             el.exit();
             return;
         }
-        let flushed = self.grid.as_mut().is_some_and(|grid| {
-            let flushed = grid.flushed;
-            grid.flushed = false;
+        let flushed = self.screen.as_mut().is_some_and(|screen| {
+            let flushed = screen.flushed;
+            screen.flushed = false;
             flushed
         });
         if flushed {
@@ -481,8 +489,8 @@ impl App {
                     .as_mut()
                     .unwrap()
                     .wait_redraw(Duration::from_millis(60));
-                if let Some(g) = self.grid.as_mut() {
-                    g.apply(&ev);
+                if let Some(screen) = self.screen.as_mut() {
+                    screen.apply(&ev);
                 }
                 self.handle_notifications();
                 self.handle_aish_results();
@@ -493,8 +501,8 @@ impl App {
         let deadline = Instant::now() + Duration::from_millis(1500);
         while Instant::now() < deadline {
             let (ev, closed) = self.nvim.as_mut().unwrap().wait_redraw(Duration::from_millis(80));
-            if let Some(g) = self.grid.as_mut() {
-                g.apply(&ev);
+            if let Some(screen) = self.screen.as_mut() {
+                screen.apply(&ev);
             }
             self.handle_notifications();
             self.handle_aish_results();
@@ -529,7 +537,7 @@ impl App {
             );
 
             let r = self.renderer.as_mut().unwrap();
-            r.build(self.grid.as_ref().unwrap(), self.atlas.as_mut().unwrap(), &self.preedit);
+            r.build(self.screen.as_ref().unwrap(), self.atlas.as_mut().unwrap(), &self.preedit);
             r.draw(gl, self.atlas.as_mut().unwrap(), w as i32, h as i32, &self.images);
             gl.finish();
 
