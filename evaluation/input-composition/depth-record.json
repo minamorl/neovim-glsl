@@ -1,0 +1,107 @@
+{
+  "schema": "neovim-glsl.input-composition-depth/v1",
+  "records_for": {
+    "domain": "editor-input-composition",
+    "spec_version": "0.1",
+    "pins_satisfied": [
+      "editor_input_composition.current_depth_recorded",
+      "editor_input_composition.current_depth_evidence",
+      "editor_input_composition.gap_record"
+    ]
+  },
+  "observed_at_commit": "f702de1",
+  "observed_subject": "evaluation/candidate-embed-opengl",
+  "method": "source reading of the built candidate; every claim below cites a file and line that exists at the observed commit",
+
+  "current_depth": "loose_composition",
+  "classification_basis": "editor_input_composition.loose_shape = independent_surfaces_over_host_owned_input_path. The macOS system IME owns the input path; the candidate is a consumer of preedit/commit events delivered over it, and owns none of the six deep-integration facets.",
+
+  "input_organ_actually_in_path": {
+    "organ": "macos_system_ime",
+    "reached_via": "winit",
+    "evidence": [
+      "src/main.rs:300 and src/main.rs:387 call window.set_ime_allowed(true)",
+      "src/main.rs:410 matches WindowEvent::Ime(ime)",
+      "winit's Ime enum carries only Enabled, Preedit(text, range), Commit(text), Disabled — no candidate set crosses the process boundary",
+      "src/main.rs:245 comment reads 'Keep the candidate window under the text cursor', i.e. the candidate window is owned by the OS and this process only positions it"
+    ],
+    "better_ime_in_path": false,
+    "root_ui_in_path": false,
+    "root_ui_note": "src/root_ui.rs is a 140-line serializing projection of the grid. It has no runtime participation in input, layout or paint."
+  },
+
+  "six_facets": [
+    {
+      "facet": "candidate_set_and_selection",
+      "state": "absent",
+      "evidence": "No candidate handling exists in the candidate's sources. The transport itself cannot carry it: winit's Ime enum has no candidate variant, so the OS renders its own candidate window and the set never reaches this process."
+    },
+    {
+      "facet": "composition_session_lifecycle",
+      "state": "partial",
+      "evidence": "src/main.rs:412 and src/main.rs:424 receive Ime::Enabled and Ime::Disabled but only eprintln! them. No session object and no state machine exist; the only composition state is the String at src/main.rs:107."
+    },
+    {
+      "facet": "preedit_text",
+      "state": "present_lossy",
+      "evidence": "src/main.rs:413 destructures Ime::Preedit(text, range); src/main.rs:414 prints range into a diagnostic; src/main.rs:415 stores only text. The composition cursor/selection range inside the preedit is therefore observed and discarded. Rendering at src/gl.rs:151-163."
+    },
+    {
+      "facet": "commit",
+      "state": "present",
+      "evidence": "src/main.rs:417-422 clears the preedit and forwards the committed text to Neovim with '<' escaped as '<lt>'."
+    },
+    {
+      "facet": "cancel",
+      "state": "absent",
+      "evidence": "src/main.rs:424-427 handles Ime::Disabled by clearing the preedit. That is 'the IME was turned off', not 'the composition was cancelled'. No distinct cancel path exists, so a cancelled composition and a disabled IME are indistinguishable downstream."
+    },
+    {
+      "facet": "caret_geometry",
+      "state": "partial_outbound_only",
+      "evidence": "src/main.rs:245-257 computes the caret rectangle from grid.cursor (src/grid.rs:37) and the glyph cell size, then hands it to the OS via set_ime_cursor_area. The flow is host -> OS only; no input organ under this project's control receives or shares caret geometry."
+    }
+  ],
+
+  "adapter_boundary": {
+    "text_editing_host_port_present": false,
+    "evidence": "IME handling is written inline in the winit event loop at src/main.rs:410-432. There is no port type, no typed event union, and no seam at which an input organ could be substituted.",
+    "pins_not_yet_met": [
+      "editor_input_composition.adapter_boundary",
+      "editor_input_composition.adapter_contract_typed",
+      "editor_input_composition.adapter_replaceable",
+      "editor_input_composition.adapter_no_bypass"
+    ],
+    "bypass_present": true,
+    "bypass_evidence": "src/main.rs is directly coupled to winit's IME, which is directly coupled to the OS organ. This is the direct component-to-input-organ coupling that adapter_no_bypass forbids.",
+    "additional_finding": "src/main.rs:435 drops all KeyboardInput while the preedit string is non-empty. This is a coarse guard rather than a composition-aware input router, and it fails whenever a composition is open but the preedit happens to be empty."
+  },
+
+  "gap_to_deep_integration": {
+    "summary": "The gap is not a missing conversion engine. better-ime already implements five of the six facets; what is missing is ownership of the input path, a host port to carry it, and a candidate surface to render into.",
+    "better_ime_existing_surface": {
+      "source": "better_ime/stream.py:40 class StreamIME",
+      "candidate_set": "ConversionEvent (better_ime/stream.py:26) with top() at :35",
+      "selection": "rotate() at better_ime/stream.py:118, select(index, learn=True) at :137",
+      "composition_lifecycle": "feed() at :59, feed_text() at :89, reset() at :168",
+      "preedit_text": "text() at :163",
+      "commit": "commit_pending() at :157",
+      "cancel": "reset() at :168",
+      "caret_geometry": "absent, and correctly so — better-ime is a conversion engine and holds no screen geometry",
+      "other_transports": "better_ime/engine.py:37 Engine.convert(alphabet, n_best) for a direct n-best call; better_ime/server.py:126 POST /api/convert for an out-of-process route"
+    },
+    "required_work": [
+      "Take ownership of the input path: stop delegating to the OS organ (src/main.rs:300, :387) and route raw key events to the chosen organ instead.",
+      "Extract IME mechanics out of src/main.rs into a typed, framework-neutral text-editing host port, so the organ becomes replaceable and adapter_no_bypass can hold.",
+      "Render the candidate surface locally. Once the OS organ is out of the path its candidate window disappears, so candidates must be drawn by this project — this is the point at which root-ui and GLSL enter the input path at all.",
+      "Make caret geometry bidirectional: Neovim's cursor plus glyph metrics must reach the candidate surface, not only the OS.",
+      "Stop discarding the preedit range at src/main.rs:415; a composition caret inside the preedit cannot be drawn without it."
+    ],
+    "risk_recorded": "Removing the OS organ from the path removes it for every language, not only for the ones better-ime converts. editor_input_composition.no_sole_organ_assumption forbids treating better-ime as the sole canonical organ without a human gate, so the port must admit more than one organ."
+  },
+
+  "not_concluded": {
+    "adoption_decision": "awaiting_human_gate",
+    "note": "This record classifies and measures only. It does not adopt the three-participant composition, does not select an input organ, and does not claim any facet is deep. editor_input_composition.no_partial_deep_claim forbids naming this deep_integration while any facet is absent, and three are."
+  }
+}
