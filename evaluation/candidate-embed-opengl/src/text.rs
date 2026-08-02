@@ -40,6 +40,10 @@ pub struct Atlas {
     pub cell_w: f32,
     pub cell_h: f32,
     pub ascent: f32,
+    /// Height of a lowercase `x` above the baseline. The renderer centres
+    /// strikethrough on it, so the rule crosses the body of the text rather than
+    /// a guessed fraction of the ascent.
+    pub x_height: f32,
 }
 
 impl Atlas {
@@ -67,6 +71,7 @@ impl Atlas {
         let cell_w = primary.metrics('M', px).advance_width.max(1.0).round();
         let lm = primary.horizontal_line_metrics(px).expect("line metrics");
         let cell_h = (lm.ascent - lm.descent + lm.line_gap).ceil().max(1.0);
+        let x_height = measure_x_height(primary, px, lm.ascent, 'x');
 
         let mut pixels = vec![0u8; ATLAS * ATLAS];
         // Opaque texel for background quads.
@@ -88,6 +93,7 @@ impl Atlas {
             cell_w,
             cell_h,
             ascent: lm.ascent,
+            x_height,
         }
     }
 
@@ -165,6 +171,25 @@ impl Atlas {
             bearing_x: m.xmin as f32,
             bearing_y: (h as i32 + m.ymin) as f32,
         })
+    }
+}
+
+/// Distance from the baseline to the top of `probe` (normally `x`), in pixels.
+///
+/// fontdue exposes no OS/2 x-height, so measure it: the rasterised height of a
+/// lowercase `x` is exactly that distance. `Font::metrics` resolves a character
+/// the font does not cover to glyph 0 (`.notdef`), which many faces draw as a
+/// full-height box — trusting that would report roughly cap height and push
+/// strikethrough well above the body of the text. So ask the cmap first and fall
+/// back to a typical ratio of the ascent when the probe is genuinely absent.
+fn measure_x_height(font: &Font, px: f32, ascent: f32, probe: char) -> f32 {
+    let fallback = ascent * 0.52;
+    if font.lookup_glyph_index(probe) == 0 {
+        return fallback;
+    }
+    match font.metrics(probe, px).height as f32 {
+        h if h > 0.0 => h,
+        _ => fallback,
     }
 }
 
@@ -265,6 +290,30 @@ mod tests {
 
     fn total_ink(px: &[u8]) -> u32 {
         px.iter().map(|&v| v as u32).sum()
+    }
+
+    #[test]
+    fn x_height_falls_back_when_the_probe_is_not_in_the_font() {
+        let atlas = Atlas::new(20.0);
+        let font = &atlas.fonts[0];
+        // A private-use codepoint the font does not cover. `Font::metrics`
+        // resolves it to `.notdef`, which many faces draw as a full-height box —
+        // measuring that would put strikethrough near cap height.
+        let missing = ('\u{E000}'..='\u{E0FF}')
+            .find(|&c| font.lookup_glyph_index(c) == 0)
+            .expect("some private-use codepoint outside the font");
+        assert_eq!(measure_x_height(font, 20.0, 100.0, missing), 100.0f32 * 0.52);
+
+        // Whichever branch the host font takes, the atlas uses this number, and
+        // it stays inside the ascent so strikethrough lands on the body of the
+        // text rather than above it.
+        let measured = measure_x_height(font, 20.0, atlas.ascent, 'x');
+        assert_eq!(measured, atlas.x_height, "the atlas must use the measured probe");
+        assert!(
+            measured > 0.0 && measured < atlas.ascent,
+            "implausible x-height {measured} against ascent {}",
+            atlas.ascent
+        );
     }
 
     #[test]
