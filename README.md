@@ -28,6 +28,7 @@ Neovim が担当する。このプログラムが持つのは画面と入力だ�
 - aish の read-only structured surface（discovery / status / typed object inspection）
 - Mac → Zeno と multi-target 方向を実測する platform report
 - Root-ui 統合仮説を検証する machine-readable grid projection
+- frame・redraw・glyph atlas・vertex 数の実測と、決定的な headless benchmark
 
 文字属性は実機の snapshot で確認した。下線 5 種はいずれも同じ quad で描いており、
 undercurl は正弦を刻んだ波、点線・破線は絶対 x に位相を合わせてあるので、同じ
@@ -51,7 +52,7 @@ highlight が続く間は cell 境界で模様が途切れない。
 - 浮動ウィンドウの半透明（`winblend`）
 - 補完メニュー、コマンドライン、メッセージの外部描画
 - 動画。表示のしくみは画像と同じだが、デコードは実装していない
-- 性能は測っていない
+- 性能の**合否**。測定はできるようになったが（下記）、何を以て合格とするかは決めていない
 
 ## 使い方
 
@@ -88,6 +89,54 @@ Neovim 内の Lua から画像を置く:
 vim.rpcnotify(1, 'nvimgl_image', '/path/to/image.png', 3, 6, 34, 11)
 -- 引数は パス, 行, 列, 幅（文字数）, 高さ（行数）
 ```
+
+### 性能を測る
+
+計測は既定で**切ってある**。`--perf` を渡さない限り時計は一度も読まれない。
+
+決定的な headless benchmark。window も GL context も Neovim も要らないので、どこでも走る:
+
+```bash
+./target/release/nvimgl --perf-bench 500 --perf-warmup 50 --perf-seed 1 \
+    --cols 120 --rows 40 --perf-report /tmp/perf.json
+```
+
+同じ `--perf-seed` は同じ workload を再生する（event 数・vertex 数・glyph 数まで一致する）。
+**再現するのは workload であって時間ではない。** 時間はその場の実測値なので毎回違う。
+
+実際のセッションを測る場合は `--perf` を足す。`--perf-report` だけでも計測は入る:
+
+```bash
+./target/release/nvimgl --perf --perf-report /tmp/live.json -- --clean
+```
+
+JSON は `nvimgl.perf-observation/v2`。frame time と提示レートの分布（p50・p90・p95・p99）、
+redraw batch の event 種別内訳とその適用コスト、glyph atlas の hit / miss / 再ラスタライズ、
+frame ごとの vertex 数、そして実行環境と parameter が入る。
+
+**提示レートを FPS とは呼んでいない。** on-demand renderer は要求されたときにしか描かない
+ので、提示回数 ÷ 実時間は「どれだけ速く描けるか」ではなく「どれだけ描く必要があったか」に
+なる。field 名（`presentations_per_wall_clock_second` / `presentation_rate_hz`）はその
+とおりに読めるようにしてあり、どちらの意味で読むべきかは
+`measurement.presentation_model` が言う。
+
+**`frame.total_ms` が覆う段は経路で違い、report がそれを名指しする**
+（`measurement.frame_total_stages`）。同じ field 名で別の量を出したまま比較させないため。
+redraw 適用の計測に **Neovim を待っていた時間は入らない**。span は待ちが終わってから開く。
+
+**観測しなかった値は `null` で出る。**0 では出さない。GPU を通っていない headless 実行の
+`gpu_submit_ms` が `null` なのはこのためで、「速かった」ではなく「測っていない」を意味する。
+
+閾値は渡したときだけ効く:
+
+```bash
+--perf-frame-budget-ms 16.67
+```
+
+渡さなければ `slow_frames.criterion` は `unset_awaiting_human_gate` のままで、超過数も出ない。
+`open_question neovim_glsl.performance_acceptance` が未決である以上、
+**この実装は合格ラインを自分で決めない。**閾値と無関係に出る数値として、Neovim が
+`flush`（フレーム完成）を送った回数と実際に提示した回数の差 `flushes_not_presented` がある。
 
 ### aish を混ぜる
 

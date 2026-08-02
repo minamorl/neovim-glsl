@@ -1,0 +1,161 @@
+{
+  "schema": "nvimgl.perf-observation/v2",
+  "trace_id": "01KYCKQJSTFHK8CHDTJV0YN9G1",
+  "evaluation_candidate": true,
+  "canonical_performance_criteria": false,
+  "performance_acceptance": "unset_awaiting_human_gate",
+  "measurement": {
+    "mode": "headless_benchmark",
+    "event_source": "synthetic_deterministic_script",
+    "workload_deterministic": true,
+    "gpu_submit_measured": false,
+    "frame_total_stages": [
+      "event_apply",
+      "vertex_build"
+    ],
+    "presentation_model": "unthrottled_loop"
+  },
+  "environment": {
+    "os": "macos",
+    "architecture": "aarch64",
+    "family": "unix",
+    "pointer_width": 64,
+    "available_parallelism": 16,
+    "debug_assertions": false,
+    "graphics": null
+  },
+  "parameters": {
+    "cols": 120,
+    "rows": 40,
+    "font_size_px": 15.0,
+    "frames_requested": 500,
+    "warmup_frames": 50,
+    "seed": 1,
+    "frame_budget_ms": 16.67
+  },
+  "frame": {
+    "frames_recorded": 500,
+    "warmup_frames_excluded": 50,
+    "wall_clock_ms": 188.8037,
+    "total_ms": {
+      "count": 500,
+      "min": 0.2852,
+      "mean": 0.3412,
+      "p50": 0.3137,
+      "p90": 0.369,
+      "p95": 0.5618,
+      "p99": 0.8683,
+      "max": 1.8738
+    },
+    "event_apply_ms": {
+      "count": 500,
+      "min": 0.0,
+      "mean": 0.0043,
+      "p50": 0.004,
+      "p90": 0.0076,
+      "p95": 0.009,
+      "p99": 0.0109,
+      "max": 0.0405
+    },
+    "vertex_build_ms": {
+      "count": 500,
+      "min": 0.2838,
+      "mean": 0.3368,
+      "p50": 0.3098,
+      "p90": 0.3575,
+      "p95": 0.5599,
+      "p99": 0.8513,
+      "max": 1.865
+    },
+    "gpu_submit_ms": null,
+    "present_interval_ms": {
+      "count": 499,
+      "min": 0.2941,
+      "mean": 0.3776,
+      "p50": 0.3445,
+      "p90": 0.4357,
+      "p95": 0.6237,
+      "p99": 0.9979,
+      "max": 1.9466
+    },
+    "presentation_rate_hz": {
+      "count": 499,
+      "min": 513.7207,
+      "mean": 2793.7934,
+      "p50": 2902.7576,
+      "p90": 3155.8185,
+      "p95": 3216.2925,
+      "p99": 3365.5869,
+      "max": 3400.4006
+    },
+    "presentations_per_wall_clock_second": 2648.2531
+  },
+  "redraw": {
+    "batches": 500,
+    "events_total": 11548,
+    "events_per_batch": {
+      "count": 500,
+      "min": 3.0,
+      "mean": 23.096,
+      "p50": 23.0,
+      "p90": 39.0,
+      "p95": 41.0,
+      "p99": 42.0,
+      "max": 43.0
+    },
+    "batch_apply_ms": {
+      "count": 500,
+      "min": 0.0,
+      "mean": 0.0043,
+      "p50": 0.004,
+      "p90": 0.0076,
+      "p95": 0.009,
+      "p99": 0.0109,
+      "max": 0.0405
+    },
+    "events_by_kind": {
+      "flush": 500,
+      "grid_cursor_goto": 500,
+      "grid_line": 10423,
+      "grid_scroll": 125
+    }
+  },
+  "glyph_atlas": {
+    "counters_window": "process_lifetime_including_warmup",
+    "lookups": 2640000,
+    "hits": 2639883,
+    "misses": 117,
+    "rasterizations": 116,
+    "empty_glyphs": 1,
+    "rejections_atlas_full": 0,
+    "uploads": null,
+    "hit_ratio": 1.0,
+    "cached_entries": 117,
+    "atlas_side_px": 1024,
+    "packed_height_px": 35,
+    "packed_height_ratio": 0.0342
+  },
+  "vertices": {
+    "per_frame": {
+      "count": 500,
+      "min": 56394.0,
+      "mean": 57280.692,
+      "p50": 57354.0,
+      "p90": 57396.0,
+      "p95": 57402.0,
+      "p99": 57450.0,
+      "max": 57468.0
+    },
+    "total": 28640346
+  },
+  "slow_frames": {
+    "criterion": "caller_supplied_frame_budget_ms",
+    "frame_budget_ms": 16.67,
+    "frames_over_budget": 0,
+    "frames_over_budget_ratio": 0.0,
+    "worst_overrun_ms": null,
+    "flushes_observed": 500,
+    "presentations_observed": 500,
+    "flushes_not_presented": 0
+  }
+}

@@ -88,6 +88,11 @@
 
 未決を実装しないこと自体が `impl.defer_open` の遵守であり、free を固定しないこと自体が `impl.free_not_locked` の遵守である。この repository に architecture・GLSL 化範囲・性能基準・shader・build 設定が無いのは欠落ではない。
 
+`evaluation/` 配下の性能測定はこの行を変えない。あそこにあるのは観測であって基準ではなく、
+`quarantine neovim_glsl.performance_criteria` と `free neovim_glsl.performance.numeric_targets`
+は依然として空である。閾値は実行時に渡されたときだけ report に入り、既定では
+`unset_awaiting_human_gate` と明記されて出る。
+
 ## 正本
 
 `spec` が真実。この表と spec が食い違ったら spec が勝つ。表と repository を直し、pin を緩めない (`impl.spec_is_truth`)。

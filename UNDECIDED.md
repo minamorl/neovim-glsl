@@ -35,3 +35,9 @@
 ## 未決のまま残した結果
 
 この repository に architecture・GLSL 化範囲・性能基準を表す成果物が **無い** のは欠落ではなく、上の隔離をそのまま守った結果である。埋めた瞬間に設計空間が先に潰れる。
+
+`evaluation/` に性能の**測定**があることは、この隔離と矛盾しない。隔離しているのは
+性能**基準**（何 ms なら合格か）であって、観測ではない。`neovim_glsl.performance_acceptance`
+を人間ゲートで決めるには観測が要る。測定結果は閾値を含まず、閾値は実行時に渡されたときだけ
+report に現れる。渡されなければ `slow_frames.criterion` は `unset_awaiting_human_gate` のままで、
+合否は出ない。

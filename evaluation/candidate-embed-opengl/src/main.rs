@@ -4,10 +4,12 @@
 //! editing engine. This process owns only pixels and input.
 
 mod aish;
+mod bench;
 mod ext_ui;
 mod gl;
 mod grid;
 mod nvim;
+mod perf;
 mod platform;
 mod root_ui;
 mod screen;
@@ -46,10 +48,29 @@ struct Args {
     /// Which of the multigrid / popupmenu / cmdline / message surfaces this
     /// host draws instead of letting Neovim paint them into the grid.
     ui_options: nvim::UiOptions,
+    /// Measure the live session. Off unless asked for: see `perf` module docs.
+    perf: bool,
+    perf_report: Option<PathBuf>,
+    /// Frame count for the headless deterministic benchmark. `Some` selects it.
+    perf_bench: Option<u64>,
+    perf_warmup: u64,
+    perf_seed: u64,
+    perf_frame_budget_ms: Option<f64>,
     nvim_args: Vec<String>,
 }
 
+impl Args {
+    /// Asking for a report is asking for the measurement that fills it.
+    fn perf_enabled(&self) -> bool {
+        self.perf || self.perf_report.is_some()
+    }
+}
+
 fn parse_args() -> Args {
+    parse_args_from(std::env::args().skip(1).collect())
+}
+
+fn parse_args_from(argv: Vec<String>) -> Args {
     let mut a = Args {
         snapshot: None,
         input: None,
@@ -62,9 +83,14 @@ fn parse_args() -> Args {
         platform_report: None,
         root_ui_evaluation: None,
         ui_options: nvim::UiOptions::default(),
+        perf: false,
+        perf_report: None,
+        perf_bench: None,
+        perf_warmup: 0,
+        perf_seed: 1,
+        perf_frame_budget_ms: None,
         nvim_args: Vec::new(),
     };
-    let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -83,6 +109,27 @@ fn parse_args() -> Args {
                 a.root_ui_evaluation = argv.get(i + 1).map(PathBuf::from);
                 i += 2
             }
+            // Measurement. Absent flags mean absent measurement, and an
+            // unparsable value leaves the setting unobserved rather than
+            // silently substituting a number the user never chose.
+            "--perf" => { a.perf = true; i += 1 }
+            "--perf-report" => { a.perf_report = argv.get(i + 1).map(PathBuf::from); i += 2 }
+            "--perf-bench" => {
+                a.perf_bench = argv.get(i + 1).and_then(|v| v.parse().ok());
+                i += 2
+            }
+            "--perf-warmup" => {
+                a.perf_warmup = argv.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(0);
+                i += 2
+            }
+            "--perf-seed" => {
+                a.perf_seed = argv.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(1);
+                i += 2
+            }
+            "--perf-frame-budget-ms" => {
+                a.perf_frame_budget_ms = argv.get(i + 1).and_then(|v| v.parse().ok());
+                i += 2
+            }
             // Injects a composition string so the preedit rendering can be checked
             // without a human driving a real IME.
             "--preedit" => { a.preedit = argv.get(i + 1).cloned(); i += 2 }
@@ -90,9 +137,12 @@ fn parse_args() -> Args {
             // Hands the popupmenu, command line and messages back to Neovim's
             // own grid rendering, for comparing the two side by side.
             "--no-ext-ui" => {
-                a.ui_options.ext_popupmenu = false;
-                a.ui_options.ext_cmdline = false;
-                a.ui_options.ext_messages = false;
+                // Multigrid is a separate promise with its own flag, so it is
+                // carried across rather than switched off along with these.
+                a.ui_options = nvim::UiOptions {
+                    ext_multigrid: a.ui_options.ext_multigrid,
+                    ..nvim::UiOptions::none()
+                };
                 i += 1
             }
             "--" => { a.nvim_args.extend_from_slice(&argv[i + 1..]); break }
@@ -118,6 +168,8 @@ struct App {
     aish: aish::Bridge,
     graphics_probe: Option<platform::GraphicsProbe>,
     evaluation_written: bool,
+    perf: perf::Recorder,
+    perf_report_written: bool,
     mods: ModifiersState,
     /// Uncommitted IME composition. Owned by the IME, not by Neovim: it is drawn
     /// locally and only reaches nvim once the IME commits it.
@@ -129,6 +181,7 @@ struct App {
 impl App {
     fn new(args: Args) -> Self {
         let aish = aish::Bridge::new(args.aish.clone());
+        let perf = perf::Recorder::new(args.perf_enabled());
         Self {
             args,
             started: false,
@@ -144,6 +197,8 @@ impl App {
             aish,
             graphics_probe: None,
             evaluation_written: false,
+            perf,
+            perf_report_written: false,
             mods: ModifiersState::empty(),
             preedit: String::new(),
             images: Vec::new(),
@@ -256,11 +311,18 @@ impl App {
     }
 
     fn pump(&mut self) -> bool {
+        let batch = self.perf.span();
         let (events, closed) = match self.nvim.as_mut() {
             Some(nv) => nv.drain_redraw(),
             None => return false,
         };
         self.apply_redraw(&events);
+        // An empty drain is the idle poll, not a redraw batch. Timing it would
+        // fill the distribution with the cost of finding nothing to do.
+        if !events.is_empty() {
+            self.perf.record_event_apply(batch);
+            self.perf.record_batch(&events);
+        }
         self.handle_notifications();
         self.handle_aish_results();
         closed
@@ -276,10 +338,72 @@ impl App {
         }
     }
 
+    /// What a windowed or snapshot run is measuring.
+    ///
+    /// Both paths report under this: `render` presents to the surface and
+    /// `run_snapshot` presents to an offscreen target, but each times the same
+    /// two stages, and neither includes redraw application — that happens in
+    /// the event pump and is reported on its own.
+    fn live_measurement() -> perf::Measurement {
+        perf::Measurement {
+            mode: "live_session",
+            event_source: "nvim_ext_linegrid",
+            // A live session is driven by a human and by Neovim's own
+            // scheduling; nothing here is replayable.
+            workload_deterministic: false,
+            gpu_submit_measured: true,
+            frame_total_stages: perf::STAGES_LIVE,
+            // Frames are drawn when Neovim flushes, not continuously.
+            presentation_model: perf::PRESENTATION_ON_DEMAND,
+        }
+    }
+
+    fn write_perf_report(&mut self) {
+        if !self.perf.is_enabled() || self.perf_report_written {
+            return;
+        }
+        self.perf_report_written = true;
+        self.perf.set_recording(false);
+
+        // Report the screen actually composited, which a resize may have changed
+        // away from the requested geometry.
+        let (cols, rows) = self
+            .screen
+            .as_ref()
+            .map(|screen| (screen.cols(), screen.rows()))
+            .unwrap_or((self.args.cols, self.args.rows));
+        let atlas = self
+            .atlas
+            .as_ref()
+            .map(perf::AtlasSnapshot::of)
+            .unwrap_or_else(perf::AtlasSnapshot::absent);
+
+        let report = self.perf.report(
+            Self::live_measurement(),
+            perf::Environment::observe(self.graphics_probe.clone()),
+            perf::Parameters {
+                cols,
+                rows,
+                font_size_px: self.args.font_size,
+                frames_requested: None,
+                warmup_frames: 0,
+                seed: None,
+                frame_budget_ms: self.args.perf_frame_budget_ms,
+            },
+            atlas,
+        );
+        if let Err(error) = perf::emit(&report, self.args.perf_report.as_deref()) {
+            eprintln!("perf report write failed: {error}");
+        }
+    }
+
     fn render(&mut self) {
         let overlay = self.overlay();
         // Keep the candidate window under the text cursor — which is the one
-        // inside the command line whenever that surface owns it.
+        // inside the command line whenever that surface owns it. Outside the
+        // frame span: this tells the OS where to put the IME candidate window,
+        // which is not a stage of drawing a frame and is not in
+        // `measurement.frame_total_stages`.
         if let (Some(w), Some(atlas), Some((row, col))) = (
             self.win.as_ref(),
             self.atlas.as_ref(),
@@ -296,8 +420,9 @@ impl App {
                 winit::dpi::PhysicalSize::new(atlas.cell_w as f64, atlas.cell_h as f64),
             );
         }
-        let App { gl, renderer, atlas, screen, surface, ctx, win, preedit, images, ext_ui, .. } =
-            self;
+        let App {
+            gl, renderer, atlas, screen, surface, ctx, win, preedit, images, ext_ui, perf, ..
+        } = self;
         let (Some(gl), Some(r), Some(atlas), Some(screen), Some(surface), Some(ctx), Some(win)) = (
             gl.as_ref(),
             renderer.as_mut(),
@@ -310,9 +435,23 @@ impl App {
             return;
         };
         let size = win.inner_size();
+
+        let frame = perf.span();
+        let build = perf.span();
         r.build(screen, atlas, preedit, ext_ui, &overlay);
+        perf.record_vertex_build(build);
+        let vertices = r.vertex_count();
+
+        // The swap is part of submission: without it the measurement would stop
+        // before the driver is asked to present anything.
+        let submit = perf.span();
         r.draw(gl, atlas, size.width as i32, size.height as i32, images);
         let _ = surface.swap_buffers(ctx);
+        perf.record_gpu_submit(submit);
+        perf.record_frame_total(frame);
+
+        // Bookkeeping only, so it stays outside the frame it books.
+        perf.record_present(vertices);
     }
 }
 
@@ -509,9 +648,67 @@ impl ApplicationHandler for App {
         }
         el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(8)));
     }
+
+    /// Last point at which the session's observations still exist.
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        self.write_perf_report();
+    }
+}
+
+/// Block for redraw traffic, then decode and apply it, timing only the second
+/// half. Returns true when Neovim closed the pipe.
+///
+/// The ordering here is the entire point of the function. `wait_ready` blocks
+/// for up to `timeout` doing nothing; if the span opened before it, every
+/// recorded `event_apply_ms` would be idle wait plus work, and a run that spent
+/// 60 ms waiting for a keystroke would publish a 60 ms "apply" cost. The span
+/// therefore opens after the wait returns, which also makes this measure the
+/// same thing [`App::pump`] does — that path drains without blocking, so it
+/// never had the problem.
+fn wait_and_apply(
+    queue: &mut nvim::RedrawQueue,
+    screen: Option<&mut screen::Screen>,
+    ext_ui: &mut ext_ui::ExtUi,
+    perf: &mut perf::Recorder,
+    timeout: Duration,
+) -> bool {
+    let closed_while_waiting = queue.wait_ready(timeout) == nvim::Ready::Closed;
+
+    let batch = perf.span();
+    let (events, closed) = queue.drain_redraw();
+    if !events.is_empty() {
+        if let Some(screen) = screen {
+            screen.apply(&events);
+        }
+        ext_ui.apply(&events);
+    }
+    if !events.is_empty() {
+        perf.record_event_apply(batch);
+        perf.record_batch(&events);
+    }
+    closed || closed_while_waiting
 }
 
 impl App {
+    /// Wait once for redraw traffic and fold it into both mirrors. Returns true when
+    /// Neovim closed the pipe. Measured like the live loop's [`App::pump`], so a
+    /// snapshot run observes the same batch costs a session does.
+    fn settle(&mut self, timeout: Duration) -> bool {
+        let App {
+            nvim, screen, ext_ui, perf, ..
+        } = self;
+        let closed = wait_and_apply(
+            nvim.as_mut().unwrap().queue_mut(),
+            screen.as_mut(),
+            ext_ui,
+            perf,
+            timeout,
+        );
+        self.handle_notifications();
+        self.handle_aish_results();
+        closed
+    }
+
     /// Render one settled frame offscreen and write it as a PNG, so the result
     /// can be checked without a human watching a window.
     fn run_snapshot(&mut self, path: &str, w: u32, h: u32) {
@@ -519,25 +716,14 @@ impl App {
             // Let the initial screen settle before typing into it.
             let deadline = Instant::now() + Duration::from_millis(800);
             while Instant::now() < deadline {
-                let (ev, _) = self
-                    .nvim
-                    .as_mut()
-                    .unwrap()
-                    .wait_redraw(Duration::from_millis(60));
-                self.apply_redraw(&ev);
-                self.handle_notifications();
-                self.handle_aish_results();
+                self.settle(Duration::from_millis(60));
             }
             let _ = self.nvim.as_mut().unwrap().input(&keys);
         }
 
         let deadline = Instant::now() + Duration::from_millis(1500);
         while Instant::now() < deadline {
-            let (ev, closed) = self.nvim.as_mut().unwrap().wait_redraw(Duration::from_millis(80));
-            self.apply_redraw(&ev);
-            self.handle_notifications();
-            self.handle_aish_results();
-            if closed {
+            if self.settle(Duration::from_millis(80)) {
                 break;
             }
         }
@@ -567,8 +753,13 @@ impl App {
                 "offscreen target incomplete"
             );
 
+            // The frame opens here, not above: creating the offscreen target is
+            // what a snapshot does to have somewhere to draw, and charging it to
+            // the frame would make `total_ms` mean something no live frame pays.
             let overlay = self.overlay();
             let r = self.renderer.as_mut().unwrap();
+            let frame = self.perf.span();
+            let build = self.perf.span();
             r.build(
                 self.screen.as_ref().unwrap(),
                 self.atlas.as_mut().unwrap(),
@@ -576,9 +767,20 @@ impl App {
                 &self.ext_ui,
                 &overlay,
             );
+            self.perf.record_vertex_build(build);
+            let vertices = r.vertex_count();
+
+            // `finish` is what makes this a measurement rather than a queue
+            // depth: it does not return until the GPU is done with the frame.
+            let submit = self.perf.span();
             r.draw(gl, self.atlas.as_mut().unwrap(), w as i32, h as i32, &self.images);
             gl.finish();
+            self.perf.record_gpu_submit(submit);
+            self.perf.record_frame_total(frame);
+            self.perf.record_present(vertices);
 
+            // Reading the pixels back is what a snapshot does, not what a frame
+            // does, so it stays outside every span above.
             let mut buf = vec![0u8; (w * h * 4) as usize];
             gl.read_pixels(
                 0, 0, w as i32, h as i32, glow::RGBA, glow::UNSIGNED_BYTE,
@@ -676,8 +878,308 @@ fn write_png(path: &str, rgba_bottom_up: &[u8], w: u32, h: u32) {
 
 fn main() {
     let args = parse_args();
+
+    // The benchmark is headless by construction: it must not touch a window
+    // system, a GL context or a Neovim process, so it returns before any of
+    // them are created.
+    if let Some(frames) = args.perf_bench {
+        let report = bench::run(&bench::BenchParams {
+            cols: args.cols,
+            rows: args.rows,
+            font_size_px: args.font_size,
+            frames,
+            warmup: args.perf_warmup,
+            seed: args.perf_seed,
+            frame_budget_ms: args.perf_frame_budget_ms,
+        });
+        if let Err(error) = perf::emit(&report, args.perf_report.as_deref()) {
+            eprintln!("perf report write failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let el = EventLoop::new().expect("event loop");
     el.set_control_flow(ControlFlow::Wait);
     let mut app = App::new(args);
     el.run_app(&mut app).expect("run_app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args_of(argv: &[&str]) -> Args {
+        parse_args_from(argv.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn measurement_is_off_unless_it_is_asked_for() {
+        let a = args_of(&[]);
+        assert!(!a.perf);
+        assert!(!a.perf_enabled());
+        assert!(a.perf_report.is_none());
+        assert!(a.perf_bench.is_none());
+        assert!(a.perf_frame_budget_ms.is_none());
+        assert!(!perf::Recorder::new(a.perf_enabled()).is_enabled());
+    }
+
+    #[test]
+    fn existing_flags_keep_working_alongside_the_new_ones() {
+        let a = args_of(&["--cols", "100", "--rows", "40", "--snapshot", "out.png"]);
+        assert_eq!((a.cols, a.rows), (100, 40));
+        assert_eq!(a.snapshot.as_deref(), Some("out.png"));
+        assert!(!a.perf_enabled());
+        assert!(a.nvim_args.is_empty());
+    }
+
+    #[test]
+    fn perf_enables_live_measurement() {
+        let a = args_of(&["--perf"]);
+        assert!(a.perf && a.perf_enabled());
+        assert!(perf::Recorder::new(a.perf_enabled()).is_enabled());
+    }
+
+    #[test]
+    fn asking_for_a_report_implies_the_measurement_that_fills_it() {
+        let a = args_of(&["--perf-report", "/tmp/perf.json"]);
+        assert!(!a.perf, "the bare flag was not passed");
+        assert!(a.perf_enabled(), "a report with no measurement would be empty");
+        assert_eq!(a.perf_report, Some(PathBuf::from("/tmp/perf.json")));
+    }
+
+    #[test]
+    fn bench_mode_takes_its_frame_count_and_stays_off_by_default() {
+        assert!(args_of(&[]).perf_bench.is_none());
+        let a = args_of(&["--perf-bench", "250"]);
+        assert_eq!(a.perf_bench, Some(250));
+    }
+
+    #[test]
+    fn bench_parameters_have_stable_defaults_and_are_overridable() {
+        let a = args_of(&["--perf-bench", "10"]);
+        assert_eq!(a.perf_warmup, 0, "no frames are silently discarded by default");
+        assert_eq!(a.perf_seed, 1);
+
+        let a = args_of(&["--perf-bench", "10", "--perf-warmup", "5", "--perf-seed", "99"]);
+        assert_eq!((a.perf_warmup, a.perf_seed), (5, 99));
+    }
+
+    #[test]
+    fn a_frame_budget_exists_only_when_the_caller_supplies_one() {
+        assert!(args_of(&["--perf-bench", "10"]).perf_frame_budget_ms.is_none());
+        let a = args_of(&["--perf-frame-budget-ms", "16.67"]);
+        assert_eq!(a.perf_frame_budget_ms, Some(16.67));
+    }
+
+    #[test]
+    fn an_unparsable_value_leaves_the_setting_unobserved() {
+        // Better an absent budget than one the user did not choose.
+        assert!(args_of(&["--perf-frame-budget-ms", "soon"]).perf_frame_budget_ms.is_none());
+        assert!(args_of(&["--perf-bench", "lots"]).perf_bench.is_none());
+    }
+
+    #[test]
+    fn a_flag_missing_its_value_leaves_that_setting_unobserved() {
+        // A trailing flag with nothing after it must not panic, and must not
+        // invent a value either: the setting stays exactly as unset as it was.
+        let defaults = args_of(&[]);
+        for argv in [
+            vec!["--perf-report"],
+            vec!["--perf-bench"],
+            vec!["--perf-warmup"],
+            vec!["--perf-seed"],
+            vec!["--perf-frame-budget-ms"],
+        ] {
+            let a = args_of(&argv);
+            assert!(a.perf_report.is_none(), "{argv:?} invented a report path");
+            assert!(a.perf_bench.is_none(), "{argv:?} invented a frame count");
+            assert!(
+                a.perf_frame_budget_ms.is_none(),
+                "{argv:?} invented a budget"
+            );
+            assert_eq!(a.perf_warmup, defaults.perf_warmup, "{argv:?}");
+            assert_eq!(a.perf_seed, defaults.perf_seed, "{argv:?}");
+            // The dangling flag is consumed by us, never handed to Neovim.
+            assert!(a.nvim_args.is_empty(), "{argv:?} leaked a flag to nvim");
+        }
+    }
+
+    // --- The instrumentation boundary --------------------------------------
+
+    fn redraw_message(name: &str) -> rmpv::Value {
+        rmpv::Value::Array(vec![
+            rmpv::Value::from(2u8),
+            rmpv::Value::from("redraw"),
+            rmpv::Value::Array(vec![rmpv::Value::Array(vec![
+                rmpv::Value::from(name),
+                rmpv::Value::Array(vec![
+                    rmpv::Value::from(1u64),
+                    rmpv::Value::from(0u64),
+                    rmpv::Value::from(0u64),
+                ]),
+            ])]),
+        ])
+    }
+
+    fn apply_report(recorder: &perf::Recorder) -> perf::Report {
+        recorder.report(
+            App::live_measurement(),
+            perf::Environment::observe(None),
+            perf::Parameters {
+                cols: 8,
+                rows: 4,
+                font_size_px: 15.0,
+                frames_requested: None,
+                warmup_frames: 0,
+                seed: None,
+                frame_budget_ms: None,
+            },
+            perf::AtlasSnapshot::absent(),
+        )
+    }
+
+    /// The defect this guards: the span used to open *before* the blocking
+    /// wait, so `event_apply_ms` reported however long Neovim stayed quiet.
+    #[test]
+    fn waiting_for_neovim_is_not_charged_to_applying_its_events() {
+        const IDLE: Duration = Duration::from_millis(250);
+
+        // The test holds `tx` for the whole call, so the pipe is genuinely open
+        // throughout: a `closed` verdict below would be a real one, not the
+        // sender thread having finished and hung up.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let late = tx.clone();
+        let sender = std::thread::spawn(move || {
+            std::thread::sleep(IDLE);
+            let _ = late.send(redraw_message("grid_cursor_goto"));
+        });
+
+        let mut queue = nvim::RedrawQueue::new(rx);
+        let mut recorder = perf::Recorder::enabled();
+        let mut g = screen::Screen::new(8, 4);
+
+        let waited = Instant::now();
+        let closed = wait_and_apply(
+            &mut queue,
+            Some(&mut g),
+            &mut ext_ui::ExtUi::new(),
+            &mut recorder,
+            Duration::from_secs(5),
+        );
+        let wall = waited.elapsed();
+        sender.join().unwrap();
+        drop(tx);
+
+        assert!(!closed, "the channel was still open");
+        assert!(
+            wall >= IDLE,
+            "the call did not actually block, so it proves nothing"
+        );
+
+        let apply = apply_report(&recorder)
+            .frame
+            .event_apply_ms
+            .expect("the batch was applied and timed");
+        assert_eq!(apply.count, 1);
+        assert!(
+            apply.max < IDLE.as_secs_f64() * 1000.0 / 10.0,
+            "applying one cursor move was recorded as {} ms after a {} ms idle \
+             wait; the idle time is being measured as work",
+            apply.max,
+            IDLE.as_millis()
+        );
+    }
+
+    #[test]
+    fn a_wait_that_timed_out_records_nothing_at_all() {
+        let (_tx, rx) = std::sync::mpsc::channel::<rmpv::Value>();
+        let mut queue = nvim::RedrawQueue::new(rx);
+        let mut recorder = perf::Recorder::enabled();
+        let mut g = screen::Screen::new(8, 4);
+
+        let closed = wait_and_apply(
+            &mut queue,
+            Some(&mut g),
+            &mut ext_ui::ExtUi::new(),
+            &mut recorder,
+            Duration::from_millis(20),
+        );
+
+        assert!(!closed, "a quiet channel is not a closed one");
+        let report = apply_report(&recorder);
+        assert!(
+            report.frame.event_apply_ms.is_none(),
+            "an idle poll is not a batch and must not enter the distribution"
+        );
+        assert_eq!(report.redraw.batches, 0);
+    }
+
+    #[test]
+    fn the_message_that_ended_the_wait_is_still_applied() {
+        // Buffering the raw message to move the span must not lose it.
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(redraw_message("grid_cursor_goto")).unwrap();
+        tx.send(redraw_message("flush")).unwrap();
+
+        let mut queue = nvim::RedrawQueue::new(rx);
+        let mut recorder = perf::Recorder::enabled();
+        let mut g = screen::Screen::new(8, 4);
+
+        assert!(!wait_and_apply(
+            &mut queue,
+            Some(&mut g),
+            &mut ext_ui::ExtUi::new(),
+            &mut recorder,
+            Duration::from_secs(1),
+        ));
+
+        let report = apply_report(&recorder);
+        assert_eq!(report.redraw.batches, 1, "one drain is one batch");
+        assert_eq!(
+            report.redraw.events_total, 2,
+            "the buffered message and the one behind it both arrived"
+        );
+        assert_eq!(report.redraw.events_by_kind["grid_cursor_goto"], 1);
+        assert_eq!(report.redraw.events_by_kind["flush"], 1);
+    }
+
+    #[test]
+    fn a_closed_pipe_is_reported_however_it_was_noticed() {
+        let (tx, rx) = std::sync::mpsc::channel::<rmpv::Value>();
+        drop(tx);
+        let mut queue = nvim::RedrawQueue::new(rx);
+        let mut recorder = perf::Recorder::disabled();
+
+        assert!(wait_and_apply(
+            &mut queue,
+            None,
+            &mut ext_ui::ExtUi::new(),
+            &mut recorder,
+            Duration::from_millis(50),
+        ));
+    }
+
+    #[test]
+    fn the_live_report_declares_the_stages_its_frame_total_covers() {
+        let m = App::live_measurement();
+        assert_eq!(m.frame_total_stages, perf::STAGES_LIVE);
+        assert_eq!(m.presentation_model, perf::PRESENTATION_ON_DEMAND);
+        // Redraw application happens in the event pump, in a different call
+        // from the one the frame span wraps. Claiming it here would make a live
+        // `total_ms` look like a headless one and mean something else.
+        assert!(!m.frame_total_stages.contains(&"event_apply"));
+        assert!(m.gpu_submit_measured);
+        assert!(m.frame_total_stages.contains(&"gpu_submit"));
+    }
+
+    #[test]
+    fn perf_flags_are_not_forwarded_to_neovim() {
+        let a = args_of(&[
+            "--perf", "--perf-bench", "8", "--perf-seed", "3",
+            "--perf-frame-budget-ms", "16.6", "--", "-u", "NONE",
+        ]);
+        assert_eq!(a.nvim_args, vec!["-u".to_string(), "NONE".to_string()]);
+        assert_eq!(a.perf_bench, Some(8));
+    }
 }

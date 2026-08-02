@@ -44,6 +44,9 @@ void main() {
 }
 "#;
 
+/// Floats per vertex in the interleaved stream: pos.xy, uv.xy, colour.rgba.
+pub const VERTEX_FLOATS: usize = 8;
+
 pub struct Renderer {
     program: glow::Program,
     vao: glow::VertexArray,
@@ -109,8 +112,12 @@ impl Renderer {
         ext: &ExtUi,
         overlay: &Overlay,
     ) {
-        self.verts.clear();
         build_scene(&mut self.verts, screen, atlas, preedit, ext, overlay);
+    }
+
+    /// Vertices the last [`Renderer::build`] produced.
+    pub fn vertex_count(&self) -> usize {
+        self.verts.len() / VERTEX_FLOATS
     }
 
     /// Upload arbitrary RGBA pixels as a texture usable by `draw`.
@@ -151,6 +158,7 @@ impl Renderer {
                     glow::RED, glow::UNSIGNED_BYTE, Some(&atlas.pixels),
                 );
                 atlas.dirty = false;
+                atlas.stats.uploads += 1;
             }
 
             gl.use_program(Some(self.program));
@@ -240,9 +248,12 @@ impl Surface for Screen {
     fn default_bg(&self) -> u32 { self.default_colors().1 }
 }
 
-/// Build the whole grid scene (backgrounds, glyphs, text decorations and the
-/// IME preedit) into `verts`. Free of any GL handle so it is unit-testable on
-/// the host with only a font-backed [`Atlas`], no GPU context.
+/// Build the whole scene (backgrounds, glyphs, text decorations, the external
+/// UI overlays and the IME preedit) into `verts`.
+///
+/// This is the whole CPU side of a frame and it touches no GL object, so both
+/// the unit tests and the headless benchmark time exactly the code the window
+/// runs rather than a re-implementation of it.
 pub fn build_scene(
     verts: &mut Vec<f32>,
     surface: &impl Surface,
@@ -251,6 +262,7 @@ pub fn build_scene(
     ext: &ExtUi,
     overlay: &Overlay,
 ) {
+    verts.clear();
     let (cw, ch) = (atlas.cell_w, atlas.cell_h);
     let (wu, wv) = atlas.white_uv();
     let white = (wu, wv, wu, wv);
