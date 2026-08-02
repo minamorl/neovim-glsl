@@ -4,9 +4,10 @@
 #
 # This file is not the source of truth. The authoritative ledger is the
 # external spec-system file pins/domains/neovim-glsl.spec. This mirror contains
-# only the live quarantine/open_question lines needed to regenerate
-# UNDECIDED.md in this worktree, where the external spec file is unavailable.
-# If this transcription disagrees with spec-system, spec-system wins.
+# only the live quarantine / open_question / free lines needed to regenerate
+# UNDECIDED.md and DESIGN-SPACE.md in this worktree, where the external spec
+# file is unavailable. If this transcription disagrees with spec-system,
+# spec-system wins.
 
 quarantine neovim_glsl.glsl_scope: 曖昧 — 「NeoVim を GLSL にする」の GLSL 化対象が、表示・UI 描画層だけなのか、Neovim の編集エンジン(buffer・編集意味論)自体まで含むのかは、指示文だけでは解釈が 2 通り以上あり一意に決まらない。
 quarantine neovim_glsl.full_replacement_wish: 曖昧 — 先行発話「neovimをGLSLでフル置換したい」の「フル置換」が何の全体を指すかが一意でなく、かつ「したい」は願望である。今回の指示文はこれを要求として再確定していないため、置換範囲を pin 化しない。
@@ -24,6 +25,34 @@ quarantine neovim_glsl.root_ui_integration_form: 未確定 — Root-ui integrati
 quarantine neovim_glsl.root_ui_visual_editor_boundary: 未確定 — Root-ui が visual primitive/shader を所有し neovim-glsl が editor state/semantics を所有するか、editor state も Root-ui へ渡すかが未定。
 quarantine neovim_glsl.zeno_evaluation_scope: 未確定 — Zeno evaluation の具体 scope(launch・benchmark・compatibility・performance・user acceptance)は未定。evaluation が完了しても Zeno adoption / dependency / successful launch を pin するとは限らない。
 quarantine neovim_glsl.zeno_adoption: 未確定 — Zeno evaluation 後に Zeno を actual platform target として採用するか、observation のみに留めるかが未定。evaluation は pin 済みだが adoption 決定は人間ゲート待ち。
+free neovim_glsl.integration_strategy: Neovim の embed / external UI protocol 接続 / 再実装 / fork 等の実現手段。指示文は一つも選択していない。
+free neovim_glsl.host_implementation_language: host および周辺実装の言語・runtime・build system(Rust 等を含む)。特定言語を必須条件にしない。
+free neovim_glsl.graphics_api: GLSL を実行する graphics API・driver stack。Vulkan / MoltenVK / OpenGL / WebGL 等は候補にすぎず、必須依存として固定しない。
+free neovim_glsl.shader_pipeline: shader stage 構成、GLSL の version / 方言、中間表現、lowering 経路。
+free neovim_glsl.platform_host: OS・windowing・display server・compositor・既存 terminal との関係。
+free neovim_glsl.text_rendering: font raster・glyph atlas・shaping・色管理・カーソル表現。
+free neovim_glsl.project_form: 「立てる」の具体形式(repository の位置・名前、package manager、初期 scaffold、license)。
+free neovim_glsl.plugin_config_compat: 既存の Neovim 設定・plugin・keymap の互換範囲。指示文は互換要件を述べていない。
+free neovim_glsl.performance.numeric_targets: frame rate・入力遅延・memory・起動時間等の数値目標。指示文に存在しないので閾値を発明しない。
+free neovim_glsl.post_establishment_scope: 設立より先の工程・期日・成果物粒度・完成条件。今回の指示文は設立までしか述べていない。
+free neovim_glsl.downstream_operation_model: この project を第一段とするより大きな操作モデル構想は今回の指示の対象外であり、この spec は規定しない。
+free neovim_glsl.aish_integration_mechanism_choice: 統合の実現手段(Lua / Neovim plugin / 直接 process 起動 / aish 側の既存 typed protocol / その他)。「Luaでもいいけど」は許可であって要求ではないので、Lua を必須にも禁止にもしない。
+free neovim_glsl.aish_integration_transport: 統合の transport(stdio / socket / IPC / RPC 等)、serialization、session 寿命、process の起動・終了の所有関係。指示文は一つも選択していない。
+free neovim_glsl.aish_integration_surface: 統合で最初に露出する aish の機能範囲、command 表面、UI 表現、結果の描画形式。
+free neovim_glsl.aish_version_coupling: 依存する aish の version、互換範囲、release 連動、build 時依存か実行時依存か。
+free neovim_glsl.aish_integration_code_ownership: 統合 code の配置(どちらの repository が持つか)と build 構成。指示文は述べていない。
+free neovim_glsl.own_repository_visibility: neovim-glsl 自身の repository の公開状態。「非公開リポジトリで」は aish の配布境界についての要求であり、neovim-glsl 側の公開状態を指示していないので、そこへ拡張しない。
+free neovim_glsl.post_commencement_integration_scope: 「統合を開始」より先の工程・期日・完了条件・成果物粒度。今回の指示文は開始までしか述べていない。
+free neovim_glsl.mac_stage_definition: Mac first-stage の completion definition、observable milestone、acceptance criterion。first-stage が pin 済みでも完了条件は未指定。
+free neovim_glsl.zeno_evaluation_method: Zeno evaluation の具体 method、observation scope、pass/fail criterion、evaluation 後の adoption 判断基準。
+free neovim_glsl.multi_target_catalog: multi-target portability direction の exhaustive target set、parity requirement、各 platform の observable acceptance criterion。
+free neovim_glsl.root_ui_integration_mechanism: Root-ui integration の transport、event contract、state ownership、rendering boundary、text-editing host port connection。
+free neovim_glsl.root_ui_integration_form_choice: Root-ui integration を embedded / standalone / layered / compositor のどれで実現するか。
+free neovim_glsl.vscode_defeat_definition: VS Code defeat を何をもって判定するか。defeat を target にするか、compatibility/migration を優先するか。
+free neovim_glsl.strength_usability_metric: 強さ・使い勝手の定義、測定 method、threshold、comparison baseline。subjective quality を pin しない。
+free neovim_glsl.zeno_launch_requirement: Zeno evaluation が successful launch を要求するか、起動試行の observation で足りるか。
+free neovim_glsl.zeno_dependency: Zeno evaluation 後に Zeno dependency を canonical target として採用するか、optional path に留めるか。
+free neovim_glsl.native_app_packaging: Mac first-stage が native app packaging (.app bundle / DMG / installer)を要求するか、CLI / shell から起動可能で足りるか。
 open_question neovim_glsl.glsl_scope_decision: GLSL 化の対象はどこまでか。表示・UI 描画層までか、編集エンジンの意味論まで含むか。
 open_question neovim_glsl.graphics_stack_decision: GLSL をどの graphics API / driver stack / platform で実行するか。単一 backend か複数か、fallback の有無も未確定。
 open_question neovim_glsl.performance_acceptance: 性能をどの workload・観測量・閾値で受け入れるか。指示文に数値は無いため人間ゲートで決める。
@@ -49,18 +78,32 @@ quarantine neovim_glsl.wysiwyg_fidelity: 未確定 — 「今の実装と似せ�
 quarantine neovim_glsl.ide_level_criterion: 主観 — 「IDE レベル」に observable な受け入れ基準(機能集合・比較対象・閾値)が無い。v0.3 の vscode_defeat / strong_usable と同型。
 quarantine neovim_glsl.root_ui_hardening_definition: 未確定 — 「root-ui をしっかりした」の完了条件が定義されていない。順序の前提となる状態が観測不能なままである。
 quarantine neovim_glsl.aishell_naming: 曖昧 — メモの「aishell」が v0.2 で pin 済みの aish(ai-native-shell)と同一対象を指すのか、別の shell surface を指すのかは字面だけでは一意に定まらない。同一と仮定して新規 pin を作らず、v0.2 の pin を再利用する。
+free neovim_glsl.note_schema: markdown note の schema、frontmatter、tag、link、履歴粒度、embedding の扱い。
+free neovim_glsl.db_backend: DB の実体(Postgres / SQLite / その他)、同期プロトコル、競合解決、offline 挙動。
+free neovim_glsl.mobile_delivery: スマホ版の配布形態(PWA / native / その他)と署名・配布境界。
+free neovim_glsl.wysiwyg_engine: WYSIWYG モードの実装機構(既存実装の移植 / 新規 / root-ui component 構成)。
+free neovim_glsl.delegated_editing_protocol: 編集委譲の transport、承認 UI、差分提示、取り消し、衝突時の扱い。
+free neovim_glsl.lab_integration_surface: lab.minamorl.com と繋ぐ範囲(artifact 参照 / 双方向編集 / 公開範囲)。
 open_question neovim_glsl.note_change_extent_decision: yui notes をどこまで変えるか。schema・API・同期・UI のどれを触るか。
 open_question neovim_glsl.ide_level_acceptance: 「IDE レベル」を何が出来れば達成と判定するか(LSP / DAP / 補完 / 検索 / refactor / task runner のどれを含むか)。
 open_question neovim_glsl.root_ui_hardening_done: 「root-ui をしっかりした」の完了条件は何か。何が観測できれば surface 置換に進んでよいか。
 open_question neovim_glsl.surface_priority: 実装順序として desktop(neovim-glsl 本体)・web・mobile のどれを先に置くか。メモは三者を並べているが順序を述べていない。
+free neovim_glsl.host_implementation_language: 別 host を建てる場合の実装言語・ランタイム。
 open_question neovim_glsl.neovim_asset_reuse_scope: Neovim 資産のどこを継承するか。v0.6 で protocol の継承だけが確定した(pin asset_reuse_includes_protocol)。残る未確定は plugin 生態系・Lua runtime・keymap 意味論の実装深度・既存 UI client 実装の去就。
 quarantine neovim_glsl.protocol_speaking_direction_residue: 曖昧 — 「protocol を喋る」の面が、UI protocol(ui_attach / redraw)の server 側なのか、API protocol(nvim_* RPC)の server 側なのか、その双方なのかは回答の字面だけでは一意に定まらない。三択の中で core process を持たない案が選ばれた以上、自前 host が Neovim 側の端に座ること自体は確定するが、どの面を実装するかは未定として隔離する。
 quarantine neovim_glsl.embed_artifact_disposition: 未確定 — own_host を採ったとき、実測済みの embed candidate(9,878 行、Neovim 0.11.5 実機検証済み)を廃棄するのか、UI client 側の資産として温存し host だけ差し替えるのかは述べられていない。pin neovim_asset_not_discarded は Neovim 資産の全面破棄を禁じるが、この repository 内の評価 artifact の去就までは縛らない。
+free neovim_glsl.host_protocol_transport: 自前 host が protocol を運ぶ transport(stdio msgpack-rpc / socket / in-process 呼び出し)。
+free neovim_glsl.host_editing_core_design: 自前 host 内部の編集 core 設計(buffer 表現、undo tree、text object 実装)。protocol の外側なので observable な要求が無い。
+free neovim_glsl.lua_runtime_presence: 自前 host が Lua runtime を内蔵するか否か。v0.7 で telescope の必然性が外れたため、Lua runtime を要求する主要な圧力も消えた。ただし「要らない」も述べられていないので free のまま。
 open_question neovim_glsl.protocol_surface_scope: 自前 host が Neovim protocol のどの面を喋るか。UI protocol(ui_attach / redraw / ext_* option)の server 面だけか、API protocol(nvim_buf_* / nvim_exec_lua 等)の server 面も含むか。既存の UI client 資産が繋がるのは前者、plugin 生態系が繋がるのは後者。
 open_question neovim_glsl.protocol_version_baseline: どの Neovim version の protocol を baseline とし、上流の変更をどう追従するか(固定 pin / 追従 / 自前拡張の許容範囲)。
 open_question neovim_glsl.embed_candidate_disposition: 実測済み embed candidate を UI client 資産として温存するか、廃棄するか。温存するなら host 差し替えの seam をどこに置くか。
 quarantine neovim_glsl.external_surface_boundary: 曖昧 — 「外部に出す」の「外部」が指す境界が一意でない。terminal grid の外(GLSL で描く独自 surface)・editor process の外・独立した OS window・独立した製品としての切り出し、のいずれとも読める。読みによって設計も配布境界も変わるため、どれか一つを選ばず隔離する。
 quarantine neovim_glsl.glsl_advantage_criterion: 主観 — 「glsl の利点を活かす」に observable な受け入れ基準(何が描けれ ば活かしたと言えるか、grid 制約からの解放をどう測るか)が無い。v0.3 の vscode_defeat、v0.4 の ide_level_criterion と同型。
 quarantine neovim_glsl.navigation_object_scope: 未確定 — navigation の対象が file なのか markdown note なのか両方なのかが未固定。v0.4 で主 object が markdown note へ移り、user_facing.file_awareness = not_required も pin された以上、「ファイルの移動」を note の移動として読む余地が生じている。v0.4 の逐語は file だが、v0.7 で機構名が外れたことで対象側の二義性が露出した。
+free neovim_glsl.navigation_mechanism_choice: navigation を実現する機構(telescope 継続 / Neovim plugin 一般 / 自前 picker / 外部 surface)。v0.4 の名指しが外れたので、どれも要求でも禁止でもない。
+free neovim_glsl.navigation_ui_locus: picker UI が座る場所(terminal grid の内側 / grid の外の GLSL surface / 別 window)。「外部に出してもいい」は許可であって要求ではないため、内側に留まる設計も却下されない。
+free neovim_glsl.navigation_customization: picker の sorter / action / preview / 見た目の設計。御主人様は v0.4 で「カスタムまかせる」と述べており、内容を要求していない。
+free neovim_glsl.navigation_input_model: navigation の入力モデル(fuzzy 検索 / 階層ブラウズ / 履歴 / 意味検索)と、その結果として開く object の種類。
 open_question neovim_glsl.navigation_mechanism_selection: navigation の機構として実際に何を採るか。telescope を選び直すこともできる(必然性が無いだけで禁止ではない)。
 open_question neovim_glsl.navigation_surface_decision: picker を grid 内の TUI として描くか、GLSL surface として grid の外へ出すか。許可は出たが選択はされていない。quarantine external_surface_boundary の人間ゲート。

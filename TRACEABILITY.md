@@ -1,14 +1,14 @@
 # TRACEABILITY — pin id と成果物の対応
 
-`pins/domains/neovim-glsl.spec@0.6` を `pins/house_style.pin@1.8` まで flatten した pin と、この repository のどこがそれを満たすかの対応表。1 行で辿れることが目的 (`impl.traceable`)。
+`pins/domains/neovim-glsl.spec@0.7` を `pins/house_style.pin@1.8` まで flatten した pin と、この repository のどこがそれを満たすかの対応表。1 行で辿れることが目的 (`impl.traceable`)。
 
-v0.5 の人間ゲート回答 `relax` と v0.6 の人間ゲート回答 `own_host_protocol` で退役・解決した行は、行を消さず `RETIRED@0.5` / `RETIRED@0.6` / `RESOLVED@0.6` として残す。設立時に何を約束していたかと、いつ誰が緩めたかの両方が 1 行で辿れる必要があるため。
+v0.5 の人間ゲート回答 `relax`、v0.6 の `own_host_protocol`、v0.7 の「telescope である必然性は特にない」で退役・解決した行は、行を消さず `RETIRED@X.Y` / `RESOLVED@X.Y` として残す。設立時に何を約束していたかと、いつ誰が緩めたかの両方が 1 行で辿れる必要があるため。
 
-内訳: domain pin 7 (うち 2 は RETIRED@0.5) + v0.5 で追加 2 + v0.6 で追加 4、property 2 (両方 RETIRED@0.5) + v0.5 で追加 1 + v0.6 で追加 2、example 4 (うち 1 は RETIRED@0.5) + v0.5 で追加 3 (うち 1 は RETIRED@0.6) + v0.6 で追加 4、house_style から継承した pin 28。
+内訳: domain pin 7 (うち 2 は RETIRED@0.5) + v0.5 で追加 2 + v0.6 で追加 4 + v0.7 で追加 1、property 2 (両方 RETIRED@0.5) + v0.5 で追加 1 + v0.6 で追加 2 + v0.7 で追加 1、example 4 (うち 1 は RETIRED@0.5) + v0.5 で追加 3 (うち 1 は RETIRED@0.6) + v0.6 で追加 4 + v0.7 で追加 4、house_style から継承した pin 28。v0.4 の file_navigation 系 pin / example は v0.7 で退役した。
 
 表の cell は機械処理しやすいよう ASCII のみ。補足は表の下の注記に置く。
 
-## domain pin (13)
+## domain pin (14)
 
 | pin id                                 | statement                                               | honored at                                                                        |
 | -------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------- |
@@ -20,13 +20,15 @@ v0.5 の人間ゲート回答 `relax` と v0.6 の人間ゲート回答 `own_hos
 | neovim_glsl.architecture_choice        | require neovim_glsl.architecture = own_host_speaking_neovim_protocol | witness pending - no own-host artefact yet; README.md and founding/record.json superseded_at_v0_6 |
 | neovim_glsl.host_protocol_dialect      | require neovim_glsl.host.protocol.dialect = neovim      | witness pending - no protocol-speaking own host session yet                         |
 | neovim_glsl.asset_reuse_includes_protocol | require neovim_glsl.neovim_assets.reuse_scope includes protocol | README.md; UNDECIDED.md narrowed neovim_asset_reuse_scope                         |
+| neovim_glsl.file_navigation_mechanism  | RETIRED@0.7 (was: require file_navigation.mechanism = telescope) | founding/record.json superseded_at_v0_7.retired[0]                       |
+| neovim_glsl.file_navigation_required   | require neovim_glsl.file_navigation = required          | evaluation/free-surface measures a surface for it; no mechanism chosen yet        |
 | neovim_glsl.emacs_alternative_rejected | forbid neovim_glsl.editor.basis = emacs_family          | founding/record.json frozen_pins[2]; README.md (frozen)                           |
 | neovim_glsl.project_established        | require neovim_glsl.project.establishment = required    | this repository as a whole; founding/record.json frozen_pins[3] and establishment |
 | neovim_glsl.project_subject            | require neovim_glsl.project.subject = neovim_to_glsl    | founding/record.json frozen_pins[4] and establishment.subject; README.md (title)  |
 | neovim_glsl.establishment_order        | require neovim_glsl.project.establishment.order = first | founding/record.json frozen_pins[5] and establishment.order; README.md (frozen)   |
 | neovim_glsl.target_shading_language    | require neovim_glsl.target.shading_language = glsl      | founding/record.json frozen_pins[6]; README.md (frozen)                           |
 
-## property と example (5 + 11)
+## property と example (6 + 15)
 
 | id                                  | kind     | statement                                                          | honored at                                                    |
 | ----------------------------------- | -------- | ------------------------------------------------------------------ | ------------------------------------------------------------- |
@@ -43,6 +45,12 @@ v0.5 の人間ゲート回答 `relax` と v0.6 の人間ゲート回答 `own_hos
 | neovim_glsl.embed_not_selected      | example  | neovim_core_process_as_editor_basis => not_selected                | founding/record.json superseded_at_v0_6.added; README.md      |
 | neovim_glsl.full_scratch_not_selected | example | host_discarding_neovim_protocol => rejected                        | founding/record.json superseded_at_v0_6.added; README.md      |
 | neovim_glsl.protocol_asset          | example  | neovim_protocol_as_reused_asset => accepted                        | founding/record.json superseded_at_v0_6.added; README.md      |
+| neovim_glsl.navigation_presence_witness | property | forall surface . navigation_mechanism_present(surface) == true | witness pending - no navigation mechanism built yet        |
+| neovim_glsl.navigation              | example  | RETIRED@0.7 (was: file_move_operation => telescope)                | founding/record.json superseded_at_v0_7.retired[1]            |
+| neovim_glsl.non_telescope_navigation | example | non_telescope_navigation_proposal => not_rejected_by_navigation_pin | evaluation/free-surface is such a proposal and is not rejected |
+| neovim_glsl.telescope_still_allowed | example  | telescope_as_navigation_mechanism => not_rejected                  | evaluation/protocol-surface keeps the telescope measurement live |
+| neovim_glsl.external_glsl_picker    | example  | picker_rendered_outside_grid_via_glsl => not_rejected              | evaluation/free-surface/out/free-surface-over-grid.png        |
+| neovim_glsl.navigation_removal      | example  | proposal_with_no_navigation_mechanism => rejected                  | witnessed by absence - nothing here removes navigation        |
 | neovim_glsl.emacs_alternative       | example  | emacs_family_editor_substitution => rejected                       | founding/record.json witnesses[1]; README.md                  |
 | neovim_glsl.founding                | example  | this_instruction_deliverable => established_neovim_to_glsl_project | founding/record.json witnesses[2]; this repository; README.md |
 | neovim_glsl.shading_language        | example  | project_target_shading_language => glsl                            | founding/record.json witnesses[3]; README.md                  |
@@ -56,6 +64,14 @@ v0.5 の人間ゲート回答 `relax` と v0.6 の人間ゲート回答 `own_hos
 | neovim_glsl.architecture_decision       | open_question | RESOLVED@0.6  | resolved by gate answer own_host_protocol                             |
 | neovim_glsl.basis_selection             | open_question | RESOLVED@0.6  | resolved by gate answer own_host_protocol                             |
 | neovim_glsl.neovim_asset_reuse_scope    | open_question | NARROWED@0.6  | protocol is pinned; remaining scope stays live in UNDECIDED.md        |
+
+## retired / resolved v0.7 non-pin entries
+
+| id                                        | kind          | status        | trace                                                             |
+| ----------------------------------------- | ------------- | ------------- | ----------------------------------------------------------------- |
+| neovim_glsl.telescope_customization       | free          | RETIRED@0.7   | depended on the telescope naming; successor is navigation_customization |
+| neovim_glsl.telescope_under_own_host      | quarantine    | RETIRED@0.7   | the ambiguity vanished with the naming it was about              |
+| neovim_glsl.telescope_realization_decision | open_question | RESOLVED@0.7  | answered as "neither" - the mechanism itself is no longer required |
 
 ## house_style@1.8 から継承した pin (28)
 
@@ -110,11 +126,21 @@ v0.5 の人間ゲート回答 `relax` と v0.6 の人間ゲート回答 `own_hos
 
 | group         | count | treatment                 | recorded at                                                                        |
 | ------------- | ----- | ------------------------- | ---------------------------------------------------------------------------------- |
-| quarantine    | 24    | not implemented; verbatim | UNDECIDED.md section quarantine; spec-mirror/neovim-glsl-0.6.lines                 |
-| open_question | 26    | not implemented; verbatim | UNDECIDED.md section open_question; spec-mirror/neovim-glsl-0.6.lines              |
-| free          | 14    | not locked; verbatim      | DESIGN-SPACE.md plus v0.6 delta in this document and founding/record.json          |
+| quarantine    | 26    | not implemented; verbatim | UNDECIDED.md section quarantine; spec-mirror/neovim-glsl-0.7.lines                 |
+| open_question | 30    | not implemented; verbatim | UNDECIDED.md section open_question; spec-mirror/neovim-glsl-0.7.lines              |
+| free          | 42    | not locked; verbatim      | DESIGN-SPACE.md, generated from spec-mirror/neovim-glsl-0.7.lines                  |
+
+これらの数は手で数えたものではない。`tools/sync_undecided.py` と
+`tools/sync_design_space.py` が spec から数える。DESIGN-SPACE.md は v0.6 まで
+`@0.1` の 11 軸を手書きしたまま腐っており、実際には 42 軸あった。UNDECIDED.md が
+同じ腐り方をしていたのと同型の失敗なので、同じ直し方をした。
 
 未決を実装しないこと自体が `impl.defer_open` の遵守であり、free を固定しないこと自体が `impl.free_not_locked` の遵守である。この repository に GLSL 化範囲・性能基準・shader・build 設定が無いのは欠落ではない。architecture は v0.6 で `own_host_speaking_neovim_protocol` に決まったが、protocol surface、transport、editing core、Lua runtime、telescope の実現形、embed candidate の去就はまだ固定しない。
+
+`evaluation/free-surface/` も同様にこの行を変えない。あそこにあるのは
+「grid の外に置くとこれが表現できる」という観測であって、置くべきだという判断ではない。
+`open_question neovim_glsl.navigation_surface_decision` と
+`quarantine neovim_glsl.external_surface_boundary` は依然として開いている。
 
 `evaluation/` 配下の性能測定はこの行を変えない。あそこにあるのは観測であって基準ではなく、
 `quarantine neovim_glsl.performance_criteria` と `free neovim_glsl.performance.numeric_targets`

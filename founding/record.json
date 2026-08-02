@@ -9,9 +9,9 @@
     "domain_spec": "pins/domains/neovim-glsl.spec",
     "imported_pin_file": "pins/house_style.pin",
     "imported_pin_version": "1.8",
-    "rule": "spec が真実。食い違ったらこの record を直す。pin を結衣の判断で緩めない — 緩和は人間ゲートの回答としてのみ起こり、起きたら superseded_at_v0_5 / superseded_at_v0_6 に理由付きで記録する。",
+    "rule": "spec が真実。食い違ったらこの record を直す。pin を結衣の判断で緩めない — 緩和は人間ゲートの回答としてのみ起こり、起きたら superseded_at_v0_5 / superseded_at_v0_6 / superseded_at_v0_7 に理由付きで記録する。",
     "domain_spec_version_at_founding": "0.1",
-    "domain_spec_version_current": "0.6"
+    "domain_spec_version_current": "0.7"
   },
   "friction": {
     "date": "2026-07-25",
@@ -485,6 +485,83 @@
       "neovim_glsl.project_subject",
       "neovim_glsl.establishment_order",
       "neovim_glsl.target_shading_language"
+    ]
+  },
+  "superseded_at_v0_7": {
+    "gate": "neovim_glsl.telescope_realization_decision",
+    "answer": "telescope である必然性は特にない。もっと glsl の利点を活かして外部に出してもいい",
+    "answered_at": "2026-08-03",
+    "answered_by": "human",
+    "friction": "v0.6 が提示した「telescope を plugin として動かすか、同じ操作体験の自前 picker として実現するか」の二択に対し、御主人様はどちらでもなく前提そのものを外した。",
+    "note": "前半は緩和要求として硬い。後半「外部に出してもいい」は許可であって要求ではないので pin していない。frozen_pins は 2026-07-24 設立時点の凍結内容であり、履歴としてそのまま残す。",
+    "retired": [
+      {
+        "id": "neovim_glsl.file_navigation_mechanism",
+        "was": "require neovim_glsl.file_navigation.mechanism = telescope",
+        "now": "pin neovim_glsl.file_navigation_required (require neovim_glsl.file_navigation = required)"
+      },
+      {
+        "id": "neovim_glsl.navigation",
+        "kind": "example",
+        "was": "file_move_operation => telescope",
+        "now": "RETIRED@0.7 (the mechanism it witnessed is gone)"
+      },
+      {
+        "id": "neovim_glsl.telescope_customization",
+        "kind": "free",
+        "was": "telescope の custom picker / sorter / action の設計。",
+        "now": "free neovim_glsl.navigation_customization"
+      },
+      {
+        "id": "neovim_glsl.telescope_under_own_host",
+        "kind": "quarantine",
+        "was": "未確定 — telescope が plugin そのものか操作体験かが一意でない。",
+        "now": "RETIRED@0.7 (the ambiguity vanished with the naming)"
+      },
+      {
+        "id": "neovim_glsl.telescope_realization_decision",
+        "kind": "open_question",
+        "was": "telescope を plugin として動かすか、自前 picker として実現するか。",
+        "now": "RESOLVED@0.7 as neither"
+      }
+    ],
+    "added": [
+      {
+        "id": "neovim_glsl.file_navigation_required",
+        "statement": "require neovim_glsl.file_navigation = required"
+      },
+      {
+        "id": "neovim_glsl.navigation_presence_witness",
+        "kind": "property",
+        "statement": "forall surface . navigation_mechanism_present(surface) == true"
+      },
+      {
+        "id": "neovim_glsl.non_telescope_navigation",
+        "kind": "example",
+        "statement": "non_telescope_navigation_proposal => not_rejected_by_navigation_pin"
+      },
+      {
+        "id": "neovim_glsl.telescope_still_allowed",
+        "kind": "example",
+        "statement": "telescope_as_navigation_mechanism => not_rejected"
+      },
+      {
+        "id": "neovim_glsl.external_glsl_picker",
+        "kind": "example",
+        "statement": "picker_rendered_outside_grid_via_glsl => not_rejected"
+      },
+      {
+        "id": "neovim_glsl.navigation_removal",
+        "kind": "example",
+        "statement": "proposal_with_no_navigation_mechanism => rejected"
+      }
+    ],
+    "opened": [
+      "neovim_glsl.external_surface_boundary (quarantine)",
+      "neovim_glsl.glsl_advantage_criterion (quarantine)",
+      "neovim_glsl.navigation_object_scope (quarantine)",
+      "neovim_glsl.navigation_mechanism_selection (open_question)",
+      "neovim_glsl.navigation_surface_decision (open_question)"
     ]
   }
 }

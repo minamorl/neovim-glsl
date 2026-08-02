@@ -7,8 +7,13 @@ Neovim の core process を editor basis として `nvim --embed` で動かす�
 この repository の `evaluation/` に残っている実測済み candidate になった。
 
 protocol のどの面を喋るか（UI protocol の server 面だけか、API protocol も含むか）、
-transport、editing core、Lua runtime の有無、telescope の実現形はまだ未決である。
-この README はそれらを先に決めない。
+transport、editing core、Lua runtime の有無、そして navigation をどう実現しどこへ描くかは
+まだ未決である。この README はそれらを先に決めない。
+
+spec v0.7 で `file_navigation.mechanism = telescope` は退役し、残っているのは
+「移動のための機構が在ること」だけになった。telescope は禁止されたのではなく、
+候補の一つに戻っただけである。`evaluation/free-surface/` は、その機構が grid の
+内側に居る必要があるのかを測った証拠であって、選択ではない。
 
 ![text と画像が同じ画面に共存している様子](evaluation/evidence/image-and-text-coexist.png)
 
@@ -194,11 +199,13 @@ Finder から `.app` を起動した場合は shell の `PATH` を引き継が�
 
 実験プロトタイプであり、完成品ではない。構成のうち、host 選択は 2026-08-02 の
 spec v0.6 で **own_host_speaking_neovim_protocol** に決まった。どの graphics API を
-使うか、どこまでを GLSL で描くか、protocol surface をどこまで実装するかはまだ確定して
-いない。
+使うか、どこまでを GLSL で描くか、protocol surface をどこまで実装するか、navigation を
+何でどこに作るかはまだ確定していない。
 
 未決の設計判断は [UNDECIDED.md](UNDECIDED.md) に、開いている選択肢は
-[DESIGN-SPACE.md](DESIGN-SPACE.md) に置いてある。
+[DESIGN-SPACE.md](DESIGN-SPACE.md) に置いてある。どちらも spec から機械生成される
+(`tools/sync_undecided.py` / `tools/sync_design_space.py`)。手で書き足すと、
+生成のたびに消える。
 
 2026-08-02、spec v0.5 の人間ゲートで **editor 基盤が Neovim であるという pin は緩和された**。
 同じ日、spec v0.6 の人間ゲート回答 `own_host_protocol` により、実際の host は
@@ -207,10 +214,21 @@ spec v0.6 で **own_host_speaking_neovim_protocol** に決まった。どの gra
 （`asset_reuse_includes_protocol`）。plugin 生態系、Lua runtime、keymap 意味論の実装深度、
 既存 UI client 実装の去就はまだ未決である。
 
+`evaluation/free-surface` は grid ではない面を描いて測ったもの、
+`evaluation/protocol-surface` は telescope が実際に触る protocol 面を数えたもの。
+どちらも証拠であって決定ではない。
+
 `evaluation/candidate-embed-opengl` は、Neovim 0.11.5 を `nvim --embed` で動かし、
 画面と入力を OpenGL / GLSL 側で扱う candidate の実測結果である。v0.6 では
 `neovim_core_process_as_editor_basis => not_selected` になったため、この candidate は
 選ばれた architecture ではない。UI client 資産として温存するか、廃棄するかは
 `open_question neovim_glsl.embed_candidate_disposition` のまま残っている。
+
+2026-08-03、spec v0.7 で **navigation の機構が telescope であるという pin も退役した**。
+残っているのは「移動のための機構が在ること」だけで、telescope は禁止ではなく候補に戻った。
+`evaluation/free-surface` は、その機構が grid の内側に居なければならないのかを測った証拠で
+ある。grid の外なら、cell に乗らない原点・cell と無関係な行送り・端数のスクロール・
+下のテキストが透ける背景・cell 境界と無関係な切り取りが表現できる、というところまでが観測。
+どこに置くかは `open_question neovim_glsl.navigation_surface_decision` のまま。
 
 Emacs 系への置換は、v0.5 で退役した basis pin とは独立した明示的拒否として今も残っている。
