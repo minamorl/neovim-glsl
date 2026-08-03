@@ -91,6 +91,10 @@ pub struct Input<'a> {
     pub total: usize,
     /// Visible rows, each with whether it is the selection.
     pub rows: &'a [(String, bool)],
+    /// How many rows the surface has room for. The pitch comes from the budget,
+    /// not from how many candidates survived: deriving it from `rows.len()`
+    /// makes a single match a row as tall as the whole list.
+    pub row_budget: usize,
     pub window_w: f32,
     pub window_h: f32,
     pub cell_w: f32,
@@ -158,8 +162,7 @@ pub fn build(input: Input<'_>) -> NavigationSurface {
 
     let list_top = panel_y + padding * 0.6 + query_h + padding * 0.5;
     let list_h = (panel_y + panel_h - padding) - list_top;
-    let visible = input.rows.len().max(1);
-    let row_h = list_h / visible as f32;
+    let row_h = list_h / input.row_budget.max(input.rows.len()).max(1) as f32;
 
     let mut texts = Vec::new();
     // The counter is measured, not guessed at: a fixed inset wide enough for
@@ -251,6 +254,7 @@ mod tests {
             matched: 1,
             total: 3,
             rows: &rows,
+            row_budget: 12,
             window_w: 900.0,
             window_h: 560.0,
             cell_w: 9.0,
@@ -293,6 +297,32 @@ mod tests {
     }
 
     #[test]
+    fn one_surviving_candidate_keeps_a_normal_row_height() {
+        let one = [("only.md".to_string(), true)];
+        let surface = build(Input {
+            label: "x",
+            query: "only",
+            matched: 1,
+            total: 40,
+            rows: &one,
+            row_budget: 12,
+            window_w: 900.0,
+            window_h: 560.0,
+            cell_w: 9.0,
+            cell_h: 18.0,
+            ascent: 13.0,
+        });
+        let row = surface
+            .scene
+            .surfaces
+            .iter()
+            .find(|(id, _)| id.starts_with("navigation.row."))
+            .expect("the selection has a surface");
+        let height = row.1.bounds.height * 560.0;
+        assert!(height < 40.0, "a single match drew a row {height}px tall");
+    }
+
+    #[test]
     fn the_row_pitch_is_not_the_cell_height() {
         let rows = rows();
         let surface = build(Input {
@@ -301,6 +331,7 @@ mod tests {
             matched: 3,
             total: 3,
             rows: &rows,
+            row_budget: 12,
             window_w: 900.0,
             window_h: 560.0,
             cell_w: 9.0,
