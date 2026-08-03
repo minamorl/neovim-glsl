@@ -100,6 +100,12 @@ impl Picker {
         &self.source
     }
 
+    /// How many rows the surface has room for, which is not how many candidates
+    /// survived the query.
+    pub fn row_budget(&self) -> usize {
+        self.visible_rows
+    }
+
     /// The visible window onto the candidate list, each row flagged with
     /// whether it is the selection. The scroll offset keeps the selection in
     /// view without moving it to a fixed slot.

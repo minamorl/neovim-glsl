@@ -81,11 +81,20 @@ impl Client {
     }
 
     /// Collect traffic until nothing arrives for a moment.
+    ///
+    /// The first message gets a long deadline and the rest a short one. A single
+    /// short deadline makes this test a race against process startup: eight of
+    /// these run at once, and on a loaded machine the first byte can take longer
+    /// to appear than the whole quiet period that follows it.
     fn drain(&mut self) -> Vec<Value> {
         let mut out = Vec::new();
+        let mut timeout = Duration::from_secs(10);
         loop {
-            match self.messages.recv_timeout(Duration::from_millis(400)) {
-                Ok(value) => out.push(value),
+            match self.messages.recv_timeout(timeout) {
+                Ok(value) => {
+                    out.push(value);
+                    timeout = Duration::from_millis(300);
+                }
                 Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => break,
             }
         }

@@ -355,6 +355,7 @@ impl App {
             matched: picker.matches(),
             total: picker.corpus_len(),
             rows: &rows,
+            row_budget: picker.row_budget(),
             window_w: width,
             window_h: height,
             cell_w: atlas.cell_w,

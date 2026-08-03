@@ -49,11 +49,16 @@ impl Key {
         Self { code: Code::Named(named), ctrl: false, alt: false }
     }
 
-    /// The plain character this key stands for, if it stands for one. Named keys
-    /// and anything carrying a modifier do not insert text.
+    /// The plain character this key stands for, if it stands for one.
+    ///
+    /// Named keys and anything carrying a modifier do not insert text, and
+    /// neither does a raw control character: a literal `\n` arriving inside an
+    /// `nvim_input` string is a newline the sender failed to write as `<CR>`,
+    /// and inserting it puts a control character inside a line where every
+    /// later column count disagrees with what is on screen.
     pub fn as_text(self) -> Option<char> {
         match self.code {
-            Code::Char(ch) if !self.ctrl && !self.alt => Some(ch),
+            Code::Char(ch) if !self.ctrl && !self.alt && !ch.is_control() => Some(ch),
             _ => None,
         }
     }
@@ -173,6 +178,14 @@ mod tests {
         assert_eq!(parse("a<b"), vec![Key::char('a'), Key::char('<'), Key::char('b')]);
         assert_eq!(parse("<lt>"), vec![Key::char('<')]);
         assert_eq!(parse("<Space>"), vec![Key::char(' ')]);
+    }
+
+    #[test]
+    fn a_raw_control_character_is_not_insertable_text() {
+        assert_eq!(Key::char('\n').as_text(), None);
+        assert_eq!(Key::char('\r').as_text(), None);
+        assert_eq!(Key::char('\t').as_text(), None);
+        assert_eq!(Key::char('a').as_text(), Some('a'));
     }
 
     #[test]
