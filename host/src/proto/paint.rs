@@ -33,8 +33,91 @@ pub mod hl {
     pub const MODIFIED: u64 = 13;
 }
 
-const BG: u32 = 0x0F1115;
-const FG: u32 = 0xD7DAE0;
+/// The editor's own palette.
+///
+/// One theme drives the grid and the navigation surface together. They used to
+/// be chosen separately, which is how a light picker ended up floating over a
+/// dark editor — two halves of one window disagreeing about what the user asked
+/// for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Theme {
+    pub bg: u32,
+    pub fg: u32,
+    pub line_nr: u32,
+    pub cursor_line_nr: u32,
+    pub status_fg: u32,
+    pub status_bg: u32,
+    pub visual: u32,
+    pub search_fg: u32,
+    pub search_bg: u32,
+    pub error: u32,
+    pub non_text: u32,
+    pub heading: u32,
+    pub code: u32,
+    pub emphasis: u32,
+    pub bullet: u32,
+    pub link: u32,
+    pub modified_fg: u32,
+    pub modified_bg: u32,
+}
+
+impl Theme {
+    pub fn dark() -> Self {
+        Self {
+            bg: 0x0F1117,
+            fg: 0xD3D9E4,
+            line_nr: 0x454C5E,
+            cursor_line_nr: 0xE0C285,
+            status_fg: 0xB9C2D6,
+            // A status line that is a slab of saturated blue reads as a
+            // selection, not as chrome. It belongs a step above the background,
+            // not on top of the palette.
+            status_bg: 0x1B2130,
+            visual: 0x2B3350,
+            search_fg: 0x11141C,
+            search_bg: 0xE0C285,
+            error: 0xE86B7E,
+            non_text: 0x272D3A,
+            heading: 0x7FA7F5,
+            code: 0x93C97E,
+            emphasis: 0xB38DEF,
+            bullet: 0xE0C285,
+            link: 0x6FC7EF,
+            modified_fg: 0xE86B7E,
+            modified_bg: 0x1B2130,
+        }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            bg: 0xF7F8FB,
+            fg: 0x2B3140,
+            line_nr: 0xA8B0C2,
+            cursor_line_nr: 0x9A6B12,
+            status_fg: 0x3D4557,
+            status_bg: 0xE6EAF3,
+            visual: 0xD3DEF7,
+            search_fg: 0x2B3140,
+            search_bg: 0xF3D9A0,
+            error: 0xC0324B,
+            non_text: 0xD8DDE8,
+            heading: 0x2F5FD0,
+            code: 0x2F7A3F,
+            emphasis: 0x7040B8,
+            bullet: 0x9A6B12,
+            link: 0x1C6B93,
+            modified_fg: 0xC0324B,
+            modified_bg: 0xE6EAF3,
+        }
+    }
+
+    pub fn named(name: &str) -> Self {
+        match name {
+            "light" => Self::light(),
+            _ => Self::dark(),
+        }
+    }
+}
 
 #[derive(Clone, PartialEq, Eq)]
 struct Cell {
@@ -84,6 +167,7 @@ pub fn char_width(ch: char) -> usize {
 }
 
 pub struct Painter {
+    theme: Theme,
     cols: usize,
     rows: usize,
     previous: Vec<Cell>,
@@ -97,9 +181,14 @@ pub struct Painter {
 
 impl Painter {
     pub fn new(cols: usize, rows: usize, options: UiOptions) -> Self {
+        Self::themed(cols, rows, options, Theme::dark())
+    }
+
+    pub fn themed(cols: usize, rows: usize, options: UiOptions, theme: Theme) -> Self {
         let cols = cols.max(1);
         let rows = rows.max(1);
         Self {
+            theme,
             cols,
             rows,
             previous: vec![Cell::default(); cols * rows],
@@ -149,15 +238,15 @@ impl Painter {
             (
                 "default_colors_set".to_string(),
                 vec![
-                    Value::from(FG),
-                    Value::from(BG),
-                    Value::from(FG),
+                    Value::from(self.theme.fg),
+                    Value::from(self.theme.bg),
+                    Value::from(self.theme.fg),
                     Value::from(-1i64),
                     Value::from(-1i64),
                 ],
             ),
         ];
-        for (id, attrs) in highlight_table() {
+        for (id, attrs) in highlight_table(self.theme) {
             events.push((
                 "hl_attr_define".to_string(),
                 vec![Value::from(id), attrs.clone(), attrs, Value::Array(vec![])],
@@ -582,21 +671,21 @@ fn attrs(fg: Option<u32>, bg: Option<u32>, bold: bool, italic: bool) -> Value {
     Value::Map(map)
 }
 
-fn highlight_table() -> Vec<(u64, Value)> {
+fn highlight_table(theme: Theme) -> Vec<(u64, Value)> {
     vec![
-        (hl::LINE_NR, attrs(Some(0x4A5160), None, false, false)),
-        (hl::CURSOR_LINE_NR, attrs(Some(0xE5C07B), None, true, false)),
-        (hl::STATUS, attrs(Some(0x0F1115), Some(0x7AA2F7), true, false)),
-        (hl::VISUAL, attrs(None, Some(0x2E3C64), false, false)),
-        (hl::SEARCH, attrs(Some(0x0F1115), Some(0xE5C07B), false, false)),
-        (hl::ERROR, attrs(Some(0xF7768E), None, true, false)),
-        (hl::NON_TEXT, attrs(Some(0x2A2F3A), None, false, false)),
-        (hl::HEADING, attrs(Some(0x7AA2F7), None, true, false)),
-        (hl::CODE, attrs(Some(0x9ECE6A), None, false, false)),
-        (hl::EMPHASIS, attrs(Some(0xBB9AF7), None, false, true)),
-        (hl::BULLET, attrs(Some(0xE5C07B), None, true, false)),
-        (hl::LINK, attrs(Some(0x7DCFFF), None, false, false)),
-        (hl::MODIFIED, attrs(Some(0x0F1115), Some(0xF7768E), true, false)),
+        (hl::LINE_NR, attrs(Some(theme.line_nr), None, false, false)),
+        (hl::CURSOR_LINE_NR, attrs(Some(theme.cursor_line_nr), None, true, false)),
+        (hl::STATUS, attrs(Some(theme.status_fg), Some(theme.status_bg), false, false)),
+        (hl::VISUAL, attrs(None, Some(theme.visual), false, false)),
+        (hl::SEARCH, attrs(Some(theme.search_fg), Some(theme.search_bg), false, false)),
+        (hl::ERROR, attrs(Some(theme.error), None, true, false)),
+        (hl::NON_TEXT, attrs(Some(theme.non_text), None, false, false)),
+        (hl::HEADING, attrs(Some(theme.heading), None, true, false)),
+        (hl::CODE, attrs(Some(theme.code), None, false, false)),
+        (hl::EMPHASIS, attrs(Some(theme.emphasis), None, false, true)),
+        (hl::BULLET, attrs(Some(theme.bullet), None, true, false)),
+        (hl::LINK, attrs(Some(theme.link), None, false, false)),
+        (hl::MODIFIED, attrs(Some(theme.modified_fg), Some(theme.modified_bg), true, false)),
     ]
 }
 
