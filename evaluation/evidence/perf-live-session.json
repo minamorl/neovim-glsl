@@ -1,0 +1,189 @@
+{
+  "schema": "nvimgl.perf-observation/v2",
+  "trace_id": "01KZ1860FHVFEEN1H1YSXKHJPK",
+  "evaluation_candidate": true,
+  "canonical_performance_criteria": false,
+  "performance_acceptance": "unset_awaiting_human_gate",
+  "measurement": {
+    "mode": "live_session",
+    "event_source": "nvim_ext_linegrid",
+    "workload_deterministic": false,
+    "gpu_submit_measured": true,
+    "frame_total_stages": [
+      "vertex_build",
+      "gpu_submit"
+    ],
+    "presentation_model": "on_demand_redraw"
+  },
+  "environment": {
+    "os": "macos",
+    "architecture": "aarch64",
+    "family": "unix",
+    "pointer_width": 64,
+    "available_parallelism": 16,
+    "debug_assertions": false,
+    "graphics": {
+      "api_version": "4.1 Metal - 90.5",
+      "renderer": "Apple M4 Max",
+      "shading_language_version": "4.10"
+    }
+  },
+  "parameters": {
+    "cols": 80,
+    "rows": 24,
+    "font_size_px": 15.0,
+    "frames_requested": null,
+    "warmup_frames": 0,
+    "seed": null,
+    "frame_budget_ms": null
+  },
+  "frame": {
+    "frames_recorded": 2,
+    "warmup_frames_excluded": 0,
+    "wall_clock_ms": 1559.9196,
+    "total_ms": {
+      "count": 2,
+      "min": 0.6645,
+      "mean": 16.484,
+      "p50": 0.6645,
+      "p90": 32.3036,
+      "p95": 32.3036,
+      "p99": 32.3036,
+      "max": 32.3036
+    },
+    "event_apply_ms": {
+      "count": 2,
+      "min": 0.0384,
+      "mean": 0.0439,
+      "p50": 0.0384,
+      "p90": 0.0495,
+      "p95": 0.0495,
+      "p99": 0.0495,
+      "max": 0.0495
+    },
+    "vertex_build_ms": {
+      "count": 2,
+      "min": 0.2039,
+      "mean": 0.6521,
+      "p50": 0.2039,
+      "p90": 1.1003,
+      "p95": 1.1003,
+      "p99": 1.1003,
+      "max": 1.1003
+    },
+    "gpu_submit_ms": {
+      "count": 2,
+      "min": 0.46,
+      "mean": 15.8299,
+      "p50": 0.46,
+      "p90": 31.1998,
+      "p95": 31.1998,
+      "p99": 31.1998,
+      "max": 31.1998
+    },
+    "present_interval_ms": {
+      "count": 1,
+      "min": 23.1392,
+      "mean": 23.1392,
+      "p50": 23.1392,
+      "p90": 23.1392,
+      "p95": 23.1392,
+      "p99": 23.1392,
+      "max": 23.1392
+    },
+    "presentation_rate_hz": {
+      "count": 1,
+      "min": 43.2168,
+      "mean": 43.2168,
+      "p50": 43.2168,
+      "p90": 43.2168,
+      "p95": 43.2168,
+      "p99": 43.2168,
+      "max": 43.2168
+    },
+    "presentations_per_wall_clock_second": 1.2821
+  },
+  "redraw": {
+    "batches": 2,
+    "events_total": 275,
+    "events_per_batch": {
+      "count": 2,
+      "min": 98.0,
+      "mean": 137.5,
+      "p50": 98.0,
+      "p90": 177.0,
+      "p95": 177.0,
+      "p99": 177.0,
+      "max": 177.0
+    },
+    "batch_apply_ms": {
+      "count": 2,
+      "min": 0.0384,
+      "mean": 0.0439,
+      "p50": 0.0384,
+      "p90": 0.0495,
+      "p95": 0.0495,
+      "p99": 0.0495,
+      "max": 0.0495
+    },
+    "events_by_kind": {
+      "chdir": 1,
+      "default_colors_set": 1,
+      "flush": 1,
+      "grid_clear": 1,
+      "grid_cursor_goto": 1,
+      "grid_line": 24,
+      "grid_resize": 2,
+      "hl_attr_define": 58,
+      "hl_group_set": 136,
+      "mode_change": 1,
+      "mode_info_set": 1,
+      "mouse_on": 1,
+      "option_set": 25,
+      "set_icon": 1,
+      "set_title": 1,
+      "update_menu": 17,
+      "win_pos": 1,
+      "win_viewport": 1,
+      "win_viewport_margins": 1
+    }
+  },
+  "glyph_atlas": {
+    "counters_window": "process_lifetime_including_warmup",
+    "lookups": 3840,
+    "hits": 3815,
+    "misses": 25,
+    "rasterizations": 24,
+    "empty_glyphs": 1,
+    "rejections_atlas_full": 0,
+    "uploads": 1,
+    "hit_ratio": 0.9935,
+    "cached_entries": 25,
+    "atlas_side_px": 1024,
+    "packed_height_px": 29,
+    "packed_height_ratio": 0.0283
+  },
+  "vertices": {
+    "per_frame": {
+      "count": 2,
+      "min": 11874.0,
+      "mean": 11874.0,
+      "p50": 11874.0,
+      "p90": 11874.0,
+      "p95": 11874.0,
+      "p99": 11874.0,
+      "max": 11874.0
+    },
+    "total": 23748
+  },
+  "slow_frames": {
+    "criterion": "unset_awaiting_human_gate",
+    "frame_budget_ms": null,
+    "frames_over_budget": null,
+    "frames_over_budget_ratio": null,
+    "worst_overrun_ms": null,
+    "flushes_observed": 1,
+    "presentations_observed": 2,
+    "flushes_not_presented": 0
+  }
+}

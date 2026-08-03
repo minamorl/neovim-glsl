@@ -1,0 +1,100 @@
+{
+  "schema": "neovim-glsl.work-decomposition/v0.4",
+  "spec": {
+    "domain": "neovim-glsl",
+    "version": "0.4",
+    "source": "spec-system-abcd-spec:pins/domains/neovim-glsl.spec",
+    "governing_pins": [
+      "neovim_glsl.work_decomposition",
+      "neovim_glsl.work_dependency_graph",
+      "neovim_glsl.work_unit_acceptance",
+      "neovim_glsl.integration_gate"
+    ]
+  },
+  "note": "This is a decomposition PLAN over the current open scope, not an adoption decision. Unit progress comes only from verified observation (see decomposition/baseline output); recollection is never recorded as progress. Each unit declares a single owning worktree; no two units mutate one worktree concurrently. The dependency graph is directed and acyclic. Integration is gated on green acceptance plus integrated declared dependencies.",
+  "units": [
+    {
+      "id": "mac-stage-candidate",
+      "title": "Mac first-stage: keep Neovim as editing engine, render external UI via GLSL",
+      "stage": "mac",
+      "owning_worktree": "evaluation/candidate-embed-opengl",
+      "branch": "main (existing evaluation candidate)",
+      "depends_on": [],
+      "acceptance": {
+        "kind": "observable",
+        "witness": "offscreen --snapshot renders a real Neovim 0.11.5 grid through OpenGL 4.1; GPU probe is Apple M4 Max, not software fallback",
+        "evidence": [
+          "evaluation/evidence/nvim-grid-japanese.png",
+          "evaluation/evidence/glsl-gpu-probe.png",
+          "evaluation/evidence/nvim-cursor-inversion.png"
+        ]
+      }
+    },
+    {
+      "id": "ime-preedit-commit",
+      "title": "macOS IME connected end to end: preedit distinct from committed value",
+      "stage": "mac",
+      "owning_worktree": "evaluation/candidate-embed-opengl",
+      "branch": "main (existing evaluation candidate)",
+      "depends_on": ["mac-stage-candidate"],
+      "acceptance": {
+        "kind": "observable",
+        "witness": "logged sequence IME: enabled -> preedit -> commit; preedit is drawn inverted at caret and is not written into the buffer until commit",
+        "evidence": ["evaluation/evidence/ime-preedit.png"]
+      }
+    },
+    {
+      "id": "aish-integration-commence",
+      "title": "Commence aish integration as read-only typed-object surface",
+      "stage": "mac",
+      "owning_worktree": "evaluation/candidate-embed-opengl/integration",
+      "branch": "main (existing evaluation candidate)",
+      "depends_on": ["mac-stage-candidate"],
+      "acceptance": {
+        "kind": "observable",
+        "witness": ":AishDiscover/:AishStatus/:AishInspect return structured JSON into a scratch buffer; no aish run/exec, no confirmation bypass; counterpart repo observed PRIVATE at commencement",
+        "evidence": ["evaluation/route-v0.3/manifest.json", "evaluation/candidate-embed-opengl/integration/aish.lua"]
+      }
+    },
+    {
+      "id": "root-ui-eval-projection",
+      "title": "Root-ui combination hypothesis: emit framework-neutral text-editing-host projection",
+      "stage": "mac",
+      "owning_worktree": "evaluation/route-v0.3",
+      "branch": "main (existing evaluation route)",
+      "depends_on": ["mac-stage-candidate"],
+      "acceptance": {
+        "kind": "observable",
+        "witness": "--root-ui-evaluation writes machine-readable projection recording zero React footprint, replaceable framework-neutral text-editing host port, semantic->layout->non-color-decoration->user-color->shader phase order",
+        "evidence": ["evaluation/route-v0.3/manifest.json"]
+      }
+    },
+    {
+      "id": "multi-target-direction",
+      "title": "Multi-target portability direction: cross-platform winit/glutin + replaceable font discovery",
+      "stage": "mac",
+      "owning_worktree": "evaluation/candidate-embed-opengl",
+      "branch": "main (existing evaluation candidate)",
+      "depends_on": ["mac-stage-candidate"],
+      "acceptance": {
+        "kind": "observable",
+        "witness": "--platform-report writes actual OS/arch/GL renderer/GLSL/Neovim version and marks the Rust/OpenGL/winit stack as non-canonical; font discovery accepts NVIMGL_FONT_PATHS plus replaceable OS candidates",
+        "evidence": ["evaluation/route-v0.3/manifest.json"]
+      }
+    },
+    {
+      "id": "zeno-evaluation",
+      "title": "Zeno next-stage evaluation: run the same witnesses inside the Zeno guest",
+      "stage": "after_mac",
+      "owning_worktree": "evaluation/route-zeno (proposed, not yet created)",
+      "branch": "work/zeno-evaluation (proposed)",
+      "depends_on": ["multi-target-direction"],
+      "acceptance": {
+        "kind": "observable",
+        "witness": "same snapshot + platform-report + root-ui projection + aish-discovery witness produced inside the Zeno guest",
+        "evidence": [],
+        "status_note": "NOT YET RUN: acceptance is unverified, never green, until the guest execution exists"
+      }
+    }
+  ]
+}

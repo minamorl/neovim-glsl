@@ -1,0 +1,24 @@
+{
+  "panels": 2,
+  "schema": "neovim-glsl.free-surface-measurement/v1",
+  "stats": [
+    {
+      "clipped_quads": 59,
+      "first_row_clip_px": 23.5,
+      "last_row_clip_px": 49.5,
+      "origin_off_grid": true,
+      "quads": 361,
+      "rows_scrolled_out": 0,
+      "rows_visible": 11
+    },
+    {
+      "clipped_quads": 0,
+      "first_row_clip_px": 0.0,
+      "last_row_clip_px": 0.0,
+      "origin_off_grid": true,
+      "quads": 93,
+      "rows_scrolled_out": 0,
+      "rows_visible": 4
+    }
+  ]
+}

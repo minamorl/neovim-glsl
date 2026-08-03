@@ -1,0 +1,29 @@
+[package]
+name = "nvimglsl"
+version = "0.1.0"
+edition = "2021"
+
+# The adopted architecture (spec neovim-glsl@0.9, pin architecture_choice):
+# an own host that speaks the Neovim protocol. The editing core lives here; the
+# Neovim process does not. The renderer is the measured candidate's, reached by
+# path rather than copied, because pin neovim_asset_not_discarded forbids
+# throwing Neovim-derived assets away and open_question
+# embed_candidate_disposition has not chosen between keeping and discarding the
+# candidate itself. Including its files leaves that artefact untouched.
+
+[[bin]]
+name = "nvimglsl"
+path = "src/main.rs"
+
+[dependencies]
+winit = "0.30"
+glutin = "0.32"
+glutin-winit = "0.5"
+glow = "0.14"
+raw-window-handle = "0.6"
+png = "0.17"
+rmpv = "1"
+fontdue = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ulid = "1"

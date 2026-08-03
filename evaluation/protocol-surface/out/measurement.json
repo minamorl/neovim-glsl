@@ -1,0 +1,375 @@
+{
+  "schema": "neovim-glsl.protocol-surface-measurement/v1",
+  "nvim_version_first_line": "NVIM v0.11.5",
+  "scratch_dir": "/Users/minamorl/repos/nvglsl-wt/v06-host/evaluation/protocol-surface/out/scratch",
+  "owner_mappings_used": [
+    "<space>o -> Telescope find_files",
+    "<leader>e -> Telescope file_browser path=%:p:h select_buffer=true",
+    "Telescope default <C-n> selection movement",
+    "Telescope default <CR> accept / <Esc> close"
+  ],
+  "plugins": {
+    "plenary.nvim": "/Users/minamorl/.local/share/nvim/lazy/plenary.nvim",
+    "telescope.nvim": "/Users/minamorl/.local/share/nvim/lazy/telescope.nvim",
+    "telescope-file-browser.nvim": "/Users/minamorl/.local/share/nvim/lazy/telescope-file-browser.nvim",
+    "nvim-web-devicons": "/Users/minamorl/.local/share/nvim/lazy/nvim-web-devicons"
+  },
+  "api": {
+    "distinct_functions": 52,
+    "calls": [
+      {
+        "name": "nvim_get_hl",
+        "count": 772
+      },
+      {
+        "name": "nvim_set_hl",
+        "count": 686
+      },
+      {
+        "name": "nvim_buf_is_valid",
+        "count": 181
+      },
+      {
+        "name": "nvim_replace_termcodes",
+        "count": 153
+      },
+      {
+        "name": "nvim_buf_set_keymap",
+        "count": 148
+      },
+      {
+        "name": "nvim_buf_line_count",
+        "count": 136
+      },
+      {
+        "name": "nvim_buf_set_extmark",
+        "count": 131
+      },
+      {
+        "name": "nvim__get_runtime",
+        "count": 102
+      },
+      {
+        "name": "nvim_win_get_width",
+        "count": 64
+      },
+      {
+        "name": "nvim_buf_get_lines",
+        "count": 56
+      },
+      {
+        "name": "nvim_win_get_height",
+        "count": 52
+      },
+      {
+        "name": "nvim_get_current_buf",
+        "count": 51
+      },
+      {
+        "name": "nvim_win_get_cursor",
+        "count": 47
+      },
+      {
+        "name": "nvim_get_option_value",
+        "count": 42
+      },
+      {
+        "name": "nvim_buf_clear_namespace",
+        "count": 38
+      },
+      {
+        "name": "nvim_buf_set_lines",
+        "count": 28
+      },
+      {
+        "name": "nvim_set_option_value",
+        "count": 27
+      },
+      {
+        "name": "nvim_buf_get_extmarks",
+        "count": 26
+      },
+      {
+        "name": "nvim_buf_set_text",
+        "count": 21
+      },
+      {
+        "name": "nvim_win_is_valid",
+        "count": 17
+      },
+      {
+        "name": "nvim_buf_set_option",
+        "count": 16
+      },
+      {
+        "name": "nvim_exec2",
+        "count": 14
+      },
+      {
+        "name": "nvim_create_autocmd",
+        "count": 13
+      },
+      {
+        "name": "nvim_create_namespace",
+        "count": 9
+      },
+      {
+        "name": "nvim_win_set_cursor",
+        "count": 9
+      },
+      {
+        "name": "nvim_create_buf",
+        "count": 8
+      },
+      {
+        "name": "nvim_open_win",
+        "count": 8
+      },
+      {
+        "name": "nvim_win_set_option",
+        "count": 8
+      },
+      {
+        "name": "nvim_buf_get_name",
+        "count": 7
+      },
+      {
+        "name": "nvim_create_augroup",
+        "count": 7
+      },
+      {
+        "name": "nvim_win_get_buf",
+        "count": 6
+      },
+      {
+        "name": "nvim_exec_autocmds",
+        "count": 5
+      },
+      {
+        "name": "nvim_buf_add_highlight",
+        "count": 4
+      },
+      {
+        "name": "nvim_get_mode",
+        "count": 4
+      },
+      {
+        "name": "nvim_set_keymap",
+        "count": 4
+      },
+      {
+        "name": "nvim_win_get_position",
+        "count": 4
+      },
+      {
+        "name": "nvim_clear_autocmds",
+        "count": 3
+      },
+      {
+        "name": "nvim_get_current_win",
+        "count": 3
+      },
+      {
+        "name": "nvim_set_current_win",
+        "count": 3
+      },
+      {
+        "name": "nvim_win_close",
+        "count": 3
+      },
+      {
+        "name": "nvim_buf_attach",
+        "count": 2
+      },
+      {
+        "name": "nvim_buf_delete",
+        "count": 2
+      },
+      {
+        "name": "nvim_buf_is_loaded",
+        "count": 2
+      },
+      {
+        "name": "nvim_call_function",
+        "count": 2
+      },
+      {
+        "name": "nvim_create_user_command",
+        "count": 2
+      },
+      {
+        "name": "nvim_feedkeys",
+        "count": 2
+      },
+      {
+        "name": "nvim_get_current_line",
+        "count": 2
+      },
+      {
+        "name": "nvim_get_current_tabpage",
+        "count": 2
+      },
+      {
+        "name": "nvim_get_option_info2",
+        "count": 2
+      },
+      {
+        "name": "nvim_list_tabpages",
+        "count": 2
+      },
+      {
+        "name": "nvim_cmd",
+        "count": 1
+      },
+      {
+        "name": "nvim_list_bufs",
+        "count": 1
+      }
+    ]
+  },
+  "ui": {
+    "attach_options": {
+      "rgb": true,
+      "ext_linegrid": true,
+      "ext_multigrid": true,
+      "ext_popupmenu": true,
+      "ext_cmdline": true,
+      "ext_messages": true
+    },
+    "distinct_redraw_events": 25,
+    "implemented_by_candidate": 15,
+    "ignored_by_candidate": 10,
+    "observed_events": [
+      {
+        "name": "chdir",
+        "count": 2,
+        "candidate_status": "ignored"
+      },
+      {
+        "name": "default_colors_set",
+        "count": 1,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "flush",
+        "count": 17,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "grid_clear",
+        "count": 1,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "grid_cursor_goto",
+        "count": 9,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "grid_destroy",
+        "count": 4,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "grid_line",
+        "count": 234,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "grid_resize",
+        "count": 10,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "hl_attr_define",
+        "count": 353,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "hl_group_set",
+        "count": 136,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "mode_change",
+        "count": 5,
+        "candidate_status": "ignored"
+      },
+      {
+        "name": "mode_info_set",
+        "count": 1,
+        "candidate_status": "ignored"
+      },
+      {
+        "name": "mouse_on",
+        "count": 1,
+        "candidate_status": "ignored"
+      },
+      {
+        "name": "msg_ruler",
+        "count": 16,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "msg_showcmd",
+        "count": 4,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "msg_showmode",
+        "count": 13,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "option_set",
+        "count": 28,
+        "candidate_status": "ignored"
+      },
+      {
+        "name": "set_icon",
+        "count": 1,
+        "candidate_status": "ignored"
+      },
+      {
+        "name": "set_title",
+        "count": 1,
+        "candidate_status": "ignored"
+      },
+      {
+        "name": "update_menu",
+        "count": 17,
+        "candidate_status": "ignored"
+      },
+      {
+        "name": "win_close",
+        "count": 4,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "win_float_pos",
+        "count": 8,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "win_pos",
+        "count": 2,
+        "candidate_status": "implemented"
+      },
+      {
+        "name": "win_viewport",
+        "count": 32,
+        "candidate_status": "ignored"
+      },
+      {
+        "name": "win_viewport_margins",
+        "count": 35,
+        "candidate_status": "ignored"
+      }
+    ]
+  },
+  "notes": [
+    "The recorder was installed before telescope setup and before the driven picker sessions.",
+    "The API recorder stores counts only; it does not record argument values.",
+    "The file-browser pass opened the owner's file_browser mapping, typed a query, moved selection with <C-n>, and closed with <Esc>."
+  ]
+}

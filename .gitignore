@@ -10,3 +10,4 @@ secrets/
 # Build output of the evaluation candidate. Not a product artifact.
 target/
 nvimgl.app/
+.DS_Store

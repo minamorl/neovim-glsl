@@ -1,0 +1,49 @@
+[
+  {
+    "x": 275.5,
+    "y": 192.25,
+    "w": 1180.0,
+    "h": 690.0,
+    "row_height": 62.5,
+    "scroll": 23.5,
+    "alpha": 0.62,
+    "bg": "#243049",
+    "fg": "#f2f5ff",
+    "accent": "#4f8fd0",
+    "query": "> markdown note",
+    "padding": 26.0,
+    "rows": [
+      { "text": "notes/2026-08-02 handwritten editor plan.md", "selected": false },
+      { "text": "notes/spec-system operating contract.md", "selected": false },
+      { "text": "notes/neovim-glsl v0.6 own host.md", "selected": true },
+      { "text": "notes/root-ui hardening is still open.md", "selected": false },
+      { "text": "notes/telescope is not load-bearing.md", "selected": false },
+      { "text": "notes/lab.minamorl.com is downstream.md", "selected": false },
+      { "text": "notes/日本語のノートも同じ面に出る.md", "selected": false },
+      { "text": "notes/yui notes and the local repository.md", "selected": false },
+      { "text": "notes/protocol surface: UI or API.md", "selected": false },
+      { "text": "notes/this row is cut by the bottom edge.md", "selected": false },
+      { "text": "notes/and this one never reaches the panel.md", "selected": false }
+    ]
+  },
+  {
+    "x": 1520.25,
+    "y": 192.25,
+    "w": 640.0,
+    "h": 330.0,
+    "row_height": 44.0,
+    "scroll": 0.0,
+    "alpha": 0.32,
+    "bg": "#3a1c34",
+    "fg": "#ffe9fa",
+    "accent": "#c46ab4",
+    "query": "",
+    "padding": 22.0,
+    "rows": [
+      { "text": "a second surface, sheerer,", "selected": false },
+      { "text": "row pitch of its own (44px),", "selected": false },
+      { "text": "over the same live grid,", "selected": false },
+      { "text": "which stays readable under it.", "selected": false }
+    ]
+  }
+]

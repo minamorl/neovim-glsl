@@ -1,0 +1,64 @@
+{
+  "schema": "neovim-glsl.evaluation-route/v0.3",
+  "spec": {
+    "domain": "neovim-glsl",
+    "version": "0.3",
+    "commit": "ddb626c",
+    "sat": "green",
+    "monotonicity": "green"
+  },
+  "evaluation_candidate": true,
+  "canonical_architecture": false,
+  "editor_basis": "neovim",
+  "target_shading_language": "glsl",
+  "first_stage": {
+    "platform": "mac",
+    "candidate": "candidate-embed-opengl",
+    "completion_criterion": "awaiting_human_gate"
+  },
+  "aish_integration": {
+    "counterpart": "ai_native_shell",
+    "commenced": true,
+    "repository": "minamorl/ai-native-shell",
+    "repository_visibility_at_commencement": "private",
+    "surface": [
+      "discover",
+      "ai_status",
+      "typed_object_inspect"
+    ],
+    "effect": "read_only",
+    "execution_authority": "none",
+    "run_or_exec_exposed": false,
+    "mechanism": "replaceable_evaluation_choice_not_canonical"
+  },
+  "platform_route": {
+    "direction": "multi_target",
+    "single_target_only": false,
+    "next_evaluation": "zeno",
+    "zeno_adoption": "awaiting_human_gate",
+    "exhaustive_target_catalog": "unresolved",
+    "feature_parity": "unresolved"
+  },
+  "root_ui_integration": {
+    "status": "evaluation_hypothesis",
+    "adoption": "awaiting_human_gate",
+    "visual_primitive_owner": "unresolved",
+    "text_editing_host_port_owner": "unresolved",
+    "canonical_dependency": false
+  },
+  "selected_pin_ids": [
+    "neovim_glsl.editor_basis",
+    "neovim_glsl.no_editor_substitution",
+    "neovim_glsl.target_shading_language",
+    "neovim_glsl.aish_integration",
+    "neovim_glsl.aish_integration_counterpart",
+    "neovim_glsl.aish_integration_commencement",
+    "neovim_glsl.aish_repository_private",
+    "neovim_glsl.first_stage_platform",
+    "neovim_glsl.zeno_evaluation_after_mac",
+    "neovim_glsl.zeno_evaluation_observable",
+    "neovim_glsl.multi_target_portability_direction",
+    "neovim_glsl.not_single_target_only",
+    "neovim_glsl.root_ui_integration_evaluation"
+  ]
+}

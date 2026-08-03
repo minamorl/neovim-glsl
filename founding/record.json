@@ -7,10 +7,11 @@
   "source_of_truth": {
     "system": "spec-system",
     "domain_spec": "pins/domains/neovim-glsl.spec",
-    "domain_spec_version": "0.1",
     "imported_pin_file": "pins/house_style.pin",
     "imported_pin_version": "1.8",
-    "rule": "spec が真実。食い違ったらこの record を直す。pin を緩めない。"
+    "rule": "spec が真実。食い違ったらこの record を直す。pin を結衣の判断で緩めない — 緩和は人間ゲートの回答としてのみ起こり、起きたら superseded_at_v0_5 / superseded_at_v0_6 / superseded_at_v0_7 に理由付きで記録する。",
+    "domain_spec_version_at_founding": "0.1",
+    "domain_spec_version_current": "0.7"
   },
   "friction": {
     "date": "2026-07-25",
@@ -329,5 +330,374 @@
       "neovim_glsl.post_establishment_scope",
       "neovim_glsl.downstream_operation_model"
     ]
+  },
+  "superseded_at_v0_5": {
+    "gate": "neovim_glsl.neovim_basis_decision",
+    "answer": "relax",
+    "answered_at": "2026-08-02",
+    "answered_by": "human",
+    "friction": "手書きメモ IMG_6539「ベースにしたら neovim でなくてもいいが、資産として使うべきな気がする」",
+    "note": "この record の frozen_pins / properties / witnesses は 2026-07-24 の設立時点の凍結内容であり、履歴としてそのまま残す。下に挙げたものは v0.5 で退役したので、現在の spec には存在しない。",
+    "retired": [
+      {
+        "id": "neovim_glsl.editor_basis",
+        "was": "require neovim_glsl.editor.basis = neovim",
+        "now": "free neovim_glsl.editor_basis (設計判断へ降格)"
+      },
+      {
+        "id": "neovim_glsl.no_editor_substitution",
+        "was": "forbid neovim_glsl.editor.substitution = allowed",
+        "now": "退役。ただし emacs_family への置換は emacs_alternative_rejected で依然 forbid"
+      },
+      {
+        "id": "neovim_glsl.editor_basis_witness",
+        "kind": "property",
+        "was": "forall stage . editor_basis(stage) == neovim",
+        "now": "退役 (witness していた pin が無い)"
+      },
+      {
+        "id": "neovim_glsl.no_substitution_witness",
+        "kind": "property",
+        "was": "forall candidate . editor_substitution(candidate) == rejected",
+        "now": "退役 (witness していた pin が無い)"
+      },
+      {
+        "id": "neovim_glsl.editor_retained",
+        "kind": "example",
+        "was": "editor_basis_choice => neovim",
+        "now": "退役"
+      }
+    ],
+    "added": [
+      {
+        "id": "neovim_glsl.neovim_asset_not_discarded",
+        "statement": "forbid neovim_glsl.neovim_assets.disposition = discarded",
+        "why": "「資産として使うべき」の最弱の観測可能形。程度は pin しないが全面破棄は選べない。"
+      },
+      {
+        "id": "neovim_glsl.neovim_retention_mode",
+        "statement": "require neovim_glsl.neovim.retention_mode = editing_experience_preservation",
+        "why": "「NeoVim は離れない」を実装継続ではなく編集体験の保持で満たすと確定した。"
+      }
+    ],
+    "still_frozen": [
+      "neovim_glsl.emacs_alternative_rejected",
+      "neovim_glsl.project_established",
+      "neovim_glsl.project_subject",
+      "neovim_glsl.establishment_order",
+      "neovim_glsl.target_shading_language"
+    ]
+  },
+  "superseded_at_v0_6": {
+    "gate": "neovim_glsl.basis_selection",
+    "answer": "own_host_protocol",
+    "answered_at": "2026-08-02",
+    "answered_by": "human",
+    "friction": "basis が free になった上で、実際にどの host を採るか (Neovim embed 継続 / 自前 host + Neovim protocol / 完全自前)",
+    "note": "v0.5 で architecture_decision と同時に決めるとされていたため、この単一回答で architecture quarantine と architecture_decision も閉じた。frozen_pins は 2026-07-24 の設立時点の凍結内容であり、履歴としてそのまま残す。",
+    "retired": [
+      {
+        "id": "neovim_glsl.editor_basis",
+        "was": "free neovim_glsl.editor_basis",
+        "now": "pin neovim_glsl.editor_basis_own_host (require neovim_glsl.editor.basis = own_host)"
+      },
+      {
+        "id": "neovim_glsl.architecture",
+        "kind": "quarantine",
+        "was": "未確定 — 解空間が固まっておらず正統な要求が未成立。",
+        "now": "RETIRED@0.6 (解空間が固まった)"
+      },
+      {
+        "id": "neovim_glsl.architecture_decision",
+        "kind": "open_question",
+        "was": "実現手段(embed + external UI protocol / 新規 host / 再実装 / fork)のどれを採るか。",
+        "now": "RESOLVED@0.6 by own_host_protocol"
+      },
+      {
+        "id": "neovim_glsl.basis_selection",
+        "kind": "open_question",
+        "was": "basis が free になった上で、実際にどの host を採るか。",
+        "now": "RESOLVED@0.6 by own_host_protocol"
+      },
+      {
+        "id": "neovim_glsl.basis_free",
+        "kind": "example",
+        "was": "non_neovim_host_proposal => not_rejected_by_basis_pin",
+        "now": "RETIRED@0.6 (editor_basis is pinned to own_host)"
+      }
+    ],
+    "added": [
+      {
+        "id": "neovim_glsl.editor_basis_own_host",
+        "statement": "require neovim_glsl.editor.basis = own_host"
+      },
+      {
+        "id": "neovim_glsl.architecture_choice",
+        "statement": "require neovim_glsl.architecture = own_host_speaking_neovim_protocol"
+      },
+      {
+        "id": "neovim_glsl.host_protocol_dialect",
+        "statement": "require neovim_glsl.host.protocol.dialect = neovim"
+      },
+      {
+        "id": "neovim_glsl.asset_reuse_includes_protocol",
+        "statement": "require neovim_glsl.neovim_assets.reuse_scope includes protocol"
+      },
+      {
+        "id": "neovim_glsl.host_protocol_witness",
+        "kind": "property",
+        "statement": "forall session . host_protocol_dialect(session) == neovim"
+      },
+      {
+        "id": "neovim_glsl.basis_witness",
+        "kind": "property",
+        "statement": "forall stage . editor_basis(stage) == own_host"
+      },
+      {
+        "id": "neovim_glsl.host_choice",
+        "kind": "example",
+        "statement": "editor_host_selection => own_host_speaking_neovim_protocol"
+      },
+      {
+        "id": "neovim_glsl.embed_not_selected",
+        "kind": "example",
+        "statement": "neovim_core_process_as_editor_basis => not_selected"
+      },
+      {
+        "id": "neovim_glsl.full_scratch_not_selected",
+        "kind": "example",
+        "statement": "host_discarding_neovim_protocol => rejected"
+      },
+      {
+        "id": "neovim_glsl.protocol_asset",
+        "kind": "example",
+        "statement": "neovim_protocol_as_reused_asset => accepted"
+      }
+    ],
+    "new_free": [
+      "neovim_glsl.host_protocol_transport",
+      "neovim_glsl.host_editing_core_design",
+      "neovim_glsl.lua_runtime_presence"
+    ],
+    "still_frozen": [
+      "neovim_glsl.emacs_alternative_rejected",
+      "neovim_glsl.project_established",
+      "neovim_glsl.project_subject",
+      "neovim_glsl.establishment_order",
+      "neovim_glsl.target_shading_language"
+    ]
+  },
+  "superseded_at_v0_7": {
+    "gate": "neovim_glsl.telescope_realization_decision",
+    "answer": "telescope である必然性は特にない。もっと glsl の利点を活かして外部に出してもいい",
+    "answered_at": "2026-08-03",
+    "answered_by": "human",
+    "friction": "v0.6 が提示した「telescope を plugin として動かすか、同じ操作体験の自前 picker として実現するか」の二択に対し、御主人様はどちらでもなく前提そのものを外した。",
+    "note": "前半は緩和要求として硬い。後半「外部に出してもいい」は許可であって要求ではないので pin していない。frozen_pins は 2026-07-24 設立時点の凍結内容であり、履歴としてそのまま残す。",
+    "retired": [
+      {
+        "id": "neovim_glsl.file_navigation_mechanism",
+        "was": "require neovim_glsl.file_navigation.mechanism = telescope",
+        "now": "pin neovim_glsl.file_navigation_required (require neovim_glsl.file_navigation = required)"
+      },
+      {
+        "id": "neovim_glsl.navigation",
+        "kind": "example",
+        "was": "file_move_operation => telescope",
+        "now": "RETIRED@0.7 (the mechanism it witnessed is gone)"
+      },
+      {
+        "id": "neovim_glsl.telescope_customization",
+        "kind": "free",
+        "was": "telescope の custom picker / sorter / action の設計。",
+        "now": "free neovim_glsl.navigation_customization"
+      },
+      {
+        "id": "neovim_glsl.telescope_under_own_host",
+        "kind": "quarantine",
+        "was": "未確定 — telescope が plugin そのものか操作体験かが一意でない。",
+        "now": "RETIRED@0.7 (the ambiguity vanished with the naming)"
+      },
+      {
+        "id": "neovim_glsl.telescope_realization_decision",
+        "kind": "open_question",
+        "was": "telescope を plugin として動かすか、自前 picker として実現するか。",
+        "now": "RESOLVED@0.7 as neither"
+      }
+    ],
+    "added": [
+      {
+        "id": "neovim_glsl.file_navigation_required",
+        "statement": "require neovim_glsl.file_navigation = required"
+      },
+      {
+        "id": "neovim_glsl.navigation_presence_witness",
+        "kind": "property",
+        "statement": "forall surface . navigation_mechanism_present(surface) == true"
+      },
+      {
+        "id": "neovim_glsl.non_telescope_navigation",
+        "kind": "example",
+        "statement": "non_telescope_navigation_proposal => not_rejected_by_navigation_pin"
+      },
+      {
+        "id": "neovim_glsl.telescope_still_allowed",
+        "kind": "example",
+        "statement": "telescope_as_navigation_mechanism => not_rejected"
+      },
+      {
+        "id": "neovim_glsl.external_glsl_picker",
+        "kind": "example",
+        "statement": "picker_rendered_outside_grid_via_glsl => not_rejected"
+      },
+      {
+        "id": "neovim_glsl.navigation_removal",
+        "kind": "example",
+        "statement": "proposal_with_no_navigation_mechanism => rejected"
+      }
+    ],
+    "opened": [
+      "neovim_glsl.external_surface_boundary (quarantine)",
+      "neovim_glsl.glsl_advantage_criterion (quarantine)",
+      "neovim_glsl.navigation_object_scope (quarantine)",
+      "neovim_glsl.navigation_mechanism_selection (open_question)",
+      "neovim_glsl.navigation_surface_decision (open_question)"
+    ]
+  },
+  "superseded_at_v0_8": {
+    "gate": "neovim_glsl.navigation_surface_decision",
+    "answer": "glsl_overlay",
+    "answered_at": "2026-08-03",
+    "answered_by": "human",
+    "friction": "v0.7 が「面は grid の内側の TUI か、grid 外の GLSL surface か、別 OS window か、別 process か」の四択を提示し、二番目が選ばれた。",
+    "note": "面の居場所だけが決まった。座標系・幾何・合成方法・state の所在・入力経路は未決のまま。grid の外は Neovim が描けない領域なので、描画主体が host であることは回答の含意として硬く取れる。",
+    "retired": [
+      {
+        "id": "neovim_glsl.navigation_ui_locus",
+        "kind": "free",
+        "was": "navigation の面をどこへ描くか(grid 内 / grid 外 / 別 window / 別 process)。",
+        "now": "pin neovim_glsl.navigation_locus_choice (require navigation.ui_locus = glsl_surface_over_grid)"
+      },
+      {
+        "id": "neovim_glsl.external_surface_boundary",
+        "kind": "quarantine",
+        "was": "曖昧 — 「外部に出す」がどの境界を指すか(grid の外 / process の外 / 別 window / 別製品)。",
+        "now": "RETIRED@0.8 (the boundary the question asked about is the answer)"
+      },
+      {
+        "id": "neovim_glsl.navigation_surface_decision",
+        "kind": "open_question",
+        "was": "picker の面を grid の中に描くか、GLSL surface として外に出すか、別 window か、別 process か。",
+        "now": "RESOLVED@0.8 as glsl_surface_over_grid"
+      }
+    ],
+    "added": [
+      {
+        "id": "neovim_glsl.navigation_locus_choice",
+        "statement": "require neovim_glsl.navigation.ui_locus = glsl_surface_over_grid"
+      },
+      {
+        "id": "neovim_glsl.navigation_not_in_grid",
+        "statement": "forbid neovim_glsl.navigation.ui_locus = terminal_grid"
+      },
+      {
+        "id": "neovim_glsl.navigation_not_separate_window",
+        "statement": "forbid neovim_glsl.navigation.ui_locus = separate_os_window"
+      },
+      {
+        "id": "neovim_glsl.navigation_not_separate_process",
+        "statement": "forbid neovim_glsl.navigation.ui_locus = separate_process"
+      },
+      {
+        "id": "neovim_glsl.navigation_surface_renderer",
+        "statement": "require neovim_glsl.navigation.surface.renderer = host",
+        "note": "回答の含意。grid の外は Neovim が addressing できない。"
+      },
+      {
+        "id": "neovim_glsl.navigation_locus_witness",
+        "kind": "property",
+        "statement": "forall picker_frame . navigation_surface_locus(picker_frame) == glsl_surface_over_grid"
+      },
+      {
+        "id": "neovim_glsl.navigation_renderer_witness",
+        "kind": "property",
+        "statement": "forall picker_frame . navigation_surface_renderer(picker_frame) == host"
+      }
+    ],
+    "witnessed_at": {
+      "locus": "evaluation/free-surface/out/locus.json",
+      "implementation": "evaluation/candidate-embed-opengl/src/surface_locus.rs",
+      "check": "evaluation/free-surface/verify.py reads the PNG back and compares it with the locus report",
+      "measured": "36366 vertices after the grid pass, 39090 after the surface pass: the same vertex buffer, which is how same-window/same-process is observable rather than asserted"
+    }
+  },
+  "gate_returned_unknown_at_v0_9": {
+    "gate": "neovim_glsl.navigation_state_owner",
+    "answer": "わからない",
+    "answered_at": "2026-08-03",
+    "answered_by": "human",
+    "friction": "v0.8 が「picker の state(query・候補列・選択位置)を host が持つか、Neovim 側の plugin が持って host は描くだけか」の二択を提示し、どちらも選ばれなかった。",
+    "record_shape_note": "superseded_at_* ではない。何も supersede されていないため。不明は選択ではないので pin は一つも動かず、要求は 80 のまま。superseded として記録すると、要求が変わったように誤って読める。",
+    "retired": [],
+    "added": [
+      {
+        "id": "neovim_glsl.unknown_gate_adds_no_requirement",
+        "kind": "example",
+        "statement": "gate_answer_unknown_recorded_without_new_pin => accepted"
+      },
+      {
+        "id": "neovim_glsl.unknown_gate_not_read_as_free",
+        "kind": "example",
+        "statement": "gate_answer_unknown_relabelled_as_free_axis => rejected"
+      },
+      {
+        "id": "neovim_glsl.unknown_gate_not_defaulted",
+        "kind": "example",
+        "statement": "picker_state_owner_pinned_without_a_human_choice => rejected"
+      },
+      {
+        "id": "neovim_glsl.measurement_may_inform_without_deciding",
+        "kind": "example",
+        "statement": "state_ownership_measured_while_question_stays_open => accepted"
+      }
+    ],
+    "deliberately_not_done": [
+      "「わからない」を「どちらでもよい」と読み替えて free へ降格させなかった。free は「どちらを選んでも spec を満たす」という強い主張であり、述べられていない。",
+      "host 側 state を暫定の既定として pin しなかった。未回答を回答済みに見せる行為である。",
+      "同じ問いを訊き直さなかった。同じ答えが返るだけで進捗にならない。",
+      "観測結果を pin へ自動昇格させなかった。測定はどちらが安いかを言えるが、どちらを要求するかは言わない。"
+    ],
+    "state_change": {
+      "id": "neovim_glsl.navigation_state_owner",
+      "from": "awaiting_human_gate",
+      "to": "awaiting_observation",
+      "marker": "# AWAITING_OBSERVATION at v0.9 in the spec, read by tools/sync_undecided.py"
+    },
+    "observed_at": {
+      "directory": "evaluation/state-ownership",
+      "host_owned": "evaluation/candidate-embed-opengl/src/picker_state.rs, run with --picker-script",
+      "plugin_owned": "evaluation/state-ownership/probe.py against the owner's real telescope on Neovim 0.11.5",
+      "corpus": "79 candidates, read out of the opened picker at an empty query so both halves filter what telescope actually offered",
+      "crossings_per_keystroke": {
+        "host_owned": 0,
+        "plugin_owned": 2
+      },
+      "agreed_candidate_counts": [
+        69,
+        69,
+        69,
+        69,
+        69,
+        51,
+        69
+      ],
+      "checked_not_reported": "compare.py fails if the two halves disagree on what matches, if either claims to decide something, or if the selection never moved",
+      "not_handed_over_by_plugin": [
+        "match positions",
+        "scores",
+        "geometry"
+      ],
+      "recorded_in": "the repository itself, not a worktree: the first run was taken in nvglsl-wt/v09-state and its recorded paths died with it"
+    }
   }
 }
