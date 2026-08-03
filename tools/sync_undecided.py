@@ -87,6 +87,27 @@ def closures(text):
     return dict(sorted(found.items(), key=lambda kv: [int(p) for p in kv[0].split(".")], reverse=True))
 
 
+def collect_awaiting_observation(text):
+    """Questions that were put to the human gate and came back unknown.
+
+    A marker is ``# AWAITING_OBSERVATION at vX.Y[ (note)]: <name>``. Such a
+    question is still open, so unlike the closure markers this one is carried in
+    the spec-mirror as well and the section works from either input.
+    """
+    found = {}
+    pattern = re.compile(
+        r"^# AWAITING_OBSERVATION at v([0-9.]+)(?: \(([^)]*)\))?:[ \t]*(.+)$"
+    )
+    for line in text.split("\n"):
+        m = pattern.match(line)
+        if m:
+            ver, note, name = m.groups()
+            found[name.strip()] = (ver, (note or "").strip())
+    return found
+
+
+awaiting = collect_awaiting_observation(spec)
+
 head = """# UNDECIDED — 決まっていない事項
 
 `pins/domains/neovim-glsl.spec@{v}` の `quarantine` と `open_question` を、spec の文言のまま
@@ -108,8 +129,22 @@ head = """# UNDECIDED — 決まっていない事項
 """.format(v=version, source_note=source_note, nq=len(quarantines))
 
 body = "".join("- `{}`: {}\n".format(n, d) for n, d in quarantines)
-body += "\n## open_question — 人間ゲート待ち ({} 件)\n\n決めるべきだが情報がない箇所。\n\n".format(len(questions))
-body += "".join("- `{}`: {}\n".format(n, d) for n, d in questions)
+pending = [q for q in questions if q[0] not in awaiting]
+observing = [q for q in questions if q[0] in awaiting]
+
+body += "\n## open_question — 人間ゲート待ち ({} 件)\n\n決めるべきだが情報がない箇所。\n\n".format(len(pending))
+body += "".join("- `{}`: {}\n".format(n, d) for n, d in pending)
+
+if observing:
+    body += (
+        "\n## open_question — 観測待ち ({} 件)\n\n"
+        "人間ゲートに問うたが回答が「不明」だったもの。**閉じていない。** "
+        "訊き直すのではなく、何を観測すれば決まるかが spec 側に書かれている。\n\n"
+    ).format(len(observing))
+    for name, desc in observing:
+        ver, note = awaiting[name]
+        suffix = " (v{}{})".format(ver, ": " + note if note else "")
+        body += "- `{}`{}: {}\n".format(name, suffix, desc)
 
 tail = """
 ## 未決のまま残した結果

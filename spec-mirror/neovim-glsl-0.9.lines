@@ -1,18 +1,19 @@
 # Transcription mirror for neovim-glsl.spec.
 #
-# @meta version: 0.8
+# @meta version: 0.9
 #
 # This file is not the source of truth. The authoritative ledger is the
 # external spec-system file pins/domains/neovim-glsl.spec. This mirror contains
 # only the live quarantine / open_question / free lines needed to regenerate
 # UNDECIDED.md and DESIGN-SPACE.md from a worktree that cannot read
-# spec-system. Retired lines are deliberately absent: the mirror carries what is
-# still open, not the history of what closed. If this file and the spec
-# disagree, the spec wins and this file is wrong.
+# spec-system, plus the AWAITING_OBSERVATION markers, which describe questions
+# that are still open. Retired and resolved lines are deliberately absent: the
+# mirror carries what is still open, not the history of what closed. If this
+# file and the spec disagree, the spec wins and this file is wrong.
 #
 # Regenerate the documents with:
-#   python3 tools/sync_undecided.py    spec-mirror/neovim-glsl-0.8.lines
-#   python3 tools/sync_design_space.py spec-mirror/neovim-glsl-0.8.lines
+#   python3 tools/sync_undecided.py    spec-mirror/neovim-glsl-0.9.lines
+#   python3 tools/sync_design_space.py spec-mirror/neovim-glsl-0.9.lines
 
 quarantine neovim_glsl.glsl_scope: 曖昧 — 「NeoVim を GLSL にする」の GLSL 化対象が、表示・UI 描画層だけなのか、Neovim の編集エンジン(buffer・編集意味論)自体まで含むのかは、指示文だけでは解釈が 2 通り以上あり一意に決まらない。
 quarantine neovim_glsl.full_replacement_wish: 曖昧 — 先行発話「neovimをGLSLでフル置換したい」の「フル置換」が何の全体を指すかが一意でなく、かつ「したい」は願望である。今回の指示文はこれを要求として再確定していないため、置換範囲を pin 化しない。
@@ -113,5 +114,6 @@ quarantine neovim_glsl.navigation_mechanism_residue: 曖昧 — 面が host 描�
 free neovim_glsl.navigation_surface_addressing: 面の座標系(pixel でそのまま置くか、cell に揃えるか)。grid を出たことは pixel 配置を可能にするが要求しない。
 free neovim_glsl.navigation_surface_geometry: 面の位置・大きさ・段組・行送り・余白・透明度・装飾・animation。
 free neovim_glsl.navigation_surface_compositing: 面を grid と同じ vertex 列 / draw call に載せるか、別 pass として描くか。同じ window に重なることだけが要求。
-open_question neovim_glsl.navigation_state_owner: picker の state(query・候補列・選択位置)を host が持つか、Neovim 側の plugin が持って host は描くだけか。面の locus は決まったが state の所在は決まっていない。
-open_question neovim_glsl.navigation_input_routing: picker が開いている間の入力を host が直接受けるか、Neovim へ送って戻すか。pin keymap_preservation(keymap.baseline = current_keymap)との整合をどちらで担保するかも含む。
+open_question neovim_glsl.navigation_state_owner: picker の state(query・候補列・選択位置)を host が持つか、Neovim 側の plugin が持って host は描くだけか。面の locus は決まったが state の所在は決まっていない。2026-08-03 の人間ゲートは「わからない」を返した(@meta derived_from_v0_9)ので、この問いは人間の入力待ちではなく観測待ちである。決め方: 両案を実際に動かし、(a) 一打鍵あたりのstate 更新から面の再構築までの経路の実測、(b) pin keymap_preservation を満たすためにどちらが何を再実装する必要があるかの列挙、(c) plugin 側 state を採った場合に host が行を取得するために必要な protocol 面の実測、の三点を突き合わせる。観測はevaluation/state-ownership に置く。
+open_question neovim_glsl.navigation_input_routing: picker が開いている間の入力を host が直接受けるか、Neovim へ送って戻すか。pin keymap_preservation(keymap.baseline = current_keymap)との整合をどちらで担保するかも含む。state の所在と独立ではないが同一でもない(host が state を持ちながら入力を Neovim 経由で受ける形も、その逆も構成可能)ため、v0.9 でも別の問いとして残す。
+# AWAITING_OBSERVATION at v0.9 (gate answered 「わからない」): neovim_glsl.navigation_state_owner

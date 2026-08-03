@@ -11,6 +11,7 @@ mod grid;
 mod nvim;
 mod panel;
 mod perf;
+mod picker_state;
 mod platform;
 mod root_ui;
 mod screen;
@@ -67,6 +68,17 @@ struct Args {
     perf_warmup: u64,
     perf_seed: u64,
     perf_frame_budget_ms: Option<f64>,
+    /// A scripted picker session to run against host-owned state. `Some`
+    /// selects a headless measurement for
+    /// `open_question neovim_glsl.navigation_state_owner`, which v0.9 left open
+    /// after the human gate answered 「わからない」. It measures one arrangement;
+    /// it chooses neither.
+    picker_script: Option<String>,
+    /// Candidates to filter, one per line. Absent means a small built-in corpus,
+    /// which is only useful for a smoke run.
+    picker_corpus: Option<PathBuf>,
+    picker_report: Option<PathBuf>,
+    picker_visible_rows: usize,
     nvim_args: Vec<String>,
 }
 
@@ -103,6 +115,10 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         perf_warmup: 0,
         perf_seed: 1,
         perf_frame_budget_ms: None,
+        picker_script: None,
+        picker_corpus: None,
+        picker_report: None,
+        picker_visible_rows: 12,
         nvim_args: Vec::new(),
     };
     let mut i = 0;
@@ -155,6 +171,17 @@ fn parse_args_from(argv: Vec<String>) -> Args {
             }
             // Injects a composition string so the preedit rendering can be checked
             // without a human driving a real IME.
+            "--picker-script" => { a.picker_script = argv.get(i + 1).cloned(); i += 2 }
+            "--picker-corpus" => { a.picker_corpus = argv.get(i + 1).map(PathBuf::from); i += 2 }
+            "--picker-report" => { a.picker_report = argv.get(i + 1).map(PathBuf::from); i += 2 }
+            "--picker-visible-rows" => {
+                a.picker_visible_rows = argv
+                    .get(i + 1)
+                    .and_then(|v| v.parse().ok())
+                    .filter(|n| *n > 0)
+                    .unwrap_or(12);
+                i += 2
+            }
             "--preedit" => { a.preedit = argv.get(i + 1).cloned(); i += 2 }
             "--no-multigrid" => { a.ui_options.ext_multigrid = false; i += 1 }
             // Hands the popupmenu, command line and messages back to Neovim's
@@ -984,6 +1011,31 @@ fn write_png(path: &str, rgba_bottom_up: &[u8], w: u32, h: u32) {
     enc.write_header().unwrap().write_image_data(&flipped).unwrap();
 }
 
+/// Read the candidate list. Blank lines are dropped; nothing else is
+/// interpreted, so a path with spaces or non-ASCII survives intact.
+///
+/// The built-in fallback is deliberately tiny. A default corpus large enough to
+/// look like a measurement would invite reading a smoke run as one.
+fn load_picker_corpus(path: Option<&std::path::Path>) -> std::io::Result<Vec<String>> {
+    let Some(path) = path else {
+        return Ok(vec![
+            "alpha.glsl".to_string(),
+            "beta.glsl".to_string(),
+            "shader/water.vert".to_string(),
+            "shader/lighting.frag".to_string(),
+            "moving/move_me.glsl".to_string(),
+            "README.md".to_string(),
+        ]);
+    };
+    let text = std::fs::read_to_string(path)?;
+    Ok(text
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 fn main() {
     let args = parse_args();
 
@@ -1007,6 +1059,30 @@ fn main() {
         return;
     }
 
+    // Host-owned picker state, measured without a window, a GL context or a
+    // Neovim process — the same discipline as the perf benchmark above.
+    if let Some(script) = args.picker_script.as_deref() {
+        let corpus = match load_picker_corpus(args.picker_corpus.as_deref()) {
+            Ok(corpus) => corpus,
+            Err(error) => {
+                eprintln!("picker corpus read failed: {error}");
+                std::process::exit(1);
+            }
+        };
+        let report = picker_state::bench(corpus, script, args.picker_visible_rows);
+        let json = picker_state::to_json(&report);
+        match args.picker_report.as_deref() {
+            Some(path) => {
+                if let Err(error) = std::fs::write(path, json) {
+                    eprintln!("picker report write failed: {error}");
+                    std::process::exit(1);
+                }
+            }
+            None => print!("{json}"),
+        }
+        return;
+    }
+
     let el = EventLoop::new().expect("event loop");
     el.set_control_flow(ControlFlow::Wait);
     let mut app = App::new(args);
@@ -1019,6 +1095,42 @@ mod tests {
 
     fn args_of(argv: &[&str]) -> Args {
         parse_args_from(argv.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn the_picker_measurement_is_off_unless_it_is_asked_for() {
+        let a = args_of(&[]);
+        assert!(a.picker_script.is_none());
+        assert!(a.picker_corpus.is_none());
+        assert!(a.picker_report.is_none());
+        assert_eq!(a.picker_visible_rows, 12);
+    }
+
+    #[test]
+    fn the_picker_script_and_its_corpus_are_taken_as_given() {
+        let a = args_of(&[
+            "--picker-script",
+            "al<c-n>",
+            "--picker-corpus",
+            "/tmp/corpus.txt",
+            "--picker-visible-rows",
+            "30",
+        ]);
+        assert_eq!(a.picker_script.as_deref(), Some("al<c-n>"));
+        assert_eq!(a.picker_corpus.as_deref(), Some(std::path::Path::new("/tmp/corpus.txt")));
+        assert_eq!(a.picker_visible_rows, 30);
+    }
+
+    #[test]
+    fn a_nonsense_visible_row_count_falls_back_rather_than_dividing_by_zero() {
+        assert_eq!(args_of(&["--picker-visible-rows", "0"]).picker_visible_rows, 12);
+        assert_eq!(args_of(&["--picker-visible-rows", "nope"]).picker_visible_rows, 12);
+    }
+
+    #[test]
+    fn the_builtin_corpus_is_small_enough_not_to_look_like_a_measurement() {
+        let corpus = load_picker_corpus(None).expect("built-in corpus");
+        assert!(corpus.len() < 10, "{} entries", corpus.len());
     }
 
     #[test]

@@ -1,9 +1,9 @@
 # UNDECIDED — 決まっていない事項
 
-`pins/domains/neovim-glsl.spec@0.8` の `quarantine` と `open_question` を、spec の文言のまま
+`pins/domains/neovim-glsl.spec@0.9` の `quarantine` と `open_question` を、spec の文言のまま
 機械転記したもの。**ここにあるものは決まっていない。** 実装で埋めてはならない。
 
-入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.8.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
+入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.9.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
 
 規律:
 
@@ -44,7 +44,7 @@
 - `neovim_glsl.navigation_object_scope`: 未確定 — navigation の対象が file なのか markdown note なのか両方なのかが未固定。v0.4 で主 object が markdown note へ移り、user_facing.file_awareness = not_required も pin された以上、「ファイルの移動」を note の移動として読む余地が生じている。v0.4 の逐語は file だが、v0.7 で機構名が外れたことで対象側の二義性が露出した。
 - `neovim_glsl.navigation_mechanism_residue`: 曖昧 — 面が host 描画に確定したことで、v0.7 が候補に残した telescope は「行を供給する側」としてしか残れない。plugin が自分の floating window を picker の面として描く形は pin navigation_locus_choice と両立しないが、同じ plugin の finder / sorter を headless に使い host 描画の面へ行を供給する形は却下されない。どちらを指して「telescope を使う」と言うかが未固定。
 
-## open_question — 人間ゲート待ち (31 件)
+## open_question — 人間ゲート待ち (30 件)
 
 決めるべきだが情報がない箇所。
 
@@ -77,8 +77,13 @@
 - `neovim_glsl.protocol_version_baseline`: どの Neovim version の protocol を baseline とし、上流の変更をどう追従するか(固定 pin / 追従 / 自前拡張の許容範囲)。
 - `neovim_glsl.embed_candidate_disposition`: 実測済み embed candidate を UI client 資産として温存するか、廃棄するか。温存するなら host 差し替えの seam をどこに置くか。
 - `neovim_glsl.navigation_mechanism_selection`: navigation の機構として実際に何を採るか。telescope を選び直すこともできる(必然性が無いだけで禁止ではない)。
-- `neovim_glsl.navigation_state_owner`: picker の state(query・候補列・選択位置)を host が持つか、Neovim 側の plugin が持って host は描くだけか。面の locus は決まったが state の所在は決まっていない。
-- `neovim_glsl.navigation_input_routing`: picker が開いている間の入力を host が直接受けるか、Neovim へ送って戻すか。pin keymap_preservation(keymap.baseline = current_keymap)との整合をどちらで担保するかも含む。
+- `neovim_glsl.navigation_input_routing`: picker が開いている間の入力を host が直接受けるか、Neovim へ送って戻すか。pin keymap_preservation(keymap.baseline = current_keymap)との整合をどちらで担保するかも含む。state の所在と独立ではないが同一でもない(host が state を持ちながら入力を Neovim 経由で受ける形も、その逆も構成可能)ため、v0.9 でも別の問いとして残す。
+
+## open_question — 観測待ち (1 件)
+
+人間ゲートに問うたが回答が「不明」だったもの。**閉じていない。** 訊き直すのではなく、何を観測すれば決まるかが spec 側に書かれている。
+
+- `neovim_glsl.navigation_state_owner` (v0.9: gate answered 「わからない」): picker の state(query・候補列・選択位置)を host が持つか、Neovim 側の plugin が持って host は描くだけか。面の locus は決まったが state の所在は決まっていない。2026-08-03 の人間ゲートは「わからない」を返した(@meta derived_from_v0_9)ので、この問いは人間の入力待ちではなく観測待ちである。決め方: 両案を実際に動かし、(a) 一打鍵あたりのstate 更新から面の再構築までの経路の実測、(b) pin keymap_preservation を満たすためにどちらが何を再実装する必要があるかの列挙、(c) plugin 側 state を採った場合に host が行を取得するために必要な protocol 面の実測、の三点を突き合わせる。観測はevaluation/state-ownership に置く。
 
 ## 未決のまま残した結果
 

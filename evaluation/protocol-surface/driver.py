@@ -383,9 +383,9 @@ def main():
         nvim.close()
 
 
-def install_and_load(nvim, scratch, plugins):
+def install_and_load(nvim, scratch, plugins, record_api=True):
     code = r'''
-local recorder_path, scratch_dir, plenary, telescope, file_browser, devicons = ...
+local recorder_path, scratch_dir, plenary, telescope, file_browser, devicons, record_api = ...
 local function prepend(path)
   vim.opt.runtimepath:prepend(path)
   vim.opt.packpath:prepend(path)
@@ -396,9 +396,11 @@ prepend(file_browser)
 prepend(telescope)
 prepend(plenary)
 
-local recorder = dofile(recorder_path)
-recorder.install()
-_G.__protocol_surface_recorder = recorder
+if record_api then
+  local recorder = dofile(recorder_path)
+  recorder.install()
+  _G.__protocol_surface_recorder = recorder
+end
 vim.cmd("runtime plugin/telescope.lua")
 
 vim.g.mapleader = " "
@@ -435,6 +437,7 @@ return true
             plugins["telescope.nvim"],
             plugins["telescope-file-browser.nvim"],
             plugins["nvim-web-devicons"],
+            record_api,
         ],
     )
 

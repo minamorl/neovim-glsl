@@ -563,5 +563,140 @@
       "neovim_glsl.navigation_mechanism_selection (open_question)",
       "neovim_glsl.navigation_surface_decision (open_question)"
     ]
+  },
+  "superseded_at_v0_8": {
+    "gate": "neovim_glsl.navigation_surface_decision",
+    "answer": "glsl_overlay",
+    "answered_at": "2026-08-03",
+    "answered_by": "human",
+    "friction": "v0.7 が「面は grid の内側の TUI か、grid 外の GLSL surface か、別 OS window か、別 process か」の四択を提示し、二番目が選ばれた。",
+    "note": "面の居場所だけが決まった。座標系・幾何・合成方法・state の所在・入力経路は未決のまま。grid の外は Neovim が描けない領域なので、描画主体が host であることは回答の含意として硬く取れる。",
+    "retired": [
+      {
+        "id": "neovim_glsl.navigation_ui_locus",
+        "kind": "free",
+        "was": "navigation の面をどこへ描くか(grid 内 / grid 外 / 別 window / 別 process)。",
+        "now": "pin neovim_glsl.navigation_locus_choice (require navigation.ui_locus = glsl_surface_over_grid)"
+      },
+      {
+        "id": "neovim_glsl.external_surface_boundary",
+        "kind": "quarantine",
+        "was": "曖昧 — 「外部に出す」がどの境界を指すか(grid の外 / process の外 / 別 window / 別製品)。",
+        "now": "RETIRED@0.8 (the boundary the question asked about is the answer)"
+      },
+      {
+        "id": "neovim_glsl.navigation_surface_decision",
+        "kind": "open_question",
+        "was": "picker の面を grid の中に描くか、GLSL surface として外に出すか、別 window か、別 process か。",
+        "now": "RESOLVED@0.8 as glsl_surface_over_grid"
+      }
+    ],
+    "added": [
+      {
+        "id": "neovim_glsl.navigation_locus_choice",
+        "statement": "require neovim_glsl.navigation.ui_locus = glsl_surface_over_grid"
+      },
+      {
+        "id": "neovim_glsl.navigation_not_in_grid",
+        "statement": "forbid neovim_glsl.navigation.ui_locus = terminal_grid"
+      },
+      {
+        "id": "neovim_glsl.navigation_not_separate_window",
+        "statement": "forbid neovim_glsl.navigation.ui_locus = separate_os_window"
+      },
+      {
+        "id": "neovim_glsl.navigation_not_separate_process",
+        "statement": "forbid neovim_glsl.navigation.ui_locus = separate_process"
+      },
+      {
+        "id": "neovim_glsl.navigation_surface_renderer",
+        "statement": "require neovim_glsl.navigation.surface.renderer = host",
+        "note": "回答の含意。grid の外は Neovim が addressing できない。"
+      },
+      {
+        "id": "neovim_glsl.navigation_locus_witness",
+        "kind": "property",
+        "statement": "forall picker_frame . navigation_surface_locus(picker_frame) == glsl_surface_over_grid"
+      },
+      {
+        "id": "neovim_glsl.navigation_renderer_witness",
+        "kind": "property",
+        "statement": "forall picker_frame . navigation_surface_renderer(picker_frame) == host"
+      }
+    ],
+    "witnessed_at": {
+      "locus": "evaluation/free-surface/out/locus.json",
+      "implementation": "evaluation/candidate-embed-opengl/src/surface_locus.rs",
+      "check": "evaluation/free-surface/verify.py reads the PNG back and compares it with the locus report",
+      "measured": "36366 vertices after the grid pass, 39090 after the surface pass: the same vertex buffer, which is how same-window/same-process is observable rather than asserted"
+    }
+  },
+  "gate_returned_unknown_at_v0_9": {
+    "gate": "neovim_glsl.navigation_state_owner",
+    "answer": "わからない",
+    "answered_at": "2026-08-03",
+    "answered_by": "human",
+    "friction": "v0.8 が「picker の state(query・候補列・選択位置)を host が持つか、Neovim 側の plugin が持って host は描くだけか」の二択を提示し、どちらも選ばれなかった。",
+    "record_shape_note": "superseded_at_* ではない。何も supersede されていないため。不明は選択ではないので pin は一つも動かず、要求は 80 のまま。superseded として記録すると、要求が変わったように誤って読める。",
+    "retired": [],
+    "added": [
+      {
+        "id": "neovim_glsl.unknown_gate_adds_no_requirement",
+        "kind": "example",
+        "statement": "gate_answer_unknown_recorded_without_new_pin => accepted"
+      },
+      {
+        "id": "neovim_glsl.unknown_gate_not_read_as_free",
+        "kind": "example",
+        "statement": "gate_answer_unknown_relabelled_as_free_axis => rejected"
+      },
+      {
+        "id": "neovim_glsl.unknown_gate_not_defaulted",
+        "kind": "example",
+        "statement": "picker_state_owner_pinned_without_a_human_choice => rejected"
+      },
+      {
+        "id": "neovim_glsl.measurement_may_inform_without_deciding",
+        "kind": "example",
+        "statement": "state_ownership_measured_while_question_stays_open => accepted"
+      }
+    ],
+    "deliberately_not_done": [
+      "「わからない」を「どちらでもよい」と読み替えて free へ降格させなかった。free は「どちらを選んでも spec を満たす」という強い主張であり、述べられていない。",
+      "host 側 state を暫定の既定として pin しなかった。未回答を回答済みに見せる行為である。",
+      "同じ問いを訊き直さなかった。同じ答えが返るだけで進捗にならない。",
+      "観測結果を pin へ自動昇格させなかった。測定はどちらが安いかを言えるが、どちらを要求するかは言わない。"
+    ],
+    "state_change": {
+      "id": "neovim_glsl.navigation_state_owner",
+      "from": "awaiting_human_gate",
+      "to": "awaiting_observation",
+      "marker": "# AWAITING_OBSERVATION at v0.9 in the spec, read by tools/sync_undecided.py"
+    },
+    "observed_at": {
+      "directory": "evaluation/state-ownership",
+      "host_owned": "evaluation/candidate-embed-opengl/src/picker_state.rs, run with --picker-script",
+      "plugin_owned": "evaluation/state-ownership/probe.py against the owner's real telescope on Neovim 0.11.5",
+      "corpus": "81 candidates, read out of the opened picker at an empty query so both halves filter what telescope actually offered",
+      "crossings_per_keystroke": {
+        "host_owned": 0,
+        "plugin_owned": 2
+      },
+      "agreed_candidate_counts": [
+        71,
+        71,
+        71,
+        71,
+        71,
+        53,
+        71
+      ],
+      "checked_not_reported": "compare.py fails if the two halves disagree on what matches, if either claims to decide something, or if the selection never moved",
+      "not_handed_over_by_plugin": [
+        "match positions",
+        "scores",
+        "geometry"
+      ]
+    }
   }
 }

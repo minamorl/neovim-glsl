@@ -1,0 +1,148 @@
+{
+  "schema": "neovim-glsl.picker-state-plugin-owned/v1",
+  "arrangement": "plugin_owned_state",
+  "records_for": [
+    "open_question neovim_glsl.navigation_state_owner",
+    "open_question neovim_glsl.navigation_input_routing"
+  ],
+  "decides": "nothing; both questions remain open at spec v0.9",
+  "nvim_version_first_line": "NVIM v0.11.5",
+  "plugins": {
+    "plenary.nvim": "/Users/minamorl/.local/share/nvim/lazy/plenary.nvim",
+    "telescope.nvim": "/Users/minamorl/.local/share/nvim/lazy/telescope.nvim",
+    "telescope-file-browser.nvim": "/Users/minamorl/.local/share/nvim/lazy/telescope-file-browser.nvim",
+    "nvim-web-devicons": "/Users/minamorl/.local/share/nvim/lazy/nvim-web-devicons"
+  },
+  "tree": "/Users/minamorl/repos/nvglsl-wt/v09-state",
+  "tree_is_real_repository": true,
+  "corpus_entries": 81,
+  "corpus_source": "read from the opened picker at an empty query, so both halves filter exactly what telescope offered",
+  "corpus_written_to": "/Users/minamorl/repos/nvglsl-wt/v09-state/evaluation/state-ownership/out/corpus.txt",
+  "visible_rows": 12,
+  "script": "s<c-n><c-n><c-n><c-p>e<bs>",
+  "settle_seconds_per_keystroke": 0.35,
+  "process_boundaries_crossed_per_keystroke": 2,
+  "rpc_requests_per_keystroke": 2,
+  "keystrokes_observed_with_picker_open": 7,
+  "state_extract_ms": {
+    "count": 7,
+    "min": 0.3772,
+    "mean": 0.5939,
+    "p50": 0.5233,
+    "p90": 0.9701,
+    "p95": 0.9701,
+    "p99": 0.9701,
+    "max": 0.9701
+  },
+  "steps": [
+    {
+      "op": "s",
+      "keys_sent": "s",
+      "picker_open": true,
+      "query_after": "s",
+      "rows_after": 71,
+      "selection_after": 0,
+      "selected_after": "tools/sync_undecided.py",
+      "rows_returned": 12,
+      "empty_after": false,
+      "input_and_settle_ms": 407.3163,
+      "state_extract_ms": 0.3772,
+      "reason": null
+    },
+    {
+      "op": "c-n",
+      "keys_sent": "<C-n>",
+      "picker_open": true,
+      "query_after": "s",
+      "rows_after": 71,
+      "selection_after": 1,
+      "selected_after": "tools/sync_design_space.py",
+      "rows_returned": 12,
+      "empty_after": false,
+      "input_and_settle_ms": 404.3566,
+      "state_extract_ms": 0.4985,
+      "reason": null
+    },
+    {
+      "op": "c-n",
+      "keys_sent": "<C-n>",
+      "picker_open": true,
+      "query_after": "s",
+      "rows_after": 71,
+      "selection_after": 2,
+      "selected_after": "spec-mirror/neovim-glsl-0.8.lines",
+      "rows_returned": 12,
+      "empty_after": false,
+      "input_and_settle_ms": 409.478,
+      "state_extract_ms": 0.4915,
+      "reason": null
+    },
+    {
+      "op": "c-n",
+      "keys_sent": "<C-n>",
+      "picker_open": true,
+      "query_after": "s",
+      "rows_after": 71,
+      "selection_after": 3,
+      "selected_after": "DESIGN-SPACE.md",
+      "rows_returned": 12,
+      "empty_after": false,
+      "input_and_settle_ms": 410.096,
+      "state_extract_ms": 0.5233,
+      "reason": null
+    },
+    {
+      "op": "c-p",
+      "keys_sent": "<C-p>",
+      "picker_open": true,
+      "query_after": "s",
+      "rows_after": 71,
+      "selection_after": 2,
+      "selected_after": "spec-mirror/neovim-glsl-0.8.lines",
+      "rows_returned": 12,
+      "empty_after": false,
+      "input_and_settle_ms": 407.7447,
+      "state_extract_ms": 0.7505,
+      "reason": null
+    },
+    {
+      "op": "e",
+      "keys_sent": "e",
+      "picker_open": true,
+      "query_after": "se",
+      "rows_after": 53,
+      "selection_after": 0,
+      "selected_after": "evaluation/evidence/perf-live-session.json",
+      "rows_returned": 12,
+      "empty_after": false,
+      "input_and_settle_ms": 408.7269,
+      "state_extract_ms": 0.5461,
+      "reason": null
+    },
+    {
+      "op": "bs",
+      "keys_sent": "<BS>",
+      "picker_open": true,
+      "query_after": "s",
+      "rows_after": 71,
+      "selection_after": 0,
+      "selected_after": "tools/sync_undecided.py",
+      "rows_returned": 12,
+      "empty_after": false,
+      "input_and_settle_ms": 405.4378,
+      "state_extract_ms": 0.9701,
+      "reason": null
+    }
+  ],
+  "not_handed_over": [
+    "match positions: telescope's entries carry the matched text, not the offsets the query hit, so a host drawing highlighted matches must re-derive them or ask for a different extraction",
+    "scores: reachable per index via the entry manager, not in the batch above",
+    "geometry: telescope's own window layout is meaningless to a surface outside the grid, so none of it transfers"
+  ],
+  "notes": [
+    "The timings are fresh observations of this machine on this run.",
+    "The API recorder from protocol-surface was deliberately not installed.",
+    "The extraction is a single batched nvim_exec_lua, which is the cheapest this arrangement can be rather than the worst case.",
+    "input_and_settle_ms includes a fixed settle and is therefore not a latency measurement; it is reported so the settle is visible, not hidden."
+  ]
+}

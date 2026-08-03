@@ -1,0 +1,126 @@
+{
+  "schema": "neovim-glsl.picker-state-host-owned/v1",
+  "arrangement": "host_owned_state",
+  "records_for": [
+    "open_question neovim_glsl.navigation_state_owner",
+    "open_question neovim_glsl.navigation_input_routing"
+  ],
+  "decides": "nothing; both questions remain open at spec v0.9",
+  "corpus_entries": 81,
+  "visible_rows": 12,
+  "script": "s<c-n><c-n><c-n><c-p>e<bs>",
+  "process_boundaries_crossed_per_keystroke": 0,
+  "rpc_requests_per_keystroke": 0,
+  "state_update_ms": {
+    "count": 7,
+    "min": 0.0002,
+    "mean": 0.2728,
+    "p50": 0.0151,
+    "p90": 0.7715,
+    "p95": 0.7715,
+    "p99": 0.7715,
+    "max": 0.7715
+  },
+  "rows_build_ms": {
+    "count": 7,
+    "min": 0.0024,
+    "mean": 0.0068,
+    "p50": 0.0038,
+    "p90": 0.0247,
+    "p95": 0.0247,
+    "p99": 0.0247,
+    "max": 0.0247
+  },
+  "steps": [
+    {
+      "op": "push s",
+      "query_after": "s",
+      "rows_before": 81,
+      "rows_after": 71,
+      "narrowed": true,
+      "state_update_ms": 0.7715,
+      "rows_build_ms": 0.0247,
+      "selection_after": 0,
+      "selected_after": "spec-mirror/neovim-glsl-0.8.lines",
+      "empty_after": false
+    },
+    {
+      "op": "move 1",
+      "query_after": "s",
+      "rows_before": 71,
+      "rows_after": 71,
+      "narrowed": false,
+      "state_update_ms": 0.0151,
+      "rows_build_ms": 0.0061,
+      "selection_after": 1,
+      "selected_after": "evaluation/free-surface/bed.lua",
+      "empty_after": false
+    },
+    {
+      "op": "move 1",
+      "query_after": "s",
+      "rows_before": 71,
+      "rows_after": 71,
+      "narrowed": false,
+      "state_update_ms": 0.0002,
+      "rows_build_ms": 0.0047,
+      "selection_after": 2,
+      "selected_after": "evaluation/candidate-embed-opengl/src/picker_state.rs",
+      "empty_after": false
+    },
+    {
+      "op": "move 1",
+      "query_after": "s",
+      "rows_before": 71,
+      "rows_after": 71,
+      "narrowed": false,
+      "state_update_ms": 0.0002,
+      "rows_build_ms": 0.0024,
+      "selection_after": 3,
+      "selected_after": "evaluation/candidate-embed-opengl/src/aish.rs",
+      "empty_after": false
+    },
+    {
+      "op": "move -1",
+      "query_after": "s",
+      "rows_before": 71,
+      "rows_after": 71,
+      "narrowed": false,
+      "state_update_ms": 0.0002,
+      "rows_build_ms": 0.0024,
+      "selection_after": 2,
+      "selected_after": "evaluation/candidate-embed-opengl/src/picker_state.rs",
+      "empty_after": false
+    },
+    {
+      "op": "push e",
+      "query_after": "se",
+      "rows_before": 71,
+      "rows_after": 53,
+      "narrowed": true,
+      "state_update_ms": 0.6045,
+      "rows_build_ms": 0.0038,
+      "selection_after": 2,
+      "selected_after": "evaluation/evidence/perf-live-session.json",
+      "empty_after": false
+    },
+    {
+      "op": "pop",
+      "query_after": "s",
+      "rows_before": 53,
+      "rows_after": 71,
+      "narrowed": false,
+      "state_update_ms": 0.5179,
+      "rows_build_ms": 0.0038,
+      "selection_after": 2,
+      "selected_after": "evaluation/candidate-embed-opengl/src/picker_state.rs",
+      "empty_after": false
+    }
+  ],
+  "matcher_note": "a span-penalised subsequence matcher, not telescope's fzy; durations here are not comparable to the plugin-owned half as algorithms, only as arrangements",
+  "notes": [
+    "The timings are fresh observations of this machine on this run.",
+    "The corpus is supplied by the caller so both halves filter the same input.",
+    "Narrowing on push is sound because appending a character cannot admit a new candidate."
+  ]
+}

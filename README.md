@@ -19,6 +19,11 @@ spec v0.8 で、その機構を**どこへ描くか**は決まった。navigatio
 grid の外は Neovim が描けない領域なので、これは選択の含意でもある。面の座標系・幾何・
 合成方法、state の所在、入力の経路はどれも未決のまま。
 
+spec v0.9 で、その未決のうち **picker state を誰が持つか**の待ち方が変わった。人間ゲートの
+回答は「わからない」で、pin は一つも増えていない。不明は選択ではないので、要求にも
+「どちらでもよい」にもならない。代わりに、何を観測すれば決まるかが spec 側に書かれ、
+`evaluation/state-ownership` が両案を実際に動かして測っている。
+
 ![text と画像が同じ画面に共存している様子](evaluation/evidence/image-and-text-coexist.png)
 
 ## 実測済み candidate
@@ -207,6 +212,11 @@ spec v0.6 で **own_host_speaking_neovim_protocol** に決まった。navigation
 GLSL surface** に決まった。どの graphics API を使うか、どこまでを GLSL で描くか、
 protocol surface をどこまで実装するか、navigation を**何で**作るかはまだ確定していない。
 
+`UNDECIDED.md` の open_question は v0.9 から二節に分かれる。**人間ゲート待ち**は、
+まだ問うていないもの。**観測待ち**は、問うたが回答が「不明」で返ったもの。後者を訊き直すのは
+同じ答えを受け取るだけなので、spec 側に「何を観測すれば決まるか」が書いてある。節の分割も
+手書きではなく、spec の `# AWAITING_OBSERVATION` marker から生成している。
+
 未決の設計判断は [UNDECIDED.md](UNDECIDED.md) に、開いている選択肢は
 [DESIGN-SPACE.md](DESIGN-SPACE.md) に置いてある。どちらも spec から機械生成される
 (`tools/sync_undecided.py` / `tools/sync_design_space.py`)。手で書き足すと、
@@ -245,5 +255,19 @@ plugin が面へ行を供給する形は却下されていない。
 面の座標系（pixel のままか cell に揃えるか）、幾何、grid と同じ draw call に乗せるか、
 picker の state を誰が持つか（`navigation_state_owner`）、開いている間の入力を host が
 直接受けるか Neovim へ送って戻すか（`navigation_input_routing`）は、いずれも未決である。
+
+2026-08-03、spec v0.9 の人間ゲートは `navigation_state_owner`（picker の state を host が
+持つか plugin が持つか）に対して **「わからない」** を返した。**pin は一つも増えていない**
+（80 pins のまま、version だけ 0.9）。不明を「どちらでもよい」と読み替えて free へ降格させて
+いないし、host 側 state を暫定の既定として pin してもいない。どちらも未回答を回答済みに
+見せる行為である。
+
+代わりに問いの待ち方が変わった。人間の入力待ちから観測待ちへ移り、`evaluation/state-ownership`
+が両案を実際に動かして測っている。host 所有（Rust、`--picker-script`）と plugin 所有
+（御主人様の実 telescope）を同じ 81 候補・同じ script で走らせ、一打鍵あたりの process 越え
+は 0 と 2、そして両者が**どの keystroke でも同じ候補集合を認めた**（71/71/71/71/71/53/71）。
+一致は report ではなく `compare.py` の検証項目で、食い違えばどちらかの matcher が
+間違っている。時間の数字は勝敗ではない: matcher が別物なので、比べられるのは越えの回数と、
+plugin 所有では**渡ってこないもの**（match 位置・score・幾何）である。
 
 Emacs 系への置換は、v0.5 で退役した basis pin とは独立した明示的拒否として今も残っている。

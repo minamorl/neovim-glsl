@@ -1,9 +1,9 @@
 # DESIGN-SPACE — 開いたままにする軸
 
-`pins/domains/neovim-glsl.spec@0.8` の `free` 項目を、spec の文言のまま機械転記したもの。
+`pins/domains/neovim-glsl.spec@0.9` の `free` 項目を、spec の文言のまま機械転記したもの。
 **free は free のまま。** 実装・設定・依存・慣習のどれによっても、ここの軸を事実上固定してはならない。
 
-入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.8.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
+入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.9.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
 
 規律:
 
