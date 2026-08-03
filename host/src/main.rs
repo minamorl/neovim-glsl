@@ -133,12 +133,18 @@ struct Link {
 }
 
 impl Link {
-    fn spawn(initial: Option<PathBuf>) -> std::io::Result<Self> {
+    fn spawn(initial: Option<PathBuf>, theme: proto::paint::Theme) -> std::io::Result<Self> {
         let (host_input, to_host) = std::io::pipe()?;
         let (from_host, host_output) = std::io::pipe()?;
 
         std::thread::Builder::new().name("nvimglsl-host".into()).spawn(move || {
-            let mut host = proto::Host::new(core::Editor::default());
+            // The grid and the navigation surface take the same theme, so the
+            // two halves of one window cannot disagree about it.
+            let mut host = proto::Host::themed(
+                core::Editor::default(),
+                notes::Vault::default_vault(),
+                theme,
+            );
             if let Err(error) = proto::serve(&mut host, host_input, host_output, initial) {
                 eprintln!("host: {error}");
             }
@@ -490,7 +496,11 @@ impl ApplicationHandler for App {
             );
         }
 
-        let mut link = Link::spawn(self.args.file.clone()).expect("host thread");
+        let mut link = Link::spawn(
+            self.args.file.clone(),
+            proto::paint::Theme::named(&self.args.scheme),
+        )
+        .expect("host thread");
         link.ui_attach(self.args.cols, self.args.rows, nvim::UiOptions::none()).expect("ui_attach");
 
         self.renderer = Some(gl::Renderer::new(&glc));

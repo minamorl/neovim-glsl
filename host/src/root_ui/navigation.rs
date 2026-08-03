@@ -53,7 +53,8 @@ pub struct RowInput {
     pub selected: bool,
 }
 
-pub const ROLES: [&str; 7] = [
+pub const ROLES: [&str; 8] = [
+    "scrim",
     "surface",
     "surface_raised",
     "outline",
@@ -63,30 +64,35 @@ pub const ROLES: [&str; 7] = [
     "accent",
 ];
 
-/// The panel is opaque in both schemes. A translucent surface is something the
-/// free-surface work measured and this renderer can do, but a picker's job is to
-/// be read: even 3% of a bright grid behind it shows through as ghost text
-/// across the candidate list.
+/// The panel is opaque in both schemes and sits on a scrim.
+///
+/// Opaque because a picker's job is to be read: even 3% of a bright grid behind
+/// it shows through as ghost text across the candidate list. On a scrim because
+/// a panel whose fill is a shade away from the editor behind it does not read
+/// as raised — it reads as a rectangle someone drew on the text. Dimming what
+/// is behind is what makes it a surface rather than a decal.
 pub fn dark_scheme() -> ColorScheme {
     let mut colors = BTreeMap::new();
-    colors.insert("surface".into(), rgba("#14161f", 1.0));
-    colors.insert("surface_raised".into(), rgba("#232838", 1.0));
-    colors.insert("outline".into(), rgba("#2c3242", 1.0));
-    colors.insert("separator".into(), rgba("#252b3a", 1.0));
-    colors.insert("on_surface".into(), rgba("#dbe1ec", 1.0));
-    colors.insert("on_surface_muted".into(), rgba("#6e7688", 1.0));
-    colors.insert("accent".into(), rgba("#7aa2f7", 1.0));
+    colors.insert("scrim".into(), rgba("#05070c", 0.55));
+    colors.insert("surface".into(), rgba("#1b2130", 1.0));
+    colors.insert("surface_raised".into(), rgba("#2c3448", 1.0));
+    colors.insert("outline".into(), rgba("#3a4359", 1.0));
+    colors.insert("separator".into(), rgba("#262d3e", 1.0));
+    colors.insert("on_surface".into(), rgba("#e7ecf5", 1.0));
+    colors.insert("on_surface_muted".into(), rgba("#8a93a6", 1.0));
+    colors.insert("accent".into(), rgba("#7fa7f5", 1.0));
     ColorScheme { id: "dark".into(), colors }
 }
 
 pub fn light_scheme() -> ColorScheme {
     let mut colors = BTreeMap::new();
-    colors.insert("surface".into(), rgba("#fbfcfe", 1.0));
-    colors.insert("surface_raised".into(), rgba("#e7ecf6", 1.0));
-    colors.insert("outline".into(), rgba("#c8cfdd", 1.0));
-    colors.insert("separator".into(), rgba("#e2e7f0", 1.0));
-    colors.insert("on_surface".into(), rgba("#1b2030", 1.0));
-    colors.insert("on_surface_muted".into(), rgba("#767e91", 1.0));
+    colors.insert("scrim".into(), rgba("#1b2130", 0.30));
+    colors.insert("surface".into(), rgba("#ffffff", 1.0));
+    colors.insert("surface_raised".into(), rgba("#e4ebfa", 1.0));
+    colors.insert("outline".into(), rgba("#c3ccdd", 1.0));
+    colors.insert("separator".into(), rgba("#e7ebf3", 1.0));
+    colors.insert("on_surface".into(), rgba("#1b2130", 1.0));
+    colors.insert("on_surface_muted".into(), rgba("#6f788b", 1.0));
     colors.insert("accent".into(), rgba("#2f5fd0", 1.0));
     ColorScheme { id: "light".into(), colors }
 }
@@ -207,6 +213,19 @@ pub fn build(input: Input<'_>) -> NavigationSurface {
     let pad_y = dp(12.0);
     let query_h = input.cell_h * 1.9;
     let row_h = input.cell_h * 1.45;
+
+    // The scrim goes down first and covers the window, so painter order alone
+    // puts the editor behind the surface rather than beside it.
+    composer.shape(
+        "navigation.scrim",
+        "Scrim",
+        "open",
+        (0.0, 0.0, window_w, window_h),
+        None,
+        "scrim",
+        "scrim",
+        0.0,
+    );
 
     composer.shape(
         "navigation.panel",
@@ -446,6 +465,38 @@ mod tests {
         let dark = bind_flat_scene_user_color_scheme(&prepared, &color_runtime("dark")).unwrap();
         let light = bind_flat_scene_user_color_scheme(&prepared, &color_runtime("light")).unwrap();
         assert_eq!(flat_scene_layout_identity(&dark), flat_scene_layout_identity(&light));
+    }
+
+    #[test]
+    fn the_scrim_covers_the_window_and_is_painted_before_the_panel() {
+        let surface = surface();
+        let ids: Vec<&str> = surface.scene.surfaces.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids[0], "navigation.scrim");
+        assert_eq!(ids[1], "navigation.panel");
+        let scrim = geometry_of(&surface, "navigation.scrim");
+        assert_eq!((scrim.width, scrim.height), (1200.0, 800.0));
+    }
+
+    #[test]
+    fn the_panel_is_a_visible_step_above_the_scrim_in_both_schemes() {
+        // The defect this guards: a panel fill a shade away from the editor
+        // behind it reads as a rectangle drawn on the text, not as a surface.
+        for scheme in [dark_scheme(), light_scheme()] {
+            let luma = |role: &str| {
+                let c = scheme.colors[role];
+                0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+            };
+            assert!(
+                (luma("surface") - luma("scrim")).abs() > 0.05,
+                "{}: the panel and the scrim are the same weight",
+                scheme.id
+            );
+            assert!(
+                (luma("surface_raised") - luma("surface")).abs() > 0.02,
+                "{}: the selection does not stand out from the panel",
+                scheme.id
+            );
+        }
     }
 
     #[test]

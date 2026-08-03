@@ -17,7 +17,7 @@ use crate::core::{Editor, Mode};
 use crate::notes::{self, Vault};
 use crate::nvim::{self, RedrawEvent, UiOptions};
 
-use super::paint::Painter;
+use super::paint::{Painter, Theme};
 
 /// Notifications the host sends that are not `redraw`. A UI client that does
 /// not understand them ignores them, which is the same latitude Neovim gives a
@@ -30,6 +30,7 @@ pub struct Host {
     /// The yui note vault. `pin note_substrate` makes it the substrate rather
     /// than something this host owns, so it is opened, never created.
     pub vault: Vault,
+    theme: Theme,
     painter: Option<Painter>,
     channel: u64,
     pub quit: bool,
@@ -45,7 +46,19 @@ impl Host {
     }
 
     pub fn with_vault(editor: Editor, vault: Vault) -> Self {
-        Self { editor, vault, painter: None, channel: 1, quit: false, pending_attach: None }
+        Self::themed(editor, vault, Theme::dark())
+    }
+
+    pub fn themed(editor: Editor, vault: Vault, theme: Theme) -> Self {
+        Self {
+            editor,
+            vault,
+            theme,
+            painter: None,
+            channel: 1,
+            quit: false,
+            pending_attach: None,
+        }
     }
 
     fn report(&mut self, text: String, error: bool) {
@@ -260,7 +273,7 @@ impl Host {
     }
 
     fn attach(&mut self, cols: usize, rows: usize, options: UiOptions) {
-        let mut painter = Painter::new(cols, rows, options);
+        let mut painter = Painter::themed(cols, rows, options, self.theme);
         self.editor.set_view_rows(painter.text_rows());
         let mut events = painter.attach_events();
         events.extend(painter.render(&self.editor));
