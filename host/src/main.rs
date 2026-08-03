@@ -213,6 +213,8 @@ struct App {
     /// against the vault rather than the working directory.
     picker_in_vault: bool,
     mods: ModifiersState,
+    /// Physical pixels per density-independent pixel, from the display.
+    scale: f32,
     preedit: String,
     last_stats: root_ui::adapter::AdapterStats,
 }
@@ -235,6 +237,7 @@ impl App {
             picker: None,
             picker_in_vault: false,
             mods: ModifiersState::empty(),
+            scale: 1.0,
             preedit: String::new(),
             last_stats: root_ui::adapter::AdapterStats::default(),
         }
@@ -356,11 +359,13 @@ impl App {
             total: picker.corpus_len(),
             rows: &rows,
             row_budget: picker.row_budget(),
+            offset: picker.offset(),
             window_w: width,
             window_h: height,
             cell_w: atlas.cell_w,
             cell_h: atlas.cell_h,
             ascent: atlas.ascent,
+            scale: self.scale,
         });
 
         let runtime = root_ui::navigation::color_runtime(&self.args.scheme);
@@ -380,16 +385,15 @@ impl App {
         };
 
         adapter.begin();
-        let mut stats = adapter.push_scene(&scene, width, height, atlas.cell_h);
+        let mut stats = adapter.push_scene(&scene, width, height, atlas.cell_h, self.scale);
 
         let scheme = runtime
             .schemes
             .iter()
             .find(|scheme| scheme.id == runtime.scheme_id)
             .unwrap_or(&runtime.schemes[0]);
-        let roles = root_ui::navigation::text_roles(rows.len());
-        for (run, role) in composed.texts.iter().zip(roles) {
-            let color = scheme.colors.get(role).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
+        for run in &composed.texts {
+            let color = scheme.colors.get(run.role).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
             stats.glyph_quads +=
                 adapter.push_text(atlas, run.x, run.baseline, &run.text, color, run.max_x);
         }
@@ -453,6 +457,7 @@ impl ApplicationHandler for App {
         window.set_ime_allowed(true);
 
         let scale = window.scale_factor() as f32;
+        self.scale = scale;
         let atlas = text::Atlas::new(self.args.font_size * scale);
         let width = (atlas.cell_w * self.args.cols as f32).ceil() as u32;
         let height = (atlas.cell_h * self.args.rows as f32).ceil() as u32;

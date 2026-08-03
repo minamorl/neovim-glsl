@@ -75,7 +75,7 @@ mod tests {
             bounds: Bounds { x: 0.1, y, width: 0.5, height: 0.1 },
             decoration: Decoration { stroke_width: 0.0 },
             color: ColorIntent::new("surface", "outline"),
-            corner_radius: 0.2,
+            corner_radius: CornerRadius::ShorterSideRatio(0.2),
         };
         FlatScene {
             surfaces: vec![

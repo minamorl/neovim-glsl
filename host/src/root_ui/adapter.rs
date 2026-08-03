@@ -161,6 +161,7 @@ impl Adapter {
         target_w: f32,
         target_h: f32,
         cell_h: f32,
+        scale: f32,
     ) -> AdapterStats {
         let mut stats = AdapterStats::default();
         for (_, output) in &scene.surfaces {
@@ -169,6 +170,7 @@ impl Adapter {
                 &output.decoration,
                 target_w,
                 target_h,
+                scale,
             ) else {
                 continue;
             };

@@ -106,19 +106,26 @@ impl Picker {
         self.visible_rows
     }
 
-    /// The visible window onto the candidate list, each row flagged with
-    /// whether it is the selection. The scroll offset keeps the selection in
-    /// view without moving it to a fixed slot.
-    pub fn visible(&self) -> Vec<(String, bool)> {
-        let offset = self
-            .state
+    /// Where the visible window starts in the match list.
+    pub fn offset(&self) -> usize {
+        self.state
             .selection_row()
             .map(|row| row.saturating_sub(self.visible_rows.saturating_sub(1)))
-            .unwrap_or(0);
+            .unwrap_or(0)
+    }
+
+    /// The visible window onto the candidate list. The match positions travel
+    /// with each row, because a surface that cannot show *why* a row matched is
+    /// a list rather than a picker.
+    pub fn visible(&self) -> Vec<crate::root_ui::navigation::RowInput> {
         self.state
-            .rows(offset, self.visible_rows)
+            .rows(self.offset(), self.visible_rows)
             .into_iter()
-            .map(|row| (row.text, row.selected))
+            .map(|row| crate::root_ui::navigation::RowInput {
+                text: row.text,
+                positions: row.positions,
+                selected: row.selected,
+            })
             .collect()
     }
 }
@@ -240,10 +247,18 @@ mod tests {
     #[test]
     fn control_n_and_p_move_the_selection() {
         let mut picker = Picker::open(&source(), 8);
-        let selected = |picker: &Picker| picker.visible().iter().position(|(_, on)| *on);
+        let selected = |picker: &Picker| picker.visible().iter().position(|row| row.selected);
         let first = selected(&picker);
         picker.feed("<C-n>");
         assert_ne!(first, selected(&picker));
+    }
+
+    #[test]
+    fn a_narrowed_row_carries_the_positions_that_matched() {
+        let mut picker = Picker::open(&source(), 8);
+        picker.feed("alp");
+        let rows = picker.visible();
+        assert!(!rows[0].positions.is_empty(), "no match positions reached the surface");
     }
 
     #[test]
