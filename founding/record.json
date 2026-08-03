@@ -677,26 +677,27 @@
       "directory": "evaluation/state-ownership",
       "host_owned": "evaluation/candidate-embed-opengl/src/picker_state.rs, run with --picker-script",
       "plugin_owned": "evaluation/state-ownership/probe.py against the owner's real telescope on Neovim 0.11.5",
-      "corpus": "81 candidates, read out of the opened picker at an empty query so both halves filter what telescope actually offered",
+      "corpus": "79 candidates, read out of the opened picker at an empty query so both halves filter what telescope actually offered",
       "crossings_per_keystroke": {
         "host_owned": 0,
         "plugin_owned": 2
       },
       "agreed_candidate_counts": [
-        71,
-        71,
-        71,
-        71,
-        71,
-        53,
-        71
+        69,
+        69,
+        69,
+        69,
+        69,
+        51,
+        69
       ],
       "checked_not_reported": "compare.py fails if the two halves disagree on what matches, if either claims to decide something, or if the selection never moved",
       "not_handed_over_by_plugin": [
         "match positions",
         "scores",
         "geometry"
-      ]
+      ],
+      "recorded_in": "the repository itself, not a worktree: the first run was taken in nvglsl-wt/v09-state and its recorded paths died with it"
     }
   }
 }

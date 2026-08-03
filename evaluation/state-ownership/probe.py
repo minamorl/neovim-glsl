@@ -262,12 +262,19 @@ def main():
         "decides": "nothing; both questions remain open at spec v0.9",
         "nvim_version_first_line": driver.nvim_version(),
         "plugins": plugins,
+        # Absolute on purpose: this records where the observation was taken, not a
+        # path to follow. Whether it is still there is a separate, stated fact.
         "tree": str(scratch),
+        "tree_exists_now": scratch.is_dir(),
         "tree_is_real_repository": bool(args.tree),
         "corpus_entries": len(corpus),
         "corpus_source": "read from the opened picker at an empty query, so both "
         "halves filter exactly what telescope offered",
-        "corpus_written_to": str(corpus_path),
+        # Relative to this file, so the report survives being merged out of the
+        # worktree it was produced in.
+        "corpus_written_to": str(corpus_path.relative_to(ROOT))
+        if corpus_path.is_relative_to(ROOT)
+        else str(corpus_path),
         "visible_rows": args.visible_rows,
         "script": args.script,
         "settle_seconds_per_keystroke": args.settle,

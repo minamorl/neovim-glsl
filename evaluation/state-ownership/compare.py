@@ -59,7 +59,19 @@ def main():
             f"different corpus sizes: {host['corpus_entries']} vs {plugin['corpus_entries']}",
         )
 
-    corpus_path = Path(plugin["corpus_written_to"])
+    # Reports written before this was relative may still hold an absolute path
+    # from a worktree that no longer exists; fall back to the local copy rather
+    # than reporting a missing file that is sitting right here.
+    recorded = Path(plugin["corpus_written_to"])
+    corpus_path = recorded if recorded.is_absolute() else ROOT / recorded
+    if not corpus_path.exists() and recorded.is_absolute():
+        local = ROOT / "out" / recorded.name
+        if local.exists():
+            print(
+                f"note: the report records {recorded}, which is gone; using {local} "
+                "(same file, merged out of the worktree it was produced in)"
+            )
+            corpus_path = local
     if corpus_path.exists():
         written = [line for line in corpus_path.read_text().split("\n") if line]
         if len(written) != plugin["corpus_entries"]:

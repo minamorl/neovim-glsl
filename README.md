@@ -264,8 +264,8 @@ picker の state を誰が持つか（`navigation_state_owner`）、開いてい
 
 代わりに問いの待ち方が変わった。人間の入力待ちから観測待ちへ移り、`evaluation/state-ownership`
 が両案を実際に動かして測っている。host 所有（Rust、`--picker-script`）と plugin 所有
-（御主人様の実 telescope）を同じ 81 候補・同じ script で走らせ、一打鍵あたりの process 越え
-は 0 と 2、そして両者が**どの keystroke でも同じ候補集合を認めた**（71/71/71/71/71/53/71）。
+（御主人様の実 telescope）を同じ 79 候補・同じ script で走らせ、一打鍵あたりの process 越え
+は 0 と 2、そして両者が**どの keystroke でも同じ候補集合を認めた**（69/69/69/69/69/51/69）。
 一致は report ではなく `compare.py` の検証項目で、食い違えばどちらかの matcher が
 間違っている。時間の数字は勝敗ではない: matcher が別物なので、比べられるのは越えの回数と、
 plugin 所有では**渡ってこないもの**（match 位置・score・幾何）である。

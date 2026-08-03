@@ -36,7 +36,7 @@ report would have shown the disagreement.
 
 ```sh
 cd evaluation/state-ownership
-python3 probe.py --tree ~/repos/nvglsl-wt/v09-state --script 's<c-n><c-n><c-n><c-p>e<bs>'
+python3 probe.py --tree ~/repos/neovim-glsl --script 's<c-n><c-n><c-n><c-p>e<bs>'
 cd ../candidate-embed-opengl
 cargo run --quiet -- --picker-script 's<c-n><c-n><c-n><c-p>e<bs>' \
   --picker-corpus ../state-ownership/out/corpus.txt \
@@ -51,10 +51,10 @@ Measured Neovim: `NVIM v0.11.5`, with the owner's own
 
 ## What was observed
 
-81 candidates, 7 keystrokes, `<C-n>` and `<C-p>` and `<BS>` among them.
+79 candidates, 7 keystrokes, `<C-n>` and `<C-p>` and `<BS>` among them.
 
-**Both halves admitted the same candidates at every step**: `71, 71, 71, 71, 71,
-53, 71`. This is the one thing `compare.py` *checks* rather than reports — two
+**Both halves admitted the same candidates at every step**: `69, 69, 69, 69, 69,
+51, 69`. This is the one thing `compare.py` *checks* rather than reports — two
 independent matchers over one corpus should agree on what matches, and if they
 disagree, one is wrong about matching. No timing figure would have surfaced that.
 
@@ -62,9 +62,9 @@ Each half's measurement of its own work, in ms:
 
 | | p50 | max |
 | --- | --- | --- |
-| host: state update | 0.0151 | 0.7715 |
-| host: rows build | 0.0038 | 0.0247 |
-| plugin: state fetch | 0.5233 | 0.9701 |
+| host: state update | 0.017 | 0.8385 |
+| host: rows build | 0.0055 | 0.0252 |
+| plugin: state fetch | 0.5872 | 1.0919 |
 
 **These are not a verdict, and the columns are not racing each other.** The two
 halves use different matchers — telescope sorts with fzy, the Rust half with a
@@ -74,8 +74,17 @@ against 2. The plugin-owned fetch is also a **lower bound**, because it is one
 batched `nvim_exec_lua` rather than one request per field; a host that asked
 field by field would pay more.
 
-The two matchers ranked the same sets differently at 6 of 7 steps. That is
+The two matchers ranked the same sets differently at all 7 steps. That is
 expected and is not a failure: same candidates, different ordering.
+
+### Paths in the report
+
+Paths inside this repository are recorded relative to the report. The first run
+was taken in a worktree and stored that worktree's absolute path for
+`out/corpus.txt`; removing the worktree after the merge left a report that could
+not be re-checked from the repository holding it. The measured *tree* is still
+absolute, because it records where the observation was taken rather than a path to
+follow, and `tree_exists_now` states whether it is still there.
 
 ### What the plugin-owned arrangement does not hand over
 
