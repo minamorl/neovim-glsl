@@ -24,6 +24,26 @@ spec v0.9 で、その未決のうち **picker state を誰が持つか**の待�
 「どちらでもよい」にもならない。代わりに、何を観測すれば決まるかが spec 側に書かれ、
 `evaluation/state-ownership` が両案を実際に動かして測っている。
 
+## 実体は [`host/`](host/) にある
+
+v0.6 で選ばれた architecture には、長いあいだ実装が無かった。**いまは在る。**
+
+`host/` は Neovim process を持たない。編集 core（buffer・motion・operator・register・
+undo・`:` 行）がそこに在り、`nvim --embed` の向こう側に居たものが、この program の中の
+pipe の向こう側に居る。両半分は **encoded msgpack でしか出会わない**。同じ server は
+`--embed` で stdin/stdout にも答えるので、「Neovim protocol を喋る」は program の外から
+確かめられる主張であって、内側からの自己申告ではない。
+
+navigation の面は root-ui である。`host/src/root_ui/` は root-ui の design-language
+phase（semantic → layout → 非色 decoration → user 所有の色）の移植で、その shader
+adapter が GLSL 側に一つ増えた形になる。`--scheme light` は**同じ resolved layout**へ
+色を bind し直すだけで、layout identity は両 scheme で一致する。
+
+第一級 object は markdown note で、substrate は既存の yui notes（`~/repos/obsidian`）。
+新しい store は作っていない（`note_substrate_not_new`）。
+
+詳細と未決の扱いは [host/README.md](host/README.md)。
+
 ![text と画像が同じ画面に共存している様子](evaluation/evidence/image-and-text-coexist.png)
 
 ## 実測済み candidate
