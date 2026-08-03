@@ -75,6 +75,36 @@ pub struct Bounds {
     pub height: f32,
 }
 
+/// How a RoundBox states its corner.
+///
+/// Two forms, because one is not enough. A ratio of the shorter side keeps a
+/// shape self-similar as it grows, which is what a capsule wants. An absolute
+/// length keeps the corner the same size across components of different
+/// heights, which is what a design system wants — and a ratio cannot say that
+/// without a different number per component.
+///
+/// root-ui carried only the ratio until this was fixed upstream, and the
+/// catalogue showed the cost: roughly half its explicit radii were `0.5`,
+/// because a capsule is the one shape that looks the same at every size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CornerRadius {
+    ShorterSideRatio(f32),
+    /// Density-independent pixels, multiplied by the target scale once.
+    Pixels(f32),
+}
+
+impl CornerRadius {
+    /// The physical radius on one target, with overlap correction: a radius
+    /// wider than half the shorter side has no rectangle left to round, so it
+    /// is cut to the capsule instead of inverting the shape.
+    pub fn physical(self, shorter_side: f32, scale: f32) -> f32 {
+        match self {
+            CornerRadius::ShorterSideRatio(ratio) => ratio * shorter_side,
+            CornerRadius::Pixels(px) => (px * scale).min(shorter_side / 2.0),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoxKind {
     Box,
@@ -131,8 +161,7 @@ pub struct Sample {
     pub bounds: Bounds,
     pub decoration: Decoration,
     pub color: ColorIntent,
-    /// Circular corner radius as a fraction of the shorter physical side.
-    pub corner_radius: f32,
+    pub corner_radius: CornerRadius,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -145,7 +174,7 @@ pub struct ResolvedLayout {
 pub struct ResolvedDecoration {
     pub layout_identity: String,
     pub box_kind: BoxKind,
-    pub corner_radius_ratio: f32,
+    pub corner_radius: CornerRadius,
     pub stroke_width_ratio: f32,
 }
 
@@ -223,21 +252,33 @@ pub fn resolve_layout(semantic: &Semantic, bounds: Bounds) -> Result<ResolvedLay
 pub fn resolve_non_color_decoration(
     layout: &ResolvedLayout,
     kind: BoxKind,
-    corner_radius: f32,
+    corner_radius: CornerRadius,
     decoration: Decoration,
 ) -> Result<ResolvedDecoration> {
     let stroke = unit(decoration.stroke_width, "decoration.strokeWidth")?;
-    let corner = match kind {
-        BoxKind::RoundBox => unit(corner_radius, "roundBox.cornerRadius")?,
-        BoxKind::Box => 0.0,
-    };
-    if corner > 0.5 || stroke > 0.5 {
-        return Err(Error::Range("decoration radius and stroke width".into()));
+    if stroke > 0.5 {
+        return Err(Error::Range("decoration stroke width".into()));
     }
+    let corner = match kind {
+        BoxKind::RoundBox => match corner_radius {
+            CornerRadius::ShorterSideRatio(ratio) => {
+                let ratio = unit(ratio, "roundBox.cornerRadius")?;
+                if ratio > 0.5 {
+                    return Err(Error::Range("roundBox.cornerRadius".into()));
+                }
+                CornerRadius::ShorterSideRatio(ratio)
+            }
+            CornerRadius::Pixels(px) if px.is_finite() && px >= 0.0 => CornerRadius::Pixels(px),
+            CornerRadius::Pixels(_) => {
+                return Err(Error::Range("roundBox.cornerRadius in pixels".into()))
+            }
+        },
+        BoxKind::Box => CornerRadius::ShorterSideRatio(0.0),
+    };
     Ok(ResolvedDecoration {
         layout_identity: layout.identity.clone(),
         box_kind: kind,
-        corner_radius_ratio: corner,
+        corner_radius: corner,
         stroke_width_ratio: stroke,
     })
 }
@@ -247,6 +288,7 @@ pub fn materialize_pixel_box_geometry(
     decoration: &ResolvedDecoration,
     target_width: f32,
     target_height: f32,
+    scale: f32,
 ) -> Result<PixelBoxGeometry> {
     if !(target_width.is_finite() && target_height.is_finite())
         || target_width <= 0.0
@@ -254,11 +296,14 @@ pub fn materialize_pixel_box_geometry(
     {
         return Err(Error::Range("box geometry target".into()));
     }
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(Error::Range("box geometry target scale".into()));
+    }
     let [x, y, normalized_width, normalized_height] = layout.normalized_bounds;
     let width = normalized_width * target_width;
     let height = normalized_height * target_height;
     let shorter = width.min(height);
-    let radius = decoration.corner_radius_ratio * shorter;
+    let radius = decoration.corner_radius.physical(shorter, scale);
     Ok(PixelBoxGeometry {
         kind: decoration.box_kind,
         x: x * target_width,
@@ -341,7 +386,7 @@ mod tests {
             bounds: Bounds { x: 0.1, y: 0.2, width: 0.5, height: 0.25 },
             decoration: Decoration { stroke_width: 0.01 },
             color: ColorIntent::new("surface", "outline"),
-            corner_radius: 0.08,
+            corner_radius: CornerRadius::ShorterSideRatio(0.08),
         }
     }
 
@@ -381,11 +426,12 @@ mod tests {
             &prepared.decoration,
             1600.0,
             400.0,
+            1.0,
         )
         .unwrap();
         assert_eq!(wide.corner_radius_x, wide.corner_radius_y);
         let tall =
-            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 400.0, 1600.0)
+            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 400.0, 1600.0, 1.0)
                 .unwrap();
         assert_eq!(tall.corner_radius_x, tall.corner_radius_y);
     }
@@ -394,7 +440,7 @@ mod tests {
     fn the_corner_radius_is_a_fraction_of_the_shorter_physical_side() {
         let prepared = prepare_design_language(&sample()).unwrap();
         let geometry =
-            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 1000.0, 800.0)
+            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 1000.0, 800.0, 1.0)
                 .unwrap();
         let shorter = geometry.width.min(geometry.height);
         assert!((geometry.corner_radius_x - 0.08 * shorter).abs() < 1e-4);
@@ -405,7 +451,70 @@ mod tests {
         let mut sample = sample();
         sample.kind = BoxKind::Box;
         let prepared = prepare_design_language(&sample).unwrap();
-        assert_eq!(prepared.decoration.corner_radius_ratio, 0.0);
+        assert_eq!(prepared.decoration.corner_radius, CornerRadius::ShorterSideRatio(0.0));
+    }
+
+    #[test]
+    fn one_absolute_radius_gives_boxes_of_different_heights_the_same_corner() {
+        // The reason the absolute form exists: a ratio cannot say this, and the
+        // value a catalogue reaches for instead is the capsule.
+        let radius_for = |height: f32| {
+            let mut sample = sample();
+            sample.corner_radius = CornerRadius::Pixels(8.0);
+            sample.bounds = Bounds { x: 0.0, y: 0.0, width: 1.0, height };
+            let prepared = prepare_design_language(&sample).unwrap();
+            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 1000.0, 800.0, 1.0)
+                .unwrap()
+                .corner_radius_x
+        };
+        assert_eq!(radius_for(0.05), 8.0);
+        assert_eq!(radius_for(0.6), 8.0);
+    }
+
+    #[test]
+    fn an_absolute_radius_scales_with_display_density_and_a_ratio_does_not() {
+        let mut absolute = sample();
+        absolute.corner_radius = CornerRadius::Pixels(8.0);
+        let prepared = prepare_design_language(&absolute).unwrap();
+        let at = |scale: f32| {
+            materialize_pixel_box_geometry(
+                &prepared.layout,
+                &prepared.decoration,
+                1000.0,
+                800.0,
+                scale,
+            )
+            .unwrap()
+            .corner_radius_x
+        };
+        assert_eq!(at(1.0) * 2.0, at(2.0));
+
+        let ratio = prepare_design_language(&sample()).unwrap();
+        let ratio_at = |scale: f32| {
+            materialize_pixel_box_geometry(&ratio.layout, &ratio.decoration, 1000.0, 800.0, scale)
+                .unwrap()
+                .corner_radius_x
+        };
+        assert_eq!(ratio_at(1.0), ratio_at(2.0));
+    }
+
+    #[test]
+    fn an_absolute_radius_wider_than_the_box_is_cut_to_the_capsule() {
+        let mut sample = sample();
+        sample.corner_radius = CornerRadius::Pixels(9999.0);
+        sample.bounds = Bounds { x: 0.0, y: 0.0, width: 1.0, height: 0.05 };
+        let prepared = prepare_design_language(&sample).unwrap();
+        let geometry =
+            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 1000.0, 800.0, 1.0)
+                .unwrap();
+        assert_eq!(geometry.corner_radius_x, geometry.height / 2.0);
+    }
+
+    #[test]
+    fn a_negative_absolute_radius_is_refused() {
+        let mut sample = sample();
+        sample.corner_radius = CornerRadius::Pixels(-1.0);
+        assert!(matches!(prepare_design_language(&sample), Err(Error::Range(_))));
     }
 
     #[test]
