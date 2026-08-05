@@ -97,7 +97,18 @@ impl Renderer {
             let u_mode = gl.get_uniform_location(program, "u_mode");
 
             gl.enable(glow::BLEND);
-            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            // Colour blends as usual, but alpha accumulates towards opaque
+            // instead of being scaled down by every translucent layer. Without
+            // the separate function a scrim at 0.55 leaves the framebuffer
+            // partly transparent, which is invisible against an opaque window
+            // and turns every PNG snapshot into a washed-out picture of
+            // something the screen never showed.
+            gl.blend_func_separate(
+                glow::SRC_ALPHA,
+                glow::ONE_MINUS_SRC_ALPHA,
+                glow::ONE,
+                glow::ONE_MINUS_SRC_ALPHA,
+            );
 
             Self { program, vao, vbo, tex, verts: Vec::new(), u_screen, u_atlas, u_mode }
         }

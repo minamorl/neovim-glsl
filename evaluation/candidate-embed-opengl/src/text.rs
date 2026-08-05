@@ -208,10 +208,34 @@ impl Atlas {
         let Some(font) = self.fonts.iter().find(|f| f.lookup_glyph_index(ch) != 0) else {
             return Rasterized::NoInk;
         };
-        let (m, base) = font.rasterize(ch, self.px);
+        // Fit the glyph's own em box to the cells it occupies, then centre what
+        // is left over.
+        //
+        // A fallback face has no reason to advance exactly as wide as this
+        // grid's cells. Measured here, a full-width Japanese glyph advances
+        // 30px where two cells are 38: left-aligned, the whole 8px lands on the
+        // right and the text reads as though every character were followed by a
+        // gap. Japanese sets solid, so the fix is to make the em fill the cells
+        // rather than to spread the gap around it — but not past the line box,
+        // which is what the cap is for. Whatever slack survives is then split,
+        // and it is the *advance* that gets centred, not the ink: a character
+        // deliberately off-centre inside its own em — 。 sits low and left in
+        // its square — has to stay where the font put it.
+        let cells = cell_span(ch) as f32;
+        let em = font.metrics(ch, self.px).advance_width;
+        let fit = if em > 0.0 {
+            (cells * self.cell_w / em).min(self.cell_h / self.px).max(0.1)
+        } else {
+            1.0
+        };
+        let px = if (fit - 1.0).abs() < 0.01 { self.px } else { self.px * fit };
+
+        let (m, base) = font.rasterize(ch, px);
         if m.width == 0 || m.height == 0 {
             return Rasterized::NoInk;
         }
+        let slack = (cells * self.cell_w - m.advance_width).max(0.0);
+        let centring = (slack / 2.0).round();
 
         // Synthesise the requested face from the upright coverage bitmap. The
         // cell advance is fixed by the grid, so styling only reshapes ink; it
@@ -251,9 +275,39 @@ impl Atlas {
             v1: (oy + h) as f32 / s,
             w: w as f32,
             h: h as f32,
-            bearing_x: m.xmin as f32,
+            bearing_x: m.xmin as f32 + centring,
             bearing_y: (h as i32 + m.ymin) as f32,
         })
+    }
+}
+
+/// How many grid cells a character occupies.
+///
+/// East Asian Wide and Fullwidth take two; everything else here takes one. This
+/// is the renderer's half of the same question the host answers when it lays
+/// out the grid, and the two have to agree or the ink lands in the wrong cell.
+fn cell_span(ch: char) -> usize {
+    let c = ch as u32;
+    let wide = matches!(c,
+        0x1100..=0x115F
+            | 0x2E80..=0x303E
+            | 0x3041..=0x33FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xA000..=0xA4CF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+            | 0x1F300..=0x1F64F
+            | 0x1F900..=0x1F9FF
+            | 0x20000..=0x2FFFD
+            | 0x30000..=0x3FFFD);
+    if wide {
+        2
+    } else {
+        1
     }
 }
 
@@ -368,12 +422,26 @@ fn candidate_font_paths() -> Vec<(PathBuf, u32)> {
         paths.extend(std::env::split_paths(&configured).map(|path| (path, 0)));
     }
 
+    // Order is meaning: the first face that parses sets the cell metrics, and
+    // every later one only fills glyphs the earlier ones lack. So the Latin
+    // stack comes first and Japanese after it, never the other way round.
+    //
+    // The Japanese face is Hiragino Kaku Gothic ProN, not Hiragino Sans GB. GB
+    // is the Simplified Chinese face: it covers the same kanji and draws them
+    // in Chinese forms, so 直 and 骨 and 令 come out subtly wrong in Japanese
+    // text while looking, at a glance, like they rendered fine.
     #[cfg(target_os = "macos")]
     paths.extend(
         [
+            "/System/Library/Fonts/Menlo.ttc",
+            "/System/Library/Fonts/Monaco.ttf",
+            "/System/Library/Fonts/Supplemental/Courier New.ttf",
             "/System/Library/Fonts/SFNSMono.ttf",
             "/System/Library/Fonts/Supplemental/Andale Mono.ttf",
+            "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+            "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc",
             "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/Apple Color Emoji.ttc",
         ]
         .into_iter()
         .map(|path| (PathBuf::from(path), 0)),
@@ -567,4 +635,71 @@ mod tests {
         assert!(w >= 6); // widened by bold (+1) and shear
         assert_eq!(out.len(), w * h);
     }
+    /// A full-width character has to fill the two cells it claims.
+    ///
+    /// The defect this pins: the fallback face advances about one em where two
+    /// cells are wider than that, so a left-aligned glyph put the whole
+    /// difference on its right and Japanese read as though every character were
+    /// followed by a space.
+    #[test]
+    fn a_full_width_glyph_fills_its_two_cells() {
+        let mut atlas = Atlas::new(30.0);
+        if !font_available() {
+            return;
+        }
+        let cells = atlas.cell_w * 2.0;
+        // Thin strokes are included, because the em is what gets fitted; ノ is
+        // narrow ink inside a full-width square and must stay that way.
+        for ch in ['漢', '速', 'あ', 'ノ'] {
+            let Some(g) = atlas.glyph(ch) else { continue };
+            let left = g.bearing_x;
+            let right = cells - (g.bearing_x + g.w);
+            assert!(right >= -1.5, "{ch} overflows its cells by {:.1}px", -right);
+            assert!(
+                (left - right).abs() <= 3.0,
+                "{ch} sits off-centre: {left:.1}px left, {right:.1}px right",
+            );
+        }
+        // Dense characters do have to cover their square, which is the part the
+        // old left-alignment gave away.
+        for ch in ['漢', '速'] {
+            let Some(g) = atlas.glyph(ch) else { continue };
+            assert!(
+                g.w >= cells * 0.85,
+                "{ch} covers only {:.0}% of its two cells",
+                g.w / cells * 100.0
+            );
+        }
+    }
+
+    /// Scaling a wide glyph must not push it out of the line box.
+    #[test]
+    fn a_fitted_glyph_still_fits_the_line() {
+        let mut atlas = Atlas::new(30.0);
+        if !font_available() {
+            return;
+        }
+        for ch in ['漢', '速', 'ー'] {
+            let Some(g) = atlas.glyph(ch) else { continue };
+            assert!(
+                g.h <= atlas.cell_h + 1.0,
+                "{ch} is {:.1}px tall in a {:.1}px line",
+                g.h,
+                atlas.cell_h
+            );
+        }
+    }
+
+    /// A halfwidth character is left where it was: the primary face already
+    /// advances exactly one cell, so nothing should move.
+    #[test]
+    fn a_halfwidth_glyph_is_not_recentred(){
+        let mut atlas = Atlas::new(30.0);
+        if !font_available() {
+            return;
+        }
+        let Some(g) = atlas.glyph('M') else { return };
+        assert!(g.bearing_x.abs() <= 2.0, "M moved to {:.1}", g.bearing_x);
+    }
+
 }
