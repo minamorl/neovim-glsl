@@ -21,6 +21,7 @@ pub enum Named {
     PageUp,
     PageDown,
     Insert,
+    F(u8),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -38,15 +39,27 @@ pub struct Key {
 
 impl Key {
     pub fn char(ch: char) -> Self {
-        Self { code: Code::Char(ch), ctrl: false, alt: false }
+        Self {
+            code: Code::Char(ch),
+            ctrl: false,
+            alt: false,
+        }
     }
 
     pub fn ctrl(ch: char) -> Self {
-        Self { code: Code::Char(ch), ctrl: true, alt: false }
+        Self {
+            code: Code::Char(ch),
+            ctrl: true,
+            alt: false,
+        }
     }
 
     pub fn named(named: Named) -> Self {
-        Self { code: Code::Named(named), ctrl: false, alt: false }
+        Self {
+            code: Code::Named(named),
+            ctrl: false,
+            alt: false,
+        }
     }
 
     /// The plain character this key stands for, if it stands for one.
@@ -65,7 +78,13 @@ impl Key {
 }
 
 fn named_from(name: &str) -> Option<Named> {
-    Some(match name.to_ascii_lowercase().as_str() {
+    let lower = name.to_ascii_lowercase();
+    if let Some(number) = lower.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()) {
+        if (1..=12).contains(&number) {
+            return Some(Named::F(number));
+        }
+    }
+    Some(match lower.as_str() {
         "esc" => Named::Esc,
         "cr" | "enter" | "return" => Named::Enter,
         "tab" => Named::Tab,
@@ -100,7 +119,9 @@ fn parse_bracketed(body: &str) -> Option<Key> {
     let mut shift = false;
     let mut rest = body;
     loop {
-        let Some((prefix, tail)) = rest.split_once('-') else { break };
+        let Some((prefix, tail)) = rest.split_once('-') else {
+            break;
+        };
         match prefix.to_ascii_uppercase().as_str() {
             "C" => ctrl = true,
             "M" | "A" => alt = true,
@@ -118,7 +139,14 @@ fn parse_bracketed(body: &str) -> Option<Key> {
         if chars.next().is_some() {
             return None;
         }
-        Code::Char(if shift { ch.to_ascii_uppercase() } else { ch })
+        let ch = if shift {
+            ch.to_ascii_uppercase()
+        } else if ctrl {
+            ch.to_ascii_lowercase()
+        } else {
+            ch
+        };
+        Code::Char(ch)
     };
     Some(Key { code, ctrl, alt })
 }
@@ -164,18 +192,39 @@ mod tests {
         let keys = parse("ihello<Esc>");
         assert_eq!(keys.len(), 7);
         assert_eq!(keys[6], Key::named(Named::Esc));
+        assert_eq!(parse("<F5>"), vec![Key::named(Named::F(5))]);
+        assert_eq!(parse("<F12>"), vec![Key::named(Named::F(12))]);
     }
 
     #[test]
     fn modifiers_parse() {
         assert_eq!(parse("<C-r>"), vec![Key::ctrl('r')]);
-        assert_eq!(parse("<C-S-x>"), vec![Key { code: Code::Char('X'), ctrl: true, alt: false }]);
-        assert_eq!(parse("<M-x>"), vec![Key { code: Code::Char('x'), ctrl: false, alt: true }]);
+        assert_eq!(
+            parse("<C-S-x>"),
+            vec![Key {
+                code: Code::Char('X'),
+                ctrl: true,
+                alt: false
+            }]
+        );
+        assert_eq!(parse("<c-S>"), parse("<C-s>"));
+        assert_eq!(parse("<C-X>"), parse("<C-x>"));
+        assert_eq!(
+            parse("<M-x>"),
+            vec![Key {
+                code: Code::Char('x'),
+                ctrl: false,
+                alt: true
+            }]
+        );
     }
 
     #[test]
     fn an_unrecognised_bracket_is_a_literal_less_than() {
-        assert_eq!(parse("a<b"), vec![Key::char('a'), Key::char('<'), Key::char('b')]);
+        assert_eq!(
+            parse("a<b"),
+            vec![Key::char('a'), Key::char('<'), Key::char('b')]
+        );
         assert_eq!(parse("<lt>"), vec![Key::char('<')]);
         assert_eq!(parse("<Space>"), vec![Key::char(' ')]);
     }

@@ -112,7 +112,10 @@ mod tests {
         }
         let summary = samples.summary().unwrap();
         for reported in [summary.p50, summary.p90, summary.p95, summary.p99] {
-            assert!([1.0, 2.0, 100.0].contains(&reported), "{reported} was interpolated");
+            assert!(
+                [1.0, 2.0, 100.0].contains(&reported),
+                "{reported} was interpolated"
+            );
         }
     }
 }

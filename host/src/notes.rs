@@ -25,7 +25,9 @@ pub fn vault_root() -> PathBuf {
             return PathBuf::from(configured);
         }
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     home.join("repos").join("obsidian")
 }
 
@@ -121,7 +123,10 @@ impl Vault {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let stem = Path::new(&relative).file_stem().and_then(|s| s.to_str()).unwrap_or(title);
+        let stem = Path::new(&relative)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(title);
         std::fs::write(&path, format!("# {stem}\n\n"))?;
         Ok(path)
     }
@@ -131,7 +136,9 @@ fn collect(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
     if depth > 8 || out.len() > 20_000 {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -142,7 +149,12 @@ fn collect(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
         match entry.file_type() {
             Ok(kind) if kind.is_dir() => collect(root, &path, depth + 1, out),
             Ok(_) if name.ends_with(".md") || name.ends_with(".markdown") => {
-                out.push(path.strip_prefix(root).unwrap_or(&path).display().to_string());
+                out.push(
+                    path.strip_prefix(root)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string(),
+                );
             }
             _ => {}
         }
@@ -182,7 +194,10 @@ pub struct NotesSource {
 
 impl NotesSource {
     pub fn new(vault: &Vault) -> Self {
-        Self { label: vault.label(), entries: vault.notes() }
+        Self {
+            label: vault.label(),
+            entries: vault.notes(),
+        }
     }
 }
 
@@ -206,7 +221,11 @@ mod tests {
         std::fs::create_dir_all(dir.join("daily")).unwrap();
         std::fs::create_dir_all(dir.join(".obsidian")).unwrap();
         std::fs::create_dir_all(dir.join("attachments")).unwrap();
-        std::fs::write(dir.join("index.md"), "# index\n\nsee [[daily/2026-08-03]]\n").unwrap();
+        std::fs::write(
+            dir.join("index.md"),
+            "# index\n\nsee [[daily/2026-08-03]]\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("daily/2026-08-03.md"), "# today\n").unwrap();
         std::fs::write(dir.join(".obsidian/workspace.json"), "{}").unwrap();
         std::fs::write(dir.join("attachments/a.md"), "not a note").unwrap();
@@ -218,7 +237,10 @@ mod tests {
         let dir = scratch("list");
         let vault = Vault::open(dir.clone());
         let notes = vault.notes();
-        assert_eq!(notes, vec!["daily/2026-08-03.md".to_string(), "index.md".to_string()]);
+        assert_eq!(
+            notes,
+            vec!["daily/2026-08-03.md".to_string(), "index.md".to_string()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -226,10 +248,22 @@ mod tests {
     fn a_wiki_link_resolves_by_path_or_by_name() {
         let dir = scratch("link");
         let vault = Vault::open(dir.clone());
-        assert_eq!(vault.resolve_link("daily/2026-08-03"), Some("daily/2026-08-03.md".into()));
-        assert_eq!(vault.resolve_link("2026-08-03"), Some("daily/2026-08-03.md".into()));
-        assert_eq!(vault.resolve_link("2026-08-03|today"), Some("daily/2026-08-03.md".into()));
-        assert_eq!(vault.resolve_link("2026-08-03#heading"), Some("daily/2026-08-03.md".into()));
+        assert_eq!(
+            vault.resolve_link("daily/2026-08-03"),
+            Some("daily/2026-08-03.md".into())
+        );
+        assert_eq!(
+            vault.resolve_link("2026-08-03"),
+            Some("daily/2026-08-03.md".into())
+        );
+        assert_eq!(
+            vault.resolve_link("2026-08-03|today"),
+            Some("daily/2026-08-03.md".into())
+        );
+        assert_eq!(
+            vault.resolve_link("2026-08-03#heading"),
+            Some("daily/2026-08-03.md".into())
+        );
         assert_eq!(vault.resolve_link("nothing"), None);
         let _ = std::fs::remove_dir_all(&dir);
     }

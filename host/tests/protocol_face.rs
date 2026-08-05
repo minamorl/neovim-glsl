@@ -45,13 +45,21 @@ impl Client {
                 }
             }
         });
-        Self { child, stdin: Some(stdin), messages: rx, next_msgid: 1 }
+        Self {
+            child,
+            stdin: Some(stdin),
+            messages: rx,
+            next_msgid: 1,
+        }
     }
 
     fn send(&mut self, message: Value) {
         let mut buffer = Vec::new();
         rmpv::encode::write_value(&mut buffer, &message).expect("encodes");
-        let stdin = self.stdin.as_mut().expect("the client still holds its pipe");
+        let stdin = self
+            .stdin
+            .as_mut()
+            .expect("the client still holds its pipe");
         stdin.write_all(&buffer).expect("writes");
         stdin.flush().expect("flushes");
     }
@@ -113,14 +121,22 @@ impl Drop for Client {
 fn redraw_events(messages: &[Value]) -> Vec<(String, Vec<Value>)> {
     let mut out = Vec::new();
     for message in messages {
-        let Some(parts) = message.as_array() else { continue };
+        let Some(parts) = message.as_array() else {
+            continue;
+        };
         if parts.len() != 3 || parts[0].as_u64() != Some(2) || parts[1].as_str() != Some("redraw") {
             continue;
         }
-        let Some(batches) = parts[2].as_array() else { continue };
+        let Some(batches) = parts[2].as_array() else {
+            continue;
+        };
         for batch in batches {
-            let Some(batch) = batch.as_array() else { continue };
-            let Some(name) = batch.first().and_then(Value::as_str) else { continue };
+            let Some(batch) = batch.as_array() else {
+                continue;
+            };
+            let Some(name) = batch.first().and_then(Value::as_str) else {
+                continue;
+            };
             for call in &batch[1..] {
                 if let Some(args) = call.as_array() {
                     out.push((name.to_string(), args.clone()));
@@ -170,8 +186,17 @@ fn an_outside_client_can_attach_and_receives_a_full_first_paint() {
     let mut client = Client::start(&[]);
     let events = attach(&mut client, 40, 8);
     let names: Vec<&str> = events.iter().map(|(name, _)| name.as_str()).collect();
-    for expected in ["grid_resize", "default_colors_set", "hl_attr_define", "grid_line", "flush"] {
-        assert!(names.contains(&expected), "{expected} missing from {names:?}");
+    for expected in [
+        "grid_resize",
+        "default_colors_set",
+        "hl_attr_define",
+        "grid_line",
+        "flush",
+    ] {
+        assert!(
+            names.contains(&expected),
+            "{expected} missing from {names:?}"
+        );
     }
 }
 
@@ -223,8 +248,12 @@ fn buffer_lines_read_back_what_was_typed() {
         .filter_map(|m| m.as_array())
         .find(|parts| parts[0].as_u64() == Some(1) && parts[1].as_u64() == Some(msgid))
         .expect("a response");
-    let lines: Vec<&str> =
-        response[3].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    let lines: Vec<&str> = response[3]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
     assert_eq!(lines, vec!["one", "two"]);
 }
 
@@ -292,5 +321,8 @@ fn an_unknown_method_is_refused_by_name() {
         .find(|parts| parts[0].as_u64() == Some(1) && parts[1].as_u64() == Some(msgid))
         .expect("a response");
     let error = response[2].as_str().expect("an error string");
-    assert!(error.contains("nvim_open_the_pod_bay_doors"), "error was {error:?}");
+    assert!(
+        error.contains("nvim_open_the_pod_bay_doors"),
+        "error was {error:?}"
+    );
 }

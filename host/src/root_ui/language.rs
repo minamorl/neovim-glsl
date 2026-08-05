@@ -52,13 +52,19 @@ pub struct Semantic {
 
 impl Semantic {
     pub fn new(name: &str, variant: &str, state: &str) -> Self {
-        Self { name: name.into(), variant: variant.into(), state: state.into() }
+        Self {
+            name: name.into(),
+            variant: variant.into(),
+            state: state.into(),
+        }
     }
 
     fn check(&self) -> Result<()> {
-        for (field, value) in
-            [("name", &self.name), ("variant", &self.variant), ("state", &self.state)]
-        {
+        for (field, value) in [
+            ("name", &self.name),
+            ("variant", &self.variant),
+            ("state", &self.state),
+        ] {
             if value.trim().is_empty() {
                 return Err(Error::Semantic(field.to_string()));
             }
@@ -134,7 +140,10 @@ pub struct Decoration {
 
 impl Decoration {
     pub fn stroke(stroke_width: f32) -> Self {
-        Self { stroke_width, shadow: None }
+        Self {
+            stroke_width,
+            shadow: None,
+        }
     }
 }
 
@@ -354,7 +363,9 @@ pub fn resolve_non_color_decoration(
 }
 
 fn check_shadow(shadow: Option<Shadow>) -> Result<Option<Shadow>> {
-    let Some(shadow) = shadow else { return Ok(None) };
+    let Some(shadow) = shadow else {
+        return Ok(None);
+    };
     for (length, field) in [(shadow.blur, "blur"), (shadow.spread, "spread")] {
         let value = match length {
             CornerRadius::ShorterSideRatio(v) | CornerRadius::Pixels(v) => v,
@@ -446,19 +457,34 @@ pub fn resolve_color(intent: &ColorIntent, runtime: &ColorRuntime) -> Result<Res
         .ok_or_else(|| Error::MissingRole(intent.stroke_role.clone()))?;
     let shadow = match &intent.shadow_role {
         Some(role) => Some(
-            *scheme.colors.get(role).ok_or_else(|| Error::MissingRole(role.clone()))?,
+            *scheme
+                .colors
+                .get(role)
+                .ok_or_else(|| Error::MissingRole(role.clone()))?,
         ),
         None => None,
     };
-    Ok(ResolvedColor { scheme_id: scheme.id.clone(), fill, stroke, shadow })
+    Ok(ResolvedColor {
+        scheme_id: scheme.id.clone(),
+        fill,
+        stroke,
+        shadow,
+    })
 }
 
 /// A shadow needs both halves: measurements in decoration and a role in colour.
 /// Either alone is a shadow someone meant to draw and will never see.
 fn check_shadow_is_whole(sample: &Sample) -> Result<()> {
-    match (sample.decoration.shadow.is_some(), sample.color.shadow_role.is_some()) {
-        (true, false) => Err(Error::Semantic("decoration.shadow without color.shadowRole".into())),
-        (false, true) => Err(Error::Semantic("color.shadowRole without decoration.shadow".into())),
+    match (
+        sample.decoration.shadow.is_some(),
+        sample.color.shadow_role.is_some(),
+    ) {
+        (true, false) => Err(Error::Semantic(
+            "decoration.shadow without color.shadowRole".into(),
+        )),
+        (false, true) => Err(Error::Semantic(
+            "color.shadowRole without decoration.shadow".into(),
+        )),
         _ => Ok(()),
     }
 }
@@ -513,7 +539,12 @@ mod tests {
         Sample {
             semantic: Semantic::new("Dialog", "surface", "open"),
             kind: BoxKind::RoundBox,
-            bounds: Bounds { x: 0.1, y: 0.2, width: 0.5, height: 0.25 },
+            bounds: Bounds {
+                x: 0.1,
+                y: 0.2,
+                width: 0.5,
+                height: 0.25,
+            },
             decoration: Decoration::stroke(0.01),
             color: ColorIntent::new("surface", "outline"),
             corner_radius: CornerRadius::ShorterSideRatio(0.08),
@@ -530,8 +561,14 @@ mod tests {
         ColorRuntime {
             scheme_id: "dark".into(),
             schemes: vec![
-                ColorScheme { id: "dark".into(), colors: dark },
-                ColorScheme { id: "light".into(), colors: light },
+                ColorScheme {
+                    id: "dark".into(),
+                    colors: dark,
+                },
+                ColorScheme {
+                    id: "light".into(),
+                    colors: light,
+                },
             ],
         }
     }
@@ -560,18 +597,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(wide.corner_radius_x, wide.corner_radius_y);
-        let tall =
-            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 400.0, 1600.0, 1.0)
-                .unwrap();
+        let tall = materialize_pixel_box_geometry(
+            &prepared.layout,
+            &prepared.decoration,
+            400.0,
+            1600.0,
+            1.0,
+        )
+        .unwrap();
         assert_eq!(tall.corner_radius_x, tall.corner_radius_y);
     }
 
     #[test]
     fn the_corner_radius_is_a_fraction_of_the_shorter_physical_side() {
         let prepared = prepare_design_language(&sample()).unwrap();
-        let geometry =
-            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 1000.0, 800.0, 1.0)
-                .unwrap();
+        let geometry = materialize_pixel_box_geometry(
+            &prepared.layout,
+            &prepared.decoration,
+            1000.0,
+            800.0,
+            1.0,
+        )
+        .unwrap();
         let shorter = geometry.width.min(geometry.height);
         assert!((geometry.corner_radius_x - 0.08 * shorter).abs() < 1e-4);
     }
@@ -581,7 +628,10 @@ mod tests {
         let mut sample = sample();
         sample.kind = BoxKind::Box;
         let prepared = prepare_design_language(&sample).unwrap();
-        assert_eq!(prepared.decoration.corner_radius, CornerRadius::ShorterSideRatio(0.0));
+        assert_eq!(
+            prepared.decoration.corner_radius,
+            CornerRadius::ShorterSideRatio(0.0)
+        );
     }
 
     #[test]
@@ -591,11 +641,22 @@ mod tests {
         let radius_for = |height: f32| {
             let mut sample = sample();
             sample.corner_radius = CornerRadius::Pixels(8.0);
-            sample.bounds = Bounds { x: 0.0, y: 0.0, width: 1.0, height };
+            sample.bounds = Bounds {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height,
+            };
             let prepared = prepare_design_language(&sample).unwrap();
-            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 1000.0, 800.0, 1.0)
-                .unwrap()
-                .corner_radius_x
+            materialize_pixel_box_geometry(
+                &prepared.layout,
+                &prepared.decoration,
+                1000.0,
+                800.0,
+                1.0,
+            )
+            .unwrap()
+            .corner_radius_x
         };
         assert_eq!(radius_for(0.05), 8.0);
         assert_eq!(radius_for(0.6), 8.0);
@@ -632,11 +693,21 @@ mod tests {
     fn an_absolute_radius_wider_than_the_box_is_cut_to_the_capsule() {
         let mut sample = sample();
         sample.corner_radius = CornerRadius::Pixels(9999.0);
-        sample.bounds = Bounds { x: 0.0, y: 0.0, width: 1.0, height: 0.05 };
+        sample.bounds = Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 0.05,
+        };
         let prepared = prepare_design_language(&sample).unwrap();
-        let geometry =
-            materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 1000.0, 800.0, 1.0)
-                .unwrap();
+        let geometry = materialize_pixel_box_geometry(
+            &prepared.layout,
+            &prepared.decoration,
+            1000.0,
+            800.0,
+            1.0,
+        )
+        .unwrap();
         assert_eq!(geometry.corner_radius_x, geometry.height / 2.0);
     }
 
@@ -644,21 +715,35 @@ mod tests {
     fn a_negative_absolute_radius_is_refused() {
         let mut sample = sample();
         sample.corner_radius = CornerRadius::Pixels(-1.0);
-        assert!(matches!(prepare_design_language(&sample), Err(Error::Range(_))));
+        assert!(matches!(
+            prepare_design_language(&sample),
+            Err(Error::Range(_))
+        ));
     }
 
     #[test]
     fn bounds_that_leave_the_target_are_refused() {
         let mut sample = sample();
-        sample.bounds = Bounds { x: 0.8, y: 0.0, width: 0.5, height: 0.1 };
-        assert!(matches!(prepare_design_language(&sample), Err(Error::Range(_))));
+        sample.bounds = Bounds {
+            x: 0.8,
+            y: 0.0,
+            width: 0.5,
+            height: 0.1,
+        };
+        assert!(matches!(
+            prepare_design_language(&sample),
+            Err(Error::Range(_))
+        ));
     }
 
     #[test]
     fn an_empty_semantic_field_is_refused_before_layout_exists() {
         let mut sample = sample();
         sample.semantic.variant = "  ".into();
-        assert!(matches!(prepare_design_language(&sample), Err(Error::Semantic(_))));
+        assert!(matches!(
+            prepare_design_language(&sample),
+            Err(Error::Semantic(_))
+        ));
     }
 
     #[test]

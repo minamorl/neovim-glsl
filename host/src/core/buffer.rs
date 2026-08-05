@@ -41,6 +41,7 @@ pub struct Buffer {
     lines: Vec<Vec<char>>,
     path: Option<PathBuf>,
     modified: bool,
+    revision: u64,
     ending: LineEnding,
     /// Whether the file ended with a newline. Preserved so that writing a file
     /// back unchanged produces the same bytes.
@@ -64,6 +65,7 @@ impl Buffer {
             lines: vec![Vec::new()],
             path: None,
             modified: false,
+            revision: 0,
             ending: LineEnding::Lf,
             trailing_newline: true,
             undo: Vec::new(),
@@ -97,7 +99,11 @@ impl Buffer {
     }
 
     fn set_text(&mut self, text: &str) {
-        self.ending = if text.contains("\r\n") { LineEnding::Crlf } else { LineEnding::Lf };
+        self.ending = if text.contains("\r\n") {
+            LineEnding::Crlf
+        } else {
+            LineEnding::Lf
+        };
         self.trailing_newline = text.is_empty() || text.ends_with('\n');
         let body = text.strip_suffix('\n').unwrap_or(text);
         let body = body.strip_suffix('\r').unwrap_or(body);
@@ -108,6 +114,11 @@ impl Buffer {
         if self.lines.is_empty() {
             self.lines.push(Vec::new());
         }
+        self.bump_revision();
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.saturating_add(1);
     }
 
     pub fn text(&self) -> String {
@@ -141,6 +152,10 @@ impl Buffer {
 
     pub fn modified(&self) -> bool {
         self.modified
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn write(&mut self, to: Option<&Path>) -> std::io::Result<PathBuf> {
@@ -184,7 +199,10 @@ impl Buffer {
         if start >= end {
             return Vec::new();
         }
-        self.lines[start..end].iter().map(|l| l.iter().collect()).collect()
+        self.lines[start..end]
+            .iter()
+            .map(|l| l.iter().collect())
+            .collect()
     }
 
     // --- undo -------------------------------------------------------------
@@ -194,7 +212,10 @@ impl Buffer {
 
     pub fn begin_change(&mut self, cursor: (usize, usize)) {
         if self.pending.is_none() {
-            self.pending = Some(Snapshot { lines: self.lines.clone(), cursor });
+            self.pending = Some(Snapshot {
+                lines: self.lines.clone(),
+                cursor,
+            });
         }
     }
 
@@ -204,6 +225,7 @@ impl Buffer {
                 self.undo.push(snapshot);
                 self.redo.clear();
                 self.modified = true;
+                self.bump_revision();
             }
         }
     }
@@ -217,15 +239,23 @@ impl Buffer {
 
     pub fn undo(&mut self, cursor: (usize, usize)) -> Option<(usize, usize)> {
         let snapshot = self.undo.pop()?;
-        self.redo.push(Snapshot { lines: std::mem::replace(&mut self.lines, snapshot.lines), cursor });
+        self.redo.push(Snapshot {
+            lines: std::mem::replace(&mut self.lines, snapshot.lines),
+            cursor,
+        });
         self.modified = true;
+        self.bump_revision();
         Some(snapshot.cursor)
     }
 
     pub fn redo(&mut self, cursor: (usize, usize)) -> Option<(usize, usize)> {
         let snapshot = self.redo.pop()?;
-        self.undo.push(Snapshot { lines: std::mem::replace(&mut self.lines, snapshot.lines), cursor });
+        self.undo.push(Snapshot {
+            lines: std::mem::replace(&mut self.lines, snapshot.lines),
+            cursor,
+        });
         self.modified = true;
+        self.bump_revision();
         Some(snapshot.cursor)
     }
 
@@ -247,7 +277,9 @@ impl Buffer {
     }
 
     pub fn delete_range_in_line(&mut self, line: usize, from: usize, to: usize) -> String {
-        let Some(row) = self.lines.get_mut(line) else { return String::new() };
+        let Some(row) = self.lines.get_mut(line) else {
+            return String::new();
+        };
         let from = from.min(row.len());
         let to = to.min(row.len());
         if from >= to {
@@ -303,7 +335,11 @@ impl Buffer {
             return Vec::new();
         }
         let to = (from + count).min(self.lines.len());
-        let removed: Vec<String> = self.lines.drain(from..to).map(|l| l.into_iter().collect()).collect();
+        let removed: Vec<String> = self
+            .lines
+            .drain(from..to)
+            .map(|l| l.into_iter().collect())
+            .collect();
         if self.lines.is_empty() {
             self.lines.push(Vec::new());
         }
@@ -322,6 +358,7 @@ impl Buffer {
             self.lines.push(Vec::new());
         }
         self.modified = true;
+        self.bump_revision();
     }
 
     /// Replace `[start, end)` with `replacement`, the shape `nvim_buf_set_lines`
@@ -329,13 +366,16 @@ impl Buffer {
     pub fn splice_lines(&mut self, start: usize, end: usize, replacement: Vec<String>) {
         let start = start.min(self.lines.len());
         let end = end.clamp(start, self.lines.len());
-        let replacement: Vec<Vec<char>> =
-            replacement.into_iter().map(|l| l.chars().collect()).collect();
+        let replacement: Vec<Vec<char>> = replacement
+            .into_iter()
+            .map(|l| l.chars().collect())
+            .collect();
         self.lines.splice(start..end, replacement);
         if self.lines.is_empty() {
             self.lines.push(Vec::new());
         }
         self.modified = true;
+        self.bump_revision();
     }
 }
 
@@ -367,23 +407,39 @@ mod tests {
     #[test]
     fn undo_restores_the_previous_text_and_cursor() {
         let mut buffer = Buffer::from_text("one\n");
+        let revision = buffer.revision();
         buffer.begin_change((0, 0));
         buffer.insert_str(0, 0, "zero ");
         buffer.commit_change();
+        assert_eq!(buffer.revision(), revision + 1);
         assert_eq!(buffer.line_text(0), "zero one");
         assert_eq!(buffer.undo((0, 5)), Some((0, 0)));
+        assert_eq!(buffer.revision(), revision + 2);
         assert_eq!(buffer.line_text(0), "one");
         assert_eq!(buffer.redo((0, 0)), Some((0, 5)));
+        assert_eq!(buffer.revision(), revision + 3);
         assert_eq!(buffer.line_text(0), "zero one");
     }
 
     #[test]
     fn a_change_that_changed_nothing_is_not_an_undo_step() {
         let mut buffer = Buffer::from_text("one\n");
+        let revision = buffer.revision();
         buffer.begin_change((0, 0));
         buffer.commit_change();
+        assert_eq!(buffer.revision(), revision);
         assert_eq!(buffer.undo((0, 0)), None);
         assert!(!buffer.modified());
+    }
+
+    #[test]
+    fn direct_line_replacements_advance_the_revision() {
+        let mut buffer = Buffer::from_text("one\n");
+        let revision = buffer.revision();
+        buffer.set_lines(vec!["two".into()]);
+        assert_eq!(buffer.revision(), revision + 1);
+        buffer.splice_lines(0, 1, vec!["three".into()]);
+        assert_eq!(buffer.revision(), revision + 2);
     }
 
     #[test]

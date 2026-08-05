@@ -114,7 +114,9 @@ impl Host {
     /// Load every `.lua` file in `directory`, in name order so that a load
     /// order exists at all and is the same on every run.
     pub fn load_directory(&mut self, directory: &Path) {
-        let Ok(entries) = std::fs::read_dir(directory) else { return };
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
         let mut paths: Vec<PathBuf> = entries
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
             .filter(|path| path.extension().is_some_and(|extension| extension == "lua"))
@@ -149,12 +151,18 @@ impl Host {
         let result = self.lua.load(&source).set_name(name.as_str()).exec();
 
         let registry: Table = self.lua.globals().get("__nvimglsl_registry")?;
-        for entry in registry.get::<Table>("commands")?.sequence_values::<String>() {
+        for entry in registry
+            .get::<Table>("commands")?
+            .sequence_values::<String>()
+        {
             let command = entry?;
             self.commands.insert(command.clone(), index);
             self.plugins[index].commands.push(command);
         }
-        for entry in registry.get::<Table>("surfaces")?.sequence_values::<String>() {
+        for entry in registry
+            .get::<Table>("surfaces")?
+            .sequence_values::<String>()
+        {
             let surface = entry?;
             self.surfaces.insert(surface.clone(), index);
             self.plugins[index].surfaces.push(surface);
@@ -191,13 +199,19 @@ impl Host {
             .load("return function(name, arg) return __nvimglsl_call_command(name, arg) end")
             .eval()
             .map_err(|error| error.to_string())?;
-        call.call::<()>((name, argument)).map_err(|error| error.to_string())?;
+        call.call::<()>((name, argument))
+            .map_err(|error| error.to_string())?;
         self.drain_messages();
         Ok(())
     }
 
     /// Ask a registered surface for its scene.
-    pub fn surface(&mut self, name: &str, window: (f32, f32), scale: f32) -> Result<PluginScene, String> {
+    pub fn surface(
+        &mut self,
+        name: &str,
+        window: (f32, f32),
+        scale: f32,
+    ) -> Result<PluginScene, String> {
         if !self.surfaces.contains_key(name) {
             return Err(format!("no plugin surface named {name}"));
         }
@@ -206,20 +220,28 @@ impl Host {
             .load("return function(name, w, h) return __nvimglsl_call_surface(name, w, h) end")
             .eval()
             .map_err(|error| error.to_string())?;
-        let table: Table =
-            call.call((name, window.0, window.1)).map_err(|error| error.to_string())?;
+        let table: Table = call
+            .call((name, window.0, window.1))
+            .map_err(|error| error.to_string())?;
         let scene = read_scene(&table, name, window, scale).map_err(|error| error.to_string())?;
         self.drain_messages();
         Ok(scene)
     }
 
     fn drain_messages(&mut self) {
-        let Ok(globals) = self.lua.globals().get::<Table>("__nvimglsl_registry") else { return };
-        let Ok(messages) = globals.get::<Table>("messages") else { return };
+        let Ok(globals) = self.lua.globals().get::<Table>("__nvimglsl_registry") else {
+            return;
+        };
+        let Ok(messages) = globals.get::<Table>("messages") else {
+            return;
+        };
         for entry in messages.clone().sequence_values::<String>().flatten() {
             self.messages.push(entry);
         }
-        let _ = globals.set("messages", self.lua.create_table().unwrap_or_else(|_| messages));
+        let _ = globals.set(
+            "messages",
+            self.lua.create_table().unwrap_or_else(|_| messages),
+        );
     }
 }
 
@@ -248,11 +270,12 @@ fn read_scene(
     if let Ok(list) = table.get::<Table>("surfaces") {
         for (index, entry) in list.sequence_values::<Table>().enumerate() {
             let entry = entry?;
-            let number = |key: &str, fallback: f32| -> f32 {
-                entry.get::<f32>(key).unwrap_or(fallback)
-            };
+            let number =
+                |key: &str, fallback: f32| -> f32 { entry.get::<f32>(key).unwrap_or(fallback) };
             let text = |key: &str, fallback: &str| -> String {
-                entry.get::<String>(key).unwrap_or_else(|_| fallback.to_string())
+                entry
+                    .get::<String>(key)
+                    .unwrap_or_else(|_| fallback.to_string())
             };
             let fill = text("fill", "surface");
             let stroke = text("stroke", &fill);
@@ -271,14 +294,21 @@ fn read_scene(
             let x = number("x", 0.0).clamp(0.0, 1.0);
             let y = number("y", 0.0).clamp(0.0, 1.0);
             surfaces.push((
-                format!("plugin.{plugin}.{}", entry.get::<String>("id").unwrap_or(index.to_string())),
+                format!(
+                    "plugin.{plugin}.{}",
+                    entry.get::<String>("id").unwrap_or(index.to_string())
+                ),
                 Sample {
                     semantic: Semantic::new(
                         &text("name", "Surface"),
                         "plugin",
                         &text("state", "rest"),
                     ),
-                    kind: if radius > 0.0 { BoxKind::RoundBox } else { BoxKind::Box },
+                    kind: if radius > 0.0 {
+                        BoxKind::RoundBox
+                    } else {
+                        BoxKind::Box
+                    },
                     bounds: Bounds {
                         x,
                         y,
@@ -302,7 +332,9 @@ fn read_scene(
     if let Ok(list) = table.get::<Table>("texts") {
         for entry in list.sequence_values::<Table>() {
             let entry = entry?;
-            let role = entry.get::<String>("role").unwrap_or_else(|_| "on_surface".to_string());
+            let role = entry
+                .get::<String>("role")
+                .unwrap_or_else(|_| "on_surface".to_string());
             check(&role, &mut unknown_roles);
             // The role has to outlive the frame, and the set is closed, so a
             // known role becomes its 'static name and an unknown one falls back
@@ -323,7 +355,11 @@ fn read_scene(
     }
 
     let _ = scale;
-    Ok(PluginScene { scene: FlatScene { surfaces }, texts, unknown_roles })
+    Ok(PluginScene {
+        scene: FlatScene { surfaces },
+        texts,
+        unknown_roles,
+    })
 }
 
 /// A scheme with the plugin roles in it, which is the navigation scheme: one
@@ -522,7 +558,10 @@ if #blocked > 0 then error('reachable: ' .. table.concat(blocked, ', ')) end
             &[
                 ("a-good.lua", "nvimglsl.command('Good', function() end)"),
                 ("b-bad.lua", "error('this plugin is broken')"),
-                ("c-also-good.lua", "nvimglsl.command('AlsoGood', function() end)"),
+                (
+                    "c-also-good.lua",
+                    "nvimglsl.command('AlsoGood', function() end)",
+                ),
             ],
         );
         assert_eq!(host.errors.len(), 1);
@@ -534,10 +573,16 @@ if #blocked > 0 then error('reachable: ' .. table.concat(blocked, ', ')) end
     fn registrations_a_failing_plugin_made_before_it_broke_are_kept() {
         let host = host_with(
             "partial",
-            &[("half.lua", "nvimglsl.command('Half', function() end)\nerror('later')")],
+            &[(
+                "half.lua",
+                "nvimglsl.command('Half', function() end)\nerror('later')",
+            )],
         );
         assert_eq!(host.errors.len(), 1);
-        assert!(host.has_command("Half"), "a registered command must not vanish");
+        assert!(
+            host.has_command("Half"),
+            "a registered command must not vanish"
+        );
     }
 
     #[test]
@@ -555,15 +600,20 @@ if #blocked > 0 then error('reachable: ' .. table.concat(blocked, ', ')) end
 
     #[test]
     fn registering_with_the_wrong_shape_is_an_error_not_a_silent_no_op() {
-        let host = host_with("shape", &[("bad.lua", "nvimglsl.command('X', 'not a function')")]);
+        let host = host_with(
+            "shape",
+            &[("bad.lua", "nvimglsl.command('X', 'not a function')")],
+        );
         assert_eq!(host.errors.len(), 1);
         assert!(host.errors[0].contains("takes a name and a function"));
     }
 
     #[test]
     fn a_surface_that_returns_the_wrong_thing_says_so() {
-        let mut host =
-            host_with("wrong", &[("w.lua", "nvimglsl.surface('W', function() return 42 end)")]);
+        let mut host = host_with(
+            "wrong",
+            &[("w.lua", "nvimglsl.surface('W', function() return 42 end)")],
+        );
         let error = match host.surface("W", (100.0, 100.0), 1.0) {
             Err(error) => error,
             Ok(_) => panic!("a non-table return must not be accepted"),

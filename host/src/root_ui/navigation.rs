@@ -83,7 +83,10 @@ pub fn dark_scheme() -> ColorScheme {
     colors.insert("on_surface".into(), rgba("#e7ecf5", 1.0));
     colors.insert("on_surface_muted".into(), rgba("#8a93a6", 1.0));
     colors.insert("accent".into(), rgba("#7fa7f5", 1.0));
-    ColorScheme { id: "dark".into(), colors }
+    ColorScheme {
+        id: "dark".into(),
+        colors,
+    }
 }
 
 pub fn light_scheme() -> ColorScheme {
@@ -97,11 +100,17 @@ pub fn light_scheme() -> ColorScheme {
     colors.insert("on_surface".into(), rgba("#1b2130", 1.0));
     colors.insert("on_surface_muted".into(), rgba("#6f788b", 1.0));
     colors.insert("accent".into(), rgba("#2f5fd0", 1.0));
-    ColorScheme { id: "light".into(), colors }
+    ColorScheme {
+        id: "light".into(),
+        colors,
+    }
 }
 
 pub fn color_runtime(scheme_id: &str) -> ColorRuntime {
-    ColorRuntime { scheme_id: scheme_id.to_string(), schemes: vec![dark_scheme(), light_scheme()] }
+    ColorRuntime {
+        scheme_id: scheme_id.to_string(),
+        schemes: vec![dark_scheme(), light_scheme()],
+    }
 }
 
 pub struct Input<'a> {
@@ -163,7 +172,17 @@ impl Composer {
         stroke_role: &str,
         stroke_ratio: f32,
     ) {
-        self.elevated(id, name, state, rect, radius, fill_role, stroke_role, stroke_ratio, None)
+        self.elevated(
+            id,
+            name,
+            state,
+            rect,
+            radius,
+            fill_role,
+            stroke_role,
+            stroke_ratio,
+            None,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -187,9 +206,16 @@ impl Composer {
             id.to_string(),
             Sample {
                 semantic: Semantic::new(name, "navigation", state),
-                kind: if radius.is_some() { BoxKind::RoundBox } else { BoxKind::Box },
+                kind: if radius.is_some() {
+                    BoxKind::RoundBox
+                } else {
+                    BoxKind::Box
+                },
                 bounds: self.normalized(x, y, w, h),
-                decoration: Decoration { stroke_width: stroke_ratio, shadow },
+                decoration: Decoration {
+                    stroke_width: stroke_ratio,
+                    shadow,
+                },
                 color: match shadow {
                     Some(_) => ColorIntent::new(fill_role, stroke_role).with_shadow("shadow"),
                     None => ColorIntent::new(fill_role, stroke_role),
@@ -203,13 +229,21 @@ impl Composer {
         if text.is_empty() {
             return;
         }
-        self.texts.push(TextRun { x, baseline, text, role, max_x });
+        self.texts.push(TextRun {
+            x,
+            baseline,
+            text,
+            role,
+            max_x,
+        });
     }
 }
 
 /// Width of a run of text in this monospaced cell grid.
 fn advance(text: &str, cell_w: f32) -> f32 {
-    text.chars().map(|c| crate::proto::paint::char_width(c) as f32 * cell_w).sum()
+    text.chars()
+        .map(|c| crate::proto::paint::char_width(c) as f32 * cell_w)
+        .sum()
 }
 
 /// Compose the surface.
@@ -223,8 +257,13 @@ pub fn build(input: Input<'_>) -> NavigationSurface {
     let scale = input.scale.max(0.5);
     let dp = |value: f32| value * scale;
 
-    let mut composer =
-        Composer { surfaces: Vec::new(), texts: Vec::new(), window_w, window_h, scale };
+    let mut composer = Composer {
+        surfaces: Vec::new(),
+        texts: Vec::new(),
+        window_w,
+        window_h,
+        scale,
+    };
 
     let panel_w = (window_w * 0.66).clamp(320.0, (window_w - dp(32.0)).max(320.0));
     let panel_h = (window_h * 0.62).clamp(200.0, (window_h - dp(32.0)).max(200.0));
@@ -268,29 +307,66 @@ pub fn build(input: Input<'_>) -> NavigationSurface {
     // surface, and stacking those is what made this look like nested capsules.
     let baseline = panel_y + (query_h + input.ascent) / 2.0;
     let prompt_x = panel_x + pad_x;
-    composer.text(prompt_x, baseline, "›".into(), "accent", prompt_x + input.cell_w * 2.0);
+    composer.text(
+        prompt_x,
+        baseline,
+        "›".into(),
+        "accent",
+        prompt_x + input.cell_w * 2.0,
+    );
 
     let counter = format!("{}/{}", input.matched, input.total);
     let counter_w = advance(&counter, input.cell_w);
     let counter_x = panel_x + panel_w - pad_x - counter_w;
-    composer.text(counter_x, baseline, counter, "on_surface_muted", panel_x + panel_w - pad_x);
+    composer.text(
+        counter_x,
+        baseline,
+        counter,
+        "on_surface_muted",
+        panel_x + panel_w - pad_x,
+    );
 
     let label_x = prompt_x + input.cell_w * 2.0;
     let label = format!("{}  ", input.label);
     let label_w = advance(&label, input.cell_w);
-    composer.text(label_x, baseline, label, "on_surface_muted", counter_x - input.cell_w);
+    composer.text(
+        label_x,
+        baseline,
+        label,
+        "on_surface_muted",
+        counter_x - input.cell_w,
+    );
 
     let query_x = label_x + label_w;
-    let query = if input.query.is_empty() { "…".to_string() } else { input.query.to_string() };
-    let query_role = if input.query.is_empty() { "on_surface_muted" } else { "on_surface" };
-    composer.text(query_x, baseline, query, query_role, counter_x - input.cell_w);
+    let query = if input.query.is_empty() {
+        "…".to_string()
+    } else {
+        input.query.to_string()
+    };
+    let query_role = if input.query.is_empty() {
+        "on_surface_muted"
+    } else {
+        "on_surface"
+    };
+    composer.text(
+        query_x,
+        baseline,
+        query,
+        query_role,
+        counter_x - input.cell_w,
+    );
 
     let rule_y = (panel_y + query_h).floor();
     composer.shape(
         "navigation.rule",
         "Separator",
         "rest",
-        (panel_x + pad_x, rule_y, panel_w - pad_x * 2.0, scale.max(1.0)),
+        (
+            panel_x + pad_x,
+            rule_y,
+            panel_w - pad_x * 2.0,
+            scale.max(1.0),
+        ),
         None,
         "separator",
         "separator",
@@ -359,7 +435,9 @@ pub fn build(input: Input<'_>) -> NavigationSurface {
     }
 
     NavigationSurface {
-        scene: FlatScene { surfaces: composer.surfaces },
+        scene: FlatScene {
+            surfaces: composer.surfaces,
+        },
         texts: composer.texts,
         frame: (panel_x, panel_y, panel_w, panel_h),
     }
@@ -402,9 +480,21 @@ mod tests {
 
     fn rows() -> Vec<RowInput> {
         vec![
-            RowInput { text: "notes/alpha.md".into(), positions: vec![6, 7], selected: true },
-            RowInput { text: "notes/beta.md".into(), positions: vec![], selected: false },
-            RowInput { text: "src/main.rs".into(), positions: vec![], selected: false },
+            RowInput {
+                text: "notes/alpha.md".into(),
+                positions: vec![6, 7],
+                selected: true,
+            },
+            RowInput {
+                text: "notes/beta.md".into(),
+                positions: vec![],
+                selected: false,
+            },
+            RowInput {
+                text: "src/main.rs".into(),
+                positions: vec![],
+                selected: false,
+            },
         ]
     }
 
@@ -435,7 +525,12 @@ mod tests {
         surface: &NavigationSurface,
         id: &str,
     ) -> crate::root_ui::language::PixelBoxGeometry {
-        let sample = surface.scene.surfaces.iter().find(|(name, _)| name == id).expect(id);
+        let sample = surface
+            .scene
+            .surfaces
+            .iter()
+            .find(|(name, _)| name == id)
+            .expect(id);
         let prepared = prepare_design_language(&sample.1).unwrap();
         materialize_pixel_box_geometry(&prepared.layout, &prepared.decoration, 1200.0, 800.0, 1.0)
             .unwrap()
@@ -447,8 +542,14 @@ mod tests {
         // and a 496px panel could not both look like one design system, and the
         // only value that looked consistent was the capsule.
         let surface = surface();
-        assert_eq!(geometry_of(&surface, "navigation.panel").corner_radius_x, PANEL_RADIUS);
-        assert_eq!(geometry_of(&surface, "navigation.row.0").corner_radius_x, ROW_RADIUS);
+        assert_eq!(
+            geometry_of(&surface, "navigation.panel").corner_radius_x,
+            PANEL_RADIUS
+        );
+        assert_eq!(
+            geometry_of(&surface, "navigation.row.0").corner_radius_x,
+            ROW_RADIUS
+        );
     }
 
     #[test]
@@ -489,7 +590,10 @@ mod tests {
         let prepared = prepare_flat_scene(&surface.scene).unwrap();
         let dark = bind_flat_scene_user_color_scheme(&prepared, &color_runtime("dark")).unwrap();
         let light = bind_flat_scene_user_color_scheme(&prepared, &color_runtime("light")).unwrap();
-        assert_eq!(flat_scene_layout_identity(&dark), flat_scene_layout_identity(&light));
+        assert_eq!(
+            flat_scene_layout_identity(&dark),
+            flat_scene_layout_identity(&light)
+        );
     }
 
     #[test]
@@ -503,7 +607,11 @@ mod tests {
                 "{id} shadow presence"
             );
             // Both halves travel together or the surface will not resolve.
-            assert_eq!(sample.color.shadow_role.is_some(), expected, "{id} shadow role");
+            assert_eq!(
+                sample.color.shadow_role.is_some(),
+                expected,
+                "{id} shadow role"
+            );
         }
     }
 
@@ -523,7 +631,12 @@ mod tests {
     #[test]
     fn the_scrim_covers_the_window_and_is_painted_before_the_panel() {
         let surface = surface();
-        let ids: Vec<&str> = surface.scene.surfaces.iter().map(|(id, _)| id.as_str()).collect();
+        let ids: Vec<&str> = surface
+            .scene
+            .surfaces
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect();
         assert_eq!(ids[0], "navigation.scrim");
         assert_eq!(ids[1], "navigation.panel");
         let scrim = geometry_of(&surface, "navigation.scrim");
@@ -567,12 +680,19 @@ mod tests {
 
     #[test]
     fn one_surviving_candidate_keeps_a_normal_row_height() {
-        let one = vec![RowInput { text: "only.md".into(), positions: vec![], selected: true }];
+        let one = vec![RowInput {
+            text: "only.md".into(),
+            positions: vec![],
+            selected: true,
+        }];
         let mut spec = input(&one);
         spec.matched = 1;
         let surface = build(spec);
         let height = geometry_of(&surface, "navigation.row.0").height;
-        assert!((height - 20.0 * 1.45).abs() < 1.0, "a single match drew a row {height}px tall");
+        assert!(
+            (height - 20.0 * 1.45).abs() < 1.0,
+            "a single match drew a row {height}px tall"
+        );
     }
 
     #[test]
@@ -595,17 +715,29 @@ mod tests {
         let rows = rows();
         let mut spec = input(&rows);
         spec.matched = 3;
-        assert!(!build(spec).scene.surfaces.iter().any(|(id, _)| id == "navigation.scroll"));
+        assert!(!build(spec)
+            .scene
+            .surfaces
+            .iter()
+            .any(|(id, _)| id == "navigation.scroll"));
 
         let mut spec = input(&rows);
         spec.matched = 400;
-        assert!(build(spec).scene.surfaces.iter().any(|(id, _)| id == "navigation.scroll"));
+        assert!(build(spec)
+            .scene
+            .surfaces
+            .iter()
+            .any(|(id, _)| id == "navigation.scroll"));
     }
 
     #[test]
     fn rows_do_not_spill_past_the_bottom_of_the_panel() {
         let many: Vec<RowInput> = (0..60)
-            .map(|i| RowInput { text: format!("row{i}.md"), positions: vec![], selected: i == 0 })
+            .map(|i| RowInput {
+                text: format!("row{i}.md"),
+                positions: vec![],
+                selected: i == 0,
+            })
             .collect();
         let mut spec = input(&many);
         spec.row_budget = 60;
@@ -613,7 +745,10 @@ mod tests {
         let surface = build(spec);
         let (_, panel_y, _, panel_h) = surface.frame;
         for run in &surface.texts {
-            assert!(run.baseline <= panel_y + panel_h, "a row was drawn past the panel");
+            assert!(
+                run.baseline <= panel_y + panel_h,
+                "a row was drawn past the panel"
+            );
         }
     }
 

@@ -120,19 +120,42 @@ impl Adapter {
             let vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
             let stride = (VERTEX_FLOATS * 4) as i32;
-            for (index, size, offset) in
-                [(0, 2, 0), (1, 2, 8), (2, 2, 16), (3, 3, 24), (4, 4, 36), (5, 4, 52), (6, 2, 68), (7, 1, 76)]
-            {
+            for (index, size, offset) in [
+                (0, 2, 0),
+                (1, 2, 8),
+                (2, 2, 16),
+                (3, 3, 24),
+                (4, 4, 36),
+                (5, 4, 52),
+                (6, 2, 68),
+                (7, 1, 76),
+            ] {
                 gl.enable_vertex_attrib_array(index);
                 gl.vertex_attrib_pointer_f32(index, size, glow::FLOAT, false, stride, offset);
             }
 
             let texture = gl.create_texture().unwrap();
             gl.bind_texture(glow::TEXTURE_2D, Some(texture));
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
             gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
 
             Self {
@@ -373,11 +396,7 @@ impl Adapter {
                     glow::UNSIGNED_BYTE,
                     Some(atlas.pixels.as_slice()),
                 );
-                gl.tex_parameter_i32(
-                    glow::TEXTURE_2D,
-                    glow::TEXTURE_SWIZZLE_R,
-                    glow::RED as i32,
-                );
+                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_SWIZZLE_R, glow::RED as i32);
                 self.uploaded = atlas.stats.rasterizations as usize;
             }
             gl.uniform_1_i32(self.u_atlas.as_ref(), 0);
@@ -400,7 +419,11 @@ impl Adapter {
                 std::mem::size_of_val(&self.verts[..]),
             );
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::DYNAMIC_DRAW);
-            gl.draw_arrays(glow::TRIANGLES, 0, (self.verts.len() / VERTEX_FLOATS) as i32);
+            gl.draw_arrays(
+                glow::TRIANGLES,
+                0,
+                (self.verts.len() / VERTEX_FLOATS) as i32,
+            );
         }
     }
 }
@@ -448,6 +471,9 @@ mod tests {
         let body = FS;
         let derivative = body.find("fwidth").expect("fwidth present");
         let branch = body.find("v_mode > 0.5").expect("mode select present");
-        assert!(derivative < branch, "the derivative must precede the mode branch");
+        assert!(
+            derivative < branch,
+            "the derivative must precede the mode branch"
+        );
     }
 }

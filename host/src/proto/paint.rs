@@ -136,7 +136,11 @@ struct Cell {
 
 impl Default for Cell {
     fn default() -> Self {
-        Self { text: ' ', hl: hl::DEFAULT, continuation: false }
+        Self {
+            text: ' ',
+            hl: hl::DEFAULT,
+            continuation: false,
+        }
     }
 }
 
@@ -172,13 +176,126 @@ pub fn char_width(ch: char) -> usize {
     }
 }
 
-pub struct Painter {
-    theme: Theme,
+pub struct GridPainter {
+    grid: u64,
     cols: usize,
     rows: usize,
     previous: Vec<Cell>,
     current: Vec<Cell>,
     painted: bool,
+}
+
+impl GridPainter {
+    pub fn new(grid: u64, cols: usize, rows: usize) -> Self {
+        let cols = cols.max(1);
+        let rows = rows.max(1);
+        Self {
+            grid,
+            cols,
+            rows,
+            previous: vec![Cell::default(); cols * rows],
+            current: vec![Cell::default(); cols * rows],
+            painted: false,
+        }
+    }
+
+    pub fn grid(&self) -> u64 {
+        self.grid
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn resize(&mut self, cols: usize, rows: usize) {
+        self.cols = cols.max(1);
+        self.rows = rows.max(1);
+        self.previous = vec![Cell::default(); self.cols * self.rows];
+        self.current = vec![Cell::default(); self.cols * self.rows];
+        self.painted = false;
+    }
+
+    fn clear_current(&mut self) {
+        for cell in &mut self.current {
+            *cell = Cell::default();
+        }
+    }
+
+    fn put(&mut self, row: usize, col: usize, ch: char, hl: u64) -> usize {
+        if row >= self.rows || col >= self.cols {
+            return col + 1;
+        }
+        let width = char_width(ch);
+        self.current[row * self.cols + col] = Cell {
+            text: ch,
+            hl,
+            continuation: false,
+        };
+        if width == 2 && col + 1 < self.cols {
+            self.current[row * self.cols + col + 1] = Cell {
+                text: ' ',
+                hl,
+                continuation: true,
+            };
+        }
+        col + width
+    }
+
+    fn write(&mut self, row: usize, mut col: usize, text: &str, hl: u64) -> usize {
+        for ch in text.chars() {
+            if col >= self.cols {
+                break;
+            }
+            col = self.put(row, col, ch, hl);
+        }
+        col
+    }
+
+    fn fill(&mut self, row: usize, from: usize, hl: u64) {
+        for col in from..self.cols {
+            self.current[row * self.cols + col] = Cell {
+                text: ' ',
+                hl,
+                continuation: false,
+            };
+        }
+    }
+
+    fn diff(&mut self) -> Vec<RedrawEvent> {
+        let mut events = Vec::new();
+        if !self.painted {
+            self.painted = true;
+            events.push(("grid_clear".to_string(), vec![Value::from(self.grid)]));
+        }
+        for row in 0..self.rows {
+            let from = row * self.cols;
+            let to = from + self.cols;
+            if self.previous[from..to] == self.current[from..to] {
+                continue;
+            }
+            events.push((
+                "grid_line".to_string(),
+                vec![
+                    Value::from(self.grid),
+                    Value::from(row as u64),
+                    Value::from(0u64),
+                    Value::Array(encode_row(&self.current[from..to])),
+                    Value::from(false),
+                ],
+            ));
+        }
+        self.previous.clone_from(&self.current);
+        events
+    }
+}
+
+pub struct Painter {
+    theme: Theme,
+    grid: GridPainter,
     last_mode: Option<&'static str>,
     last_cmdline: Option<String>,
     last_message: Option<String>,
@@ -195,11 +312,7 @@ impl Painter {
         let rows = rows.max(1);
         Self {
             theme,
-            cols,
-            rows,
-            previous: vec![Cell::default(); cols * rows],
-            current: vec![Cell::default(); cols * rows],
-            painted: false,
+            grid: GridPainter::new(GRID, cols, rows),
             last_mode: None,
             last_cmdline: None,
             last_message: None,
@@ -208,11 +321,11 @@ impl Painter {
     }
 
     pub fn cols(&self) -> usize {
-        self.cols
+        self.grid.cols()
     }
 
     pub fn rows(&self) -> usize {
-        self.rows
+        self.grid.rows()
     }
 
     pub fn options(&self) -> UiOptions {
@@ -223,15 +336,11 @@ impl Painter {
     /// except the message line when the client is not drawing it itself.
     pub fn text_rows(&self) -> usize {
         let reserved = if self.options.ext_messages { 1 } else { 2 };
-        self.rows.saturating_sub(reserved).max(1)
+        self.rows().saturating_sub(reserved).max(1)
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
-        self.cols = cols.max(1);
-        self.rows = rows.max(1);
-        self.previous = vec![Cell::default(); self.cols * self.rows];
-        self.current = vec![Cell::default(); self.cols * self.rows];
-        self.painted = false;
+        self.grid.resize(cols, rows);
     }
 
     /// The events a freshly attached client needs before any content.
@@ -239,7 +348,11 @@ impl Painter {
         let mut events = vec![
             (
                 "grid_resize".to_string(),
-                vec![Value::from(GRID), Value::from(self.cols as u64), Value::from(self.rows as u64)],
+                vec![
+                    Value::from(self.grid.grid()),
+                    Value::from(self.cols() as u64),
+                    Value::from(self.rows() as u64),
+                ],
             ),
             (
                 "default_colors_set".to_string(),
@@ -281,7 +394,11 @@ impl Painter {
         let (row, col) = self.cursor_cell(editor);
         events.push((
             "grid_cursor_goto".to_string(),
-            vec![Value::from(GRID), Value::from(row as u64), Value::from(col as u64)],
+            vec![
+                Value::from(self.grid.grid()),
+                Value::from(row as u64),
+                Value::from(col as u64),
+            ],
         ));
         events.push(("flush".to_string(), vec![]));
         events
@@ -325,7 +442,11 @@ impl Painter {
                         vec![
                             Value::from(if message.error { "emsg" } else { "" }),
                             Value::Array(vec![Value::Array(vec![
-                                Value::from(if message.error { hl::ERROR } else { hl::DEFAULT }),
+                                Value::from(if message.error {
+                                    hl::ERROR
+                                } else {
+                                    hl::DEFAULT
+                                }),
                                 Value::from(content.as_str()),
                             ])]),
                             Value::from(false),
@@ -341,39 +462,8 @@ impl Painter {
 
     // --- composition ------------------------------------------------------
 
-    fn put(&mut self, row: usize, col: usize, ch: char, hl: u64) -> usize {
-        if row >= self.rows || col >= self.cols {
-            return col + 1;
-        }
-        let width = char_width(ch);
-        self.current[row * self.cols + col] = Cell { text: ch, hl, continuation: false };
-        if width == 2 && col + 1 < self.cols {
-            self.current[row * self.cols + col + 1] =
-                Cell { text: ' ', hl, continuation: true };
-        }
-        col + width
-    }
-
-    fn write(&mut self, row: usize, mut col: usize, text: &str, hl: u64) -> usize {
-        for ch in text.chars() {
-            if col >= self.cols {
-                break;
-            }
-            col = self.put(row, col, ch, hl);
-        }
-        col
-    }
-
-    fn fill(&mut self, row: usize, from: usize, hl: u64) {
-        for col in from..self.cols {
-            self.current[row * self.cols + col] = Cell { text: ' ', hl, continuation: false };
-        }
-    }
-
     fn compose(&mut self, editor: &Editor) {
-        for cell in &mut self.current {
-            *cell = Cell::default();
-        }
+        self.grid.clear_current();
         let text_rows = self.text_rows();
         let gutter = gutter_width(editor.buffer.line_count());
         let visual = editor.visual_range();
@@ -382,8 +472,8 @@ impl Painter {
         for screen_row in 0..text_rows {
             let line = editor.top_line + screen_row;
             if line >= editor.buffer.line_count() {
-                self.put(screen_row, 0, '~', hl::NON_TEXT);
-                self.fill(screen_row, 1, hl::DEFAULT);
+                self.grid.put(screen_row, 0, '~', hl::NON_TEXT);
+                self.grid.fill(screen_row, 1, hl::DEFAULT);
                 continue;
             }
             // `number` + `relativenumber` from the owner's config: the cursor's
@@ -392,13 +482,21 @@ impl Painter {
                 Some(value) => format!("{:>width$} ", value, width = gutter - 1),
                 None => " ".repeat(gutter),
             };
-            let number_hl = if line == editor.cursor.0 { hl::CURSOR_LINE_NR } else { hl::LINE_NR };
-            self.write(screen_row, 0, &number, number_hl);
+            let number_hl = if line == editor.cursor.0 {
+                hl::CURSOR_LINE_NR
+            } else {
+                hl::LINE_NR
+            };
+            self.grid.write(screen_row, 0, &number, number_hl);
 
             let text = editor.buffer.line_text(line);
             let spans = markdown_spans(&text);
             let on_cursor_line = editor.options.cursorline && line == editor.cursor.0;
-            let rest = if on_cursor_line { hl::CURSOR_LINE } else { hl::DEFAULT };
+            let rest = if on_cursor_line {
+                hl::CURSOR_LINE
+            } else {
+                hl::DEFAULT
+            };
             // `list` + `listchars`: a tab and a trailing space are drawn as the
             // characters the config names, in the non-text colour, so
             // whitespace the file carries is visible rather than implied.
@@ -407,13 +505,16 @@ impl Painter {
                     .rev()
                     .take_while(|(_, c)| c.is_whitespace())
                     .last()
-                    .map(|_| text.chars().count() - text.chars().rev().take_while(|c| c.is_whitespace()).count())
+                    .map(|_| {
+                        text.chars().count()
+                            - text.chars().rev().take_while(|c| c.is_whitespace()).count()
+                    })
             } else {
                 None
             };
             let mut col = gutter;
             for (index, ch) in text.chars().enumerate() {
-                if col >= self.cols {
+                if col >= self.cols() {
                     break;
                 }
                 let mut style = spans.get(index).copied().unwrap_or(rest);
@@ -436,16 +537,16 @@ impl Painter {
                         }
                     }
                 }
-                col = self.put(screen_row, col, ch, style);
+                col = self.grid.put(screen_row, col, ch, style);
             }
             // A linewise visual selection covers the newline too, so the row is
             // filled to the edge rather than stopping at the last character.
             if visual_kind == Some(Visual::Line)
                 && visual.is_some_and(|(a, b)| line >= a.0 && line <= b.0)
             {
-                self.fill(screen_row, col, hl::VISUAL);
+                self.grid.fill(screen_row, col, hl::VISUAL);
             } else {
-                self.fill(screen_row, col, rest);
+                self.grid.fill(screen_row, col, rest);
             }
         }
 
@@ -456,20 +557,24 @@ impl Painter {
     }
 
     fn compose_status(&mut self, editor: &Editor) {
-        let row = if self.options.ext_messages { self.rows - 1 } else { self.rows - 2 };
-        if row >= self.rows {
+        let row = if self.options.ext_messages {
+            self.rows() - 1
+        } else {
+            self.rows() - 2
+        };
+        if row >= self.rows() {
             return;
         }
-        self.fill(row, 0, hl::STATUS);
+        self.grid.fill(row, 0, hl::STATUS);
         let name = editor.buffer.name();
         let left = format!(
             " {} {}",
             editor.mode.short_name().to_uppercase(),
-            shorten(&name, self.cols / 2)
+            shorten(&name, self.cols() / 2)
         );
-        let mut col = self.write(row, 0, &left, hl::STATUS);
+        let mut col = self.grid.write(row, 0, &left, hl::STATUS);
         if editor.buffer.modified() {
-            col = self.write(row, col, " [+]", hl::MODIFIED);
+            col = self.grid.write(row, col, " [+]", hl::MODIFIED);
         }
         let right = format!(
             "{}:{}  {}/{} ",
@@ -478,24 +583,28 @@ impl Painter {
             editor.cursor.0 + 1,
             editor.buffer.line_count()
         );
-        let start = self.cols.saturating_sub(right.chars().count());
+        let start = self.cols().saturating_sub(right.chars().count());
         if start > col {
-            self.write(row, start, &right, hl::STATUS);
+            self.grid.write(row, start, &right, hl::STATUS);
         }
     }
 
     fn compose_message(&mut self, editor: &Editor) {
-        let row = self.rows - 1;
-        self.fill(row, 0, hl::DEFAULT);
+        let row = self.rows() - 1;
+        self.grid.fill(row, 0, hl::DEFAULT);
         match editor.mode {
             Mode::Cmdline if !self.options.ext_cmdline => {
                 let line = format!("{}{}", editor.cmdline_prefix, editor.cmdline);
-                self.write(row, 0, &line, hl::DEFAULT);
+                self.grid.write(row, 0, &line, hl::DEFAULT);
             }
             _ => {
                 if let Some(message) = &editor.message {
-                    let style = if message.error { hl::ERROR } else { hl::DEFAULT };
-                    self.write(row, 0, &message.text, style);
+                    let style = if message.error {
+                        hl::ERROR
+                    } else {
+                        hl::DEFAULT
+                    };
+                    self.grid.write(row, 0, &message.text, style);
                 }
             }
         }
@@ -504,40 +613,21 @@ impl Painter {
     fn cursor_cell(&self, editor: &Editor) -> (usize, usize) {
         if editor.mode == Mode::Cmdline && !self.options.ext_cmdline {
             let col = 1 + editor.cmdline.chars().count();
-            return (self.rows - 1, col.min(self.cols - 1));
+            return (self.rows() - 1, col.min(self.cols() - 1));
         }
         let gutter = gutter_width(editor.buffer.line_count());
-        let row = editor.cursor.0.saturating_sub(editor.top_line).min(self.text_rows() - 1);
+        let row = editor
+            .cursor
+            .0
+            .saturating_sub(editor.top_line)
+            .min(self.text_rows() - 1);
         let text = editor.buffer.line(editor.cursor.0);
-        let width: usize = text.iter().take(editor.cursor.1).map(|&c| char_width(c)).sum();
-        (row, (gutter + width).min(self.cols - 1))
+        let width = crate::textpos::char_to_cell(text, editor.cursor.1);
+        (row, (gutter + width).min(self.cols() - 1))
     }
 
     fn diff(&mut self) -> Vec<RedrawEvent> {
-        let mut events = Vec::new();
-        if !self.painted {
-            self.painted = true;
-            events.push(("grid_clear".to_string(), vec![Value::from(GRID)]));
-        }
-        for row in 0..self.rows {
-            let from = row * self.cols;
-            let to = from + self.cols;
-            if self.previous[from..to] == self.current[from..to] {
-                continue;
-            }
-            events.push((
-                "grid_line".to_string(),
-                vec![
-                    Value::from(GRID),
-                    Value::from(row as u64),
-                    Value::from(0u64),
-                    Value::Array(encode_row(&self.current[from..to])),
-                    Value::from(false),
-                ],
-            ));
-        }
-        self.previous.clone_from(&self.current);
-        events
+        self.grid.diff()
     }
 }
 
@@ -549,7 +639,11 @@ fn encode_row(cells: &[Cell]) -> Vec<Value> {
     let mut index = 0;
     while index < cells.len() {
         let cell = &cells[index];
-        let text = if cell.continuation { String::new() } else { cell.text.to_string() };
+        let text = if cell.continuation {
+            String::new()
+        } else {
+            cell.text.to_string()
+        };
         let mut run = 1;
         while index + run < cells.len()
             && !cells[index + run].continuation
@@ -608,7 +702,9 @@ fn in_visual(
     col: usize,
     buffer: &crate::core::Buffer,
 ) -> bool {
-    let Some((start, end)) = range else { return false };
+    let Some((start, end)) = range else {
+        return false;
+    };
     match kind {
         Some(Visual::Line) => line >= start.0 && line <= end.0,
         Some(Visual::Char) => {
@@ -711,19 +807,42 @@ fn attrs(fg: Option<u32>, bg: Option<u32>, bold: bool, italic: bool) -> Value {
 fn highlight_table(theme: Theme) -> Vec<(u64, Value)> {
     vec![
         (hl::LINE_NR, attrs(Some(theme.line_nr), None, false, false)),
-        (hl::CURSOR_LINE_NR, attrs(Some(theme.cursor_line_nr), None, true, false)),
-        (hl::STATUS, attrs(Some(theme.status_fg), Some(theme.status_bg), false, false)),
+        (
+            hl::CURSOR_LINE_NR,
+            attrs(Some(theme.cursor_line_nr), None, true, false),
+        ),
+        (
+            hl::STATUS,
+            attrs(Some(theme.status_fg), Some(theme.status_bg), false, false),
+        ),
         (hl::VISUAL, attrs(None, Some(theme.visual), false, false)),
-        (hl::SEARCH, attrs(Some(theme.search_fg), Some(theme.search_bg), false, false)),
+        (
+            hl::SEARCH,
+            attrs(Some(theme.search_fg), Some(theme.search_bg), false, false),
+        ),
         (hl::ERROR, attrs(Some(theme.error), None, true, false)),
-        (hl::NON_TEXT, attrs(Some(theme.non_text), None, false, false)),
+        (
+            hl::NON_TEXT,
+            attrs(Some(theme.non_text), None, false, false),
+        ),
         (hl::HEADING, attrs(Some(theme.heading), None, true, false)),
         (hl::CODE, attrs(Some(theme.code), None, false, false)),
         (hl::EMPHASIS, attrs(Some(theme.emphasis), None, false, true)),
         (hl::BULLET, attrs(Some(theme.bullet), None, true, false)),
         (hl::LINK, attrs(Some(theme.link), None, false, false)),
-        (hl::MODIFIED, attrs(Some(theme.modified_fg), Some(theme.modified_bg), true, false)),
-        (hl::CURSOR_LINE, attrs(None, Some(theme.cursor_line_bg), false, false)),
+        (
+            hl::MODIFIED,
+            attrs(
+                Some(theme.modified_fg),
+                Some(theme.modified_bg),
+                true,
+                false,
+            ),
+        ),
+        (
+            hl::CURSOR_LINE,
+            attrs(None, Some(theme.cursor_line_bg), false, false),
+        ),
     ]
 }
 
@@ -741,7 +860,10 @@ fn mode_info() -> Vec<Value> {
         Value::Map(vec![
             (Value::from("name"), Value::from(name)),
             (Value::from("cursor_shape"), Value::from(shape)),
-            (Value::from("cell_percentage"), Value::from(if shape == "horizontal" { 20u64 } else { 100 })),
+            (
+                Value::from("cell_percentage"),
+                Value::from(if shape == "horizontal" { 20u64 } else { 100 }),
+            ),
         ])
     };
     vec![
@@ -795,7 +917,10 @@ mod tests {
     fn without_a_config_the_gutter_is_blank_as_vim_leaves_it() {
         let mut p = painter();
         let editor = Editor::new(Buffer::from_text("hello\n"));
-        assert_eq!(row_text(&p.render(&editor), 0).unwrap().trim_end(), "    hello");
+        assert_eq!(
+            row_text(&p.render(&editor), 0).unwrap().trim_end(),
+            "    hello"
+        );
     }
 
     #[test]
@@ -826,7 +951,11 @@ mod tests {
         let mut editor = Editor::new(Buffer::from_text("あい\n"));
         editor.feed_str("l");
         let events = p.render(&editor);
-        let goto = events.iter().rev().find(|(name, _)| name == "grid_cursor_goto").unwrap();
+        let goto = events
+            .iter()
+            .rev()
+            .find(|(name, _)| name == "grid_cursor_goto")
+            .unwrap();
         assert_eq!(goto.1[2].as_u64(), Some(gutter_width(1) as u64 + 2));
     }
 
@@ -840,7 +969,10 @@ mod tests {
             .find(|(name, args)| name == "grid_line" && args[1].as_u64() == Some(0))
             .unwrap();
         let cells = line.1[3].as_array().unwrap();
-        let texts: Vec<&str> = cells.iter().map(|c| c.as_array().unwrap()[0].as_str().unwrap()).collect();
+        let texts: Vec<&str> = cells
+            .iter()
+            .map(|c| c.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
         let wide = texts.iter().position(|t| *t == "あ").unwrap();
         assert_eq!(texts[wide + 1], "");
     }
@@ -869,7 +1001,14 @@ mod tests {
     fn the_cmdline_goes_external_only_when_the_client_asked() {
         let mut editor = Editor::new(Buffer::from_text(""));
         editor.feed_str(":w");
-        let mut external = Painter::new(40, 8, UiOptions { ext_cmdline: true, ..UiOptions::none() });
+        let mut external = Painter::new(
+            40,
+            8,
+            UiOptions {
+                ext_cmdline: true,
+                ..UiOptions::none()
+            },
+        );
         let events = external.render(&editor);
         assert!(events.iter().any(|(name, _)| name == "cmdline_show"));
 

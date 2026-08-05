@@ -16,6 +16,7 @@ mod picker;
 mod plugin;
 mod proto;
 mod root_ui;
+mod textpos;
 
 // The grid renderer is the measured candidate's, reached by path rather than
 // copied. `pin neovim_asset_not_discarded` forbids throwing the Neovim-derived
@@ -25,18 +26,18 @@ mod root_ui;
 #[path = "../../evaluation/candidate-embed-opengl/src/cmap.rs"]
 mod cmap;
 
-#[path = "../../evaluation/candidate-embed-opengl/src/grid.rs"]
-mod grid;
-#[path = "../../evaluation/candidate-embed-opengl/src/text.rs"]
-mod text;
-#[path = "../../evaluation/candidate-embed-opengl/src/screen.rs"]
-mod screen;
-#[path = "../../evaluation/candidate-embed-opengl/src/panel.rs"]
-mod panel;
 #[path = "../../evaluation/candidate-embed-opengl/src/ext_ui.rs"]
 mod ext_ui;
 #[path = "../../evaluation/candidate-embed-opengl/src/gl.rs"]
 mod gl;
+#[path = "../../evaluation/candidate-embed-opengl/src/grid.rs"]
+mod grid;
+#[path = "../../evaluation/candidate-embed-opengl/src/panel.rs"]
+mod panel;
+#[path = "../../evaluation/candidate-embed-opengl/src/screen.rs"]
+mod screen;
+#[path = "../../evaluation/candidate-embed-opengl/src/text.rs"]
+mod text;
 // `perf` is this crate's own: the candidate's version carries tests that read
 // evidence files relative to its manifest, and those belong to that artefact
 // rather than to the product's test run.
@@ -50,7 +51,9 @@ use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 
 use glutin::config::ConfigTemplateBuilder;
-use glutin::context::{ContextApi, ContextAttributesBuilder, GlProfile, PossiblyCurrentContext, Version};
+use glutin::context::{
+    ContextApi, ContextAttributesBuilder, GlProfile, PossiblyCurrentContext, Version,
+};
 use glutin::display::GetGlDisplay;
 use glutin::prelude::*;
 use glutin::surface::{Surface, SurfaceAttributesBuilder, WindowSurface};
@@ -106,10 +109,20 @@ fn parse_args_from(argv: Vec<String>) -> Args {
         };
         match argv[index].as_str() {
             "--embed" => args.embed = true,
-            "--cols" => args.cols = take(&mut index).and_then(|v| v.parse().ok()).unwrap_or(args.cols),
-            "--rows" => args.rows = take(&mut index).and_then(|v| v.parse().ok()).unwrap_or(args.rows),
+            "--cols" => {
+                args.cols = take(&mut index)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(args.cols)
+            }
+            "--rows" => {
+                args.rows = take(&mut index)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(args.rows)
+            }
             "--font-size" => {
-                args.font_size = take(&mut index).and_then(|v| v.parse().ok()).unwrap_or(args.font_size)
+                args.font_size = take(&mut index)
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(args.font_size)
             }
             "--scheme" => args.scheme = take(&mut index).unwrap_or(args.scheme),
             "--snapshot" => args.snapshot = take(&mut index),
@@ -148,30 +161,38 @@ impl Link {
         let (host_input, to_host) = std::io::pipe()?;
         let (from_host, host_output) = std::io::pipe()?;
 
-        std::thread::Builder::new().name("nvimglsl-host".into()).spawn(move || {
-            // The grid and the navigation surface take the same theme, so the
-            // two halves of one window cannot disagree about it.
-            let mut host = proto::Host::configured_with_plugins(
-                notes::Vault::default_vault(),
-                theme,
-                plugin_commands,
-            );
-            if let Err(error) = proto::serve(&mut host, host_input, host_output, initial) {
-                eprintln!("host: {error}");
-            }
-        })?;
+        std::thread::Builder::new()
+            .name("nvimglsl-host".into())
+            .spawn(move || {
+                // The grid and the navigation surface take the same theme, so the
+                // two halves of one window cannot disagree about it.
+                let mut host = proto::Host::configured_with_plugins(
+                    notes::Vault::default_vault(),
+                    theme,
+                    plugin_commands,
+                );
+                if let Err(error) = proto::serve(&mut host, host_input, host_output, initial) {
+                    eprintln!("host: {error}");
+                }
+            })?;
 
         let (tx, rx) = channel();
-        std::thread::Builder::new().name("nvimglsl-reader".into()).spawn(move || {
-            let mut reader = std::io::BufReader::new(from_host);
-            while let Ok(value) = nvim::read_message(&mut reader) {
-                if tx.send(value).is_err() {
-                    break;
+        std::thread::Builder::new()
+            .name("nvimglsl-reader".into())
+            .spawn(move || {
+                let mut reader = std::io::BufReader::new(from_host);
+                while let Ok(value) = nvim::read_message(&mut reader) {
+                    if tx.send(value).is_err() {
+                        break;
+                    }
                 }
-            }
-        })?;
+            })?;
 
-        Ok(Self { to_host, queue: nvim::RedrawQueue::new(rx), next_msgid: 1 })
+        Ok(Self {
+            to_host,
+            queue: nvim::RedrawQueue::new(rx),
+            next_msgid: 1,
+        })
     }
 
     fn request(&mut self, method: &str, params: Vec<Value>) -> std::io::Result<()> {
@@ -192,15 +213,27 @@ impl Link {
         nvim::write_message(&mut self.to_host, &nvim::notification(method, params))
     }
 
-    fn ui_attach(&mut self, cols: usize, rows: usize, options: nvim::UiOptions) -> std::io::Result<()> {
+    fn ui_attach(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        options: nvim::UiOptions,
+    ) -> std::io::Result<()> {
         self.request(
             "nvim_ui_attach",
-            vec![Value::from(cols as u64), Value::from(rows as u64), options.to_map()],
+            vec![
+                Value::from(cols as u64),
+                Value::from(rows as u64),
+                options.to_map(),
+            ],
         )
     }
 
     fn try_resize(&mut self, cols: usize, rows: usize) -> std::io::Result<()> {
-        self.request("nvim_ui_try_resize", vec![Value::from(cols as u64), Value::from(rows as u64)])
+        self.request(
+            "nvim_ui_try_resize",
+            vec![Value::from(cols as u64), Value::from(rows as u64)],
+        )
     }
 
     fn input(&mut self, keys: &str) -> std::io::Result<()> {
@@ -211,6 +244,21 @@ impl Link {
 // ---------------------------------------------------------------------------
 // The application
 // ---------------------------------------------------------------------------
+
+enum Overlay {
+    None,
+    Picker {
+        picker: picker::Picker,
+        in_vault: bool,
+    },
+    Plugin(String),
+}
+
+impl Overlay {
+    fn is_open(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
 
 struct App {
     args: Args,
@@ -225,16 +273,11 @@ struct App {
     screen: Option<screen::Screen>,
     ext_ui: ext_ui::ExtUi,
     link: Option<Link>,
-    picker: Option<picker::Picker>,
-    /// Whether the open surface lists notes, so a choice can be resolved
-    /// against the vault rather than the working directory.
-    picker_in_vault: bool,
+    overlay: Overlay,
     /// Plugins live on this side because a surface is a UI concern and this is
     /// the UI. The editor only learns their command *names*, so that a name
     /// belonging to no plugin can still report itself as unknown.
     plugins: plugin::Host,
-    /// The plugin surface currently open, if any.
-    plugin_surface: Option<String>,
     mods: ModifiersState,
     /// Physical pixels per density-independent pixel, from the display.
     scale: f32,
@@ -257,10 +300,8 @@ impl App {
             screen: None,
             ext_ui: ext_ui::ExtUi::new(),
             link: None,
-            picker: None,
-            picker_in_vault: false,
+            overlay: Overlay::None,
             plugins: plugin::Host::load_default(),
-            plugin_surface: None,
             mods: ModifiersState::empty(),
             scale: 1.0,
             preedit: String::new(),
@@ -271,7 +312,9 @@ impl App {
     /// Drain redraw traffic and the host's own notifications. Returns true when
     /// the host closed the pipe.
     fn pump(&mut self) -> bool {
-        let Some(link) = self.link.as_mut() else { return false };
+        let Some(link) = self.link.as_mut() else {
+            return false;
+        };
         let (events, closed) = link.queue.drain_redraw();
         if !events.is_empty() {
             if let Some(screen) = self.screen.as_mut() {
@@ -288,9 +331,14 @@ impl App {
                 }
                 proto::server::QUIT => return true,
                 proto::server::PLUGIN => {
-                    let name = params.first().and_then(rmpv::Value::as_str).unwrap_or_default();
-                    let argument =
-                        params.get(1).and_then(rmpv::Value::as_str).unwrap_or_default();
+                    let name = params
+                        .first()
+                        .and_then(rmpv::Value::as_str)
+                        .unwrap_or_default();
+                    let argument = params
+                        .get(1)
+                        .and_then(rmpv::Value::as_str)
+                        .unwrap_or_default();
                     self.run_plugin(name, argument);
                 }
                 other => eprintln!("note: {other} (no handler)"),
@@ -312,7 +360,10 @@ impl App {
         let vault = notes::Vault::default_vault();
         if !files && vault.exists() {
             let source = notes::NotesSource::new(&vault);
-            self.picker = Some(picker::Picker::open(&source, visible));
+            self.overlay = Overlay::Picker {
+                picker: picker::Picker::open(&source, visible),
+                in_vault: true,
+            };
         } else {
             if !files {
                 eprintln!(
@@ -328,9 +379,11 @@ impl App {
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
             let source = picker::TreeSource::new(root);
-            self.picker = Some(picker::Picker::open(&source, visible));
+            self.overlay = Overlay::Picker {
+                picker: picker::Picker::open(&source, visible),
+                in_vault: false,
+            };
         }
-        self.picker_in_vault = !files && notes::Vault::default_vault().exists();
         self.request_redraw();
     }
 
@@ -346,42 +399,58 @@ impl App {
     /// arrangement chosen for the implementation rather than a claim that it is
     /// the required one: the keys never reach the editing core, and the choice
     /// made on the surface comes back as an ordinary `:e` over the protocol.
-    fn feed_picker(&mut self, keys: &str) {
+    fn feed_overlay(&mut self, keys: &str) {
         // A plugin surface has no input model — `open_question plugin_api_scope`
         // has not said whether plugins receive keys — so the only key it takes
         // is the one that closes it. Routing keys into it would be answering
         // that question by accident.
-        if self.plugin_surface.is_some() {
-            if keys.contains("<Esc>") || keys == "q" {
-                self.plugin_surface = None;
-                self.request_redraw();
-            }
-            return;
-        }
-        let Some(picker) = self.picker.as_mut() else { return };
-        match picker.feed(keys) {
-            picker::Outcome::Open => {}
-            picker::Outcome::Cancelled => self.picker = None,
-            picker::Outcome::Chose(choice) => {
-                let in_vault = self.picker_in_vault;
-                self.picker = None;
-                let path = if in_vault {
-                    notes::Vault::default_vault().path_of(&choice).display().to_string()
+        match std::mem::replace(&mut self.overlay, Overlay::None) {
+            Overlay::Plugin(name) => {
+                if keys.contains("<Esc>") || keys == "q" {
+                    self.request_redraw();
                 } else {
-                    choice
-                };
-                if let Some(link) = self.link.as_mut() {
-                    let escaped = path.replace('<', "<lt>");
-                    let _ = link.input(&format!("<Esc>:e {escaped}<CR>"));
+                    self.overlay = Overlay::Plugin(name);
                 }
             }
+            Overlay::Picker {
+                mut picker,
+                in_vault,
+            } => {
+                let choice = match picker.feed(keys) {
+                    picker::Outcome::Open => {
+                        self.overlay = Overlay::Picker { picker, in_vault };
+                        None
+                    }
+                    picker::Outcome::Cancelled => None,
+                    picker::Outcome::Chose(choice) => {
+                        let path = if in_vault {
+                            notes::Vault::default_vault()
+                                .path_of(&choice)
+                                .display()
+                                .to_string()
+                        } else {
+                            choice
+                        };
+                        Some(path)
+                    }
+                };
+                if let Some(path) = choice {
+                    if let Some(link) = self.link.as_mut() {
+                        let escaped = path.replace('<', "<lt>");
+                        let _ = link.input(&format!("<Esc>:e {escaped}<CR>"));
+                    }
+                }
+                self.request_redraw();
+            }
+            Overlay::None => {}
         }
-        self.request_redraw();
     }
 
-    fn overlay(&self) -> ext_ui::Overlay {
+    fn ext_overlay(&self) -> ext_ui::Overlay {
         match self.screen.as_ref() {
-            Some(screen) if !self.ext_ui.is_idle() => self.ext_ui.layout(screen.cols(), screen.rows()),
+            Some(screen) if !self.ext_ui.is_idle() => {
+                self.ext_ui.layout(screen.cols(), screen.rows())
+            }
             _ => ext_ui::Overlay::default(),
         }
     }
@@ -391,9 +460,13 @@ impl App {
     /// A surface opens; a command runs. A name can be both, and the surface
     /// wins, because the surface is the thing the owner can see.
     fn run_plugin(&mut self, name: &str, argument: &str) {
-        if self.plugins.surface_names().iter().any(|known| *known == name) {
-            self.plugin_surface = Some(name.to_string());
-            self.picker = None;
+        if self
+            .plugins
+            .surface_names()
+            .iter()
+            .any(|known| *known == name)
+        {
+            self.overlay = Overlay::Plugin(name.to_string());
             self.request_redraw();
             return;
         }
@@ -411,12 +484,15 @@ impl App {
     /// `pin plugin_surface_renderer` puts the drawing here: the plugin said
     /// what it wanted, and this is the only place that turns it into quads.
     fn build_plugin_surface(&mut self, width: f32, height: f32) {
-        let Some(name) = self.plugin_surface.clone() else { return };
+        let Overlay::Plugin(name) = &self.overlay else {
+            return;
+        };
+        let name = name.clone();
         let composed = match self.plugins.surface(&name, (width, height), self.scale) {
             Ok(scene) => scene,
             Err(error) => {
                 eprintln!("plugin surface {name}: {error}");
-                self.plugin_surface = None;
+                self.overlay = Overlay::None;
                 return;
             }
         };
@@ -429,15 +505,14 @@ impl App {
         let runtime = root_ui::navigation::color_runtime(&self.args.scheme);
         let Ok(prepared) = root_ui::prepare_flat_scene(&composed.scene) else {
             eprintln!("plugin surface {name}: the declared scene did not resolve");
-            self.plugin_surface = None;
+            self.overlay = Overlay::None;
             return;
         };
         let Ok(scene) = root_ui::bind_flat_scene_user_color_scheme(&prepared, &runtime) else {
             eprintln!("plugin surface {name}: the declared scene has no colour");
-            self.plugin_surface = None;
+            self.overlay = Overlay::None;
             return;
         };
-        adapter.begin();
         let mut stats = adapter.push_scene(&scene, width, height, atlas.cell_h, self.scale);
         let scheme = runtime
             .schemes
@@ -445,7 +520,11 @@ impl App {
             .find(|scheme| scheme.id == runtime.scheme_id)
             .unwrap_or(&runtime.schemes[0]);
         for run in &composed.texts {
-            let color = scheme.colors.get(run.role).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            let color = scheme
+                .colors
+                .get(run.role)
+                .copied()
+                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
             stats.glyph_quads +=
                 adapter.push_text(atlas, run.x, run.baseline, &run.text, color, run.max_x);
         }
@@ -454,8 +533,8 @@ impl App {
 
     /// Push the navigation surface, as a root-ui scene, into the adapter.
     fn build_navigation(&mut self, width: f32, height: f32) {
-        let (Some(picker), Some(adapter), Some(atlas)) =
-            (self.picker.as_ref(), self.adapter.as_mut(), self.atlas.as_mut())
+        let (Overlay::Picker { picker, .. }, Some(adapter), Some(atlas)) =
+            (&self.overlay, self.adapter.as_mut(), self.atlas.as_mut())
         else {
             return;
         };
@@ -492,7 +571,6 @@ impl App {
             }
         };
 
-        adapter.begin();
         let mut stats = adapter.push_scene(&scene, width, height, atlas.cell_h, self.scale);
 
         let scheme = runtime
@@ -501,15 +579,37 @@ impl App {
             .find(|scheme| scheme.id == runtime.scheme_id)
             .unwrap_or(&runtime.schemes[0]);
         for run in &composed.texts {
-            let color = scheme.colors.get(run.role).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            let color = scheme
+                .colors
+                .get(run.role)
+                .copied()
+                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
             stats.glyph_quads +=
                 adapter.push_text(atlas, run.x, run.baseline, &run.text, color, run.max_x);
         }
         self.last_stats = stats;
     }
 
+    fn build_overlay_surface(&mut self, width: f32, height: f32) {
+        if !self.overlay.is_open() {
+            return;
+        }
+        if let Some(adapter) = self.adapter.as_mut() {
+            adapter.begin();
+        } else {
+            return;
+        }
+        if matches!(&self.overlay, Overlay::Picker { .. }) {
+            self.build_navigation(width, height);
+        } else if matches!(&self.overlay, Overlay::Plugin(_)) {
+            self.build_plugin_surface(width, height);
+        }
+    }
+
     fn render(&mut self) {
-        let Some(size) = self.window.as_ref().map(Window::inner_size) else { return };
+        let Some(size) = self.window.as_ref().map(Window::inner_size) else {
+            return;
+        };
         // The grid first, then the surface over it. Both write into the same
         // window and the same frame; they differ only in which shader is asked.
         {
@@ -530,9 +630,8 @@ impl App {
             renderer.draw(gl, atlas, size.width as i32, size.height as i32, &[]);
         }
 
-        if self.plugin_surface.is_some() || self.picker.is_some() {
-            self.build_navigation(size.width as f32, size.height as f32);
-            self.build_plugin_surface(size.width as f32, size.height as f32);
+        if self.overlay.is_open() {
+            self.build_overlay_surface(size.width as f32, size.height as f32);
             if let (Some(adapter), Some(atlas), Some(gl)) =
                 (self.adapter.as_mut(), self.atlas.as_mut(), self.gl.as_ref())
             {
@@ -560,7 +659,9 @@ impl ApplicationHandler for App {
             .with_inner_size(winit::dpi::LogicalSize::new(940.0, 600.0));
         let (window, config) = DisplayBuilder::new()
             .with_window_attributes(Some(attributes))
-            .build(el, ConfigTemplateBuilder::new(), |c| c.last().expect("no GL config"))
+            .build(el, ConfigTemplateBuilder::new(), |c| {
+                c.last().expect("no GL config")
+            })
             .expect("display build failed");
         let window = window.expect("no window");
         window.set_ime_allowed(true);
@@ -578,13 +679,19 @@ impl ApplicationHandler for App {
             .with_context_api(ContextApi::OpenGl(Some(Version::new(3, 3))))
             .with_profile(GlProfile::Core)
             .build(raw);
-        let not_current =
-            unsafe { display.create_context(&config, &context_attributes).expect("create_context") };
+        let not_current = unsafe {
+            display
+                .create_context(&config, &context_attributes)
+                .expect("create_context")
+        };
         let surface_attributes: SurfaceAttributesBuilder<WindowSurface> = Default::default();
-        let surface_attributes =
-            window.build_surface_attributes(surface_attributes).expect("surface attrs");
+        let surface_attributes = window
+            .build_surface_attributes(surface_attributes)
+            .expect("surface attrs");
         let surface = unsafe {
-            display.create_window_surface(&config, &surface_attributes).expect("window surface")
+            display
+                .create_window_surface(&config, &surface_attributes)
+                .expect("window surface")
         };
         let context = not_current.make_current(&surface).expect("make_current");
         let glc =
@@ -625,7 +732,8 @@ impl ApplicationHandler for App {
             plugin_names,
         )
         .expect("host thread");
-        link.ui_attach(self.args.cols, self.args.rows, nvim::UiOptions::none()).expect("ui_attach");
+        link.ui_attach(self.args.cols, self.args.rows, nvim::UiOptions::none())
+            .expect("ui_attach");
 
         self.renderer = Some(gl::Renderer::new(&glc));
         self.adapter = Some(root_ui::adapter::Adapter::new(&glc));
@@ -663,9 +771,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Resized(size) => {
-                if let (Some(atlas), Some(surface), Some(context)) =
-                    (self.atlas.as_ref(), self.surface.as_ref(), self.context.as_ref())
-                {
+                if let (Some(atlas), Some(surface), Some(context)) = (
+                    self.atlas.as_ref(),
+                    self.surface.as_ref(),
+                    self.context.as_ref(),
+                ) {
                     let cols = (size.width as f32 / atlas.cell_w).floor().max(1.0) as usize;
                     let rows = (size.height as f32 / atlas.cell_h).floor().max(1.0) as usize;
                     if let Some(link) = self.link.as_mut() {
@@ -685,8 +795,8 @@ impl ApplicationHandler for App {
                     Ime::Commit(text) => {
                         self.preedit.clear();
                         let keys = text.replace('<', "<lt>");
-                        if self.plugin_surface.is_some() || self.picker.is_some() {
-                            self.feed_picker(&keys);
+                        if self.overlay.is_open() {
+                            self.feed_overlay(&keys);
                         } else if let Some(link) = self.link.as_mut() {
                             let _ = link.input(&keys);
                         }
@@ -700,8 +810,8 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { .. } if !self.preedit.is_empty() => {}
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if let Some(keys) = encode_key(&event.logical_key, self.mods) {
-                    if self.plugin_surface.is_some() || self.picker.is_some() {
-                        self.feed_picker(&keys);
+                    if self.overlay.is_open() {
+                        self.feed_overlay(&keys);
                     } else if let Some(link) = self.link.as_mut() {
                         let _ = link.input(&keys);
                     }
@@ -728,7 +838,9 @@ impl ApplicationHandler for App {
         if flushed {
             self.request_redraw();
         }
-        el.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(8)));
+        el.set_control_flow(ControlFlow::WaitUntil(
+            Instant::now() + Duration::from_millis(8),
+        ));
     }
 }
 
@@ -753,8 +865,8 @@ impl App {
             // A snapshot script may open the navigation surface, in which case
             // the rest of the keys belong to it and not to the editor.
             for key in split_keys(&keys) {
-                if self.plugin_surface.is_some() || self.picker.is_some() {
-                    self.feed_picker(&key);
+                if self.overlay.is_open() {
+                    self.feed_overlay(&key);
                 } else if let Some(link) = self.link.as_mut() {
                     let _ = link.input(&key);
                 }
@@ -766,9 +878,8 @@ impl App {
         // The surface's vertices are built before the GL block opens: nothing
         // in root-ui's phases needs a context, and building inside the block
         // would hold a borrow of `self.gl` across a call that takes all of self.
-        if self.plugin_surface.is_some() || self.picker.is_some() {
-            self.build_navigation(width as f32, height as f32);
-            self.build_plugin_surface(width as f32, height as f32);
+        if self.overlay.is_open() {
+            self.build_overlay_surface(width as f32, height as f32);
         }
 
         let gl = self.gl.as_ref().unwrap();
@@ -802,7 +913,7 @@ impl App {
                 "offscreen target incomplete"
             );
 
-            let overlay = self.overlay();
+            let overlay = self.ext_overlay();
             let renderer = self.renderer.as_mut().unwrap();
             renderer.build(
                 self.screen.as_ref().unwrap(),
@@ -811,11 +922,22 @@ impl App {
                 &self.ext_ui,
                 &overlay,
             );
-            renderer.draw(gl, self.atlas.as_mut().unwrap(), width as i32, height as i32, &[]);
+            renderer.draw(
+                gl,
+                self.atlas.as_mut().unwrap(),
+                width as i32,
+                height as i32,
+                &[],
+            );
 
-            if self.plugin_surface.is_some() || self.picker.is_some() {
+            if self.overlay.is_open() {
                 let adapter = self.adapter.as_mut().unwrap();
-                adapter.draw(gl, self.atlas.as_mut().unwrap(), width as i32, height as i32);
+                adapter.draw(
+                    gl,
+                    self.atlas.as_mut().unwrap(),
+                    width as i32,
+                    height as i32,
+                );
             }
             gl.finish();
 
@@ -870,9 +992,11 @@ fn encode_key(key: &Key, mods: ModifiersState) -> Option<String> {
             NamedKey::Escape => named("Esc"),
             NamedKey::Backspace => named("BS"),
             NamedKey::Tab => named("Tab"),
-            NamedKey::Space => {
-                Some(if mods.control_key() { "<C-Space>".into() } else { " ".into() })
-            }
+            NamedKey::Space => Some(if mods.control_key() {
+                "<C-Space>".into()
+            } else {
+                " ".into()
+            }),
             NamedKey::ArrowLeft => named("Left"),
             NamedKey::ArrowRight => named("Right"),
             NamedKey::ArrowUp => named("Up"),
@@ -882,6 +1006,18 @@ fn encode_key(key: &Key, mods: ModifiersState) -> Option<String> {
             NamedKey::PageUp => named("PageUp"),
             NamedKey::PageDown => named("PageDown"),
             NamedKey::Delete => named("Del"),
+            NamedKey::F1 => named("F1"),
+            NamedKey::F2 => named("F2"),
+            NamedKey::F3 => named("F3"),
+            NamedKey::F4 => named("F4"),
+            NamedKey::F5 => named("F5"),
+            NamedKey::F6 => named("F6"),
+            NamedKey::F7 => named("F7"),
+            NamedKey::F8 => named("F8"),
+            NamedKey::F9 => named("F9"),
+            NamedKey::F10 => named("F10"),
+            NamedKey::F11 => named("F11"),
+            NamedKey::F12 => named("F12"),
             _ => None,
         },
         Key::Character(s) => {
@@ -926,7 +1062,11 @@ fn write_png(path: &str, rgba_bottom_up: &[u8], width: u32, height: u32) {
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header().unwrap().write_image_data(&flipped).unwrap();
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&flipped)
+        .unwrap();
 }
 
 fn main() {
@@ -936,7 +1076,7 @@ fn main() {
         let mut host = proto::Host::new(core::Editor::default());
         let stdin = std::io::stdin();
         let stdout = std::io::stdout();
-        if let Err(error) = proto::serve(&mut host, stdin.lock(), stdout.lock(), args.file.clone()) {
+        if let Err(error) = proto::serve(&mut host, stdin, stdout.lock(), args.file.clone()) {
             eprintln!("nvimglsl: {error}");
             std::process::exit(1);
         }
