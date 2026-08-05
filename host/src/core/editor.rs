@@ -140,6 +140,10 @@ pub enum Request {
     /// Follow the `[[link]]` under the cursor. The core does not read it
     /// either: which text is a link is the note store's rule, not the editor's.
     FollowLink,
+    /// An Ex command a plugin registered. The core does not run plugins; it
+    /// only knows which names belong to one, so that a name belonging to
+    /// nothing can still report itself as unknown.
+    Plugin { name: String, argument: String },
 }
 
 /// The options this editor can act on, read out of the owner's config.
@@ -266,6 +270,8 @@ pub struct Editor {
     pub top_line: usize,
     pub view_rows: usize,
     pub options: Options,
+    /// Ex command names that reach a plugin.
+    plugin_commands: std::collections::BTreeSet<String>,
     keymap: Keymap,
     /// Keys typed that are still a prefix of some mapping.
     pending_keys: Vec<Key>,
@@ -300,6 +306,7 @@ impl Editor {
             top_line: 0,
             view_rows: 24,
             options: Options::default(),
+            plugin_commands: std::collections::BTreeSet::new(),
             keymap: Keymap::default(),
             pending_keys: Vec::new(),
             requests: Vec::new(),
@@ -313,6 +320,14 @@ impl Editor {
         editor.options = Options::from_config(config);
         editor.keymap = Keymap::from_config(config);
         editor
+    }
+
+    pub fn set_plugin_commands(&mut self, names: impl IntoIterator<Item = String>) {
+        self.plugin_commands = names.into_iter().collect();
+    }
+
+    pub fn is_plugin_command(&self, name: &str) -> bool {
+        self.plugin_commands.contains(name)
     }
 
     pub fn mapping_count(&self) -> usize {

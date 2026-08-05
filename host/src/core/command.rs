@@ -88,6 +88,10 @@ pub fn execute(editor: &mut Editor, line: &str) {
                 editor.requests.push(Request::NewNote(rest.to_string()));
             }
         }
+        _ if editor.is_plugin_command(name) => editor.requests.push(Request::Plugin {
+            name: name.to_string(),
+            argument: rest.to_string(),
+        }),
         _ => {
             editor.message = Some(Message {
                 text: format!("E492: Not an editor command: {name}"),

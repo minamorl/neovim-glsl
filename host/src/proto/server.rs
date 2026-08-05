@@ -24,6 +24,10 @@ use super::paint::{Painter, Theme};
 /// client for `vim.rpcnotify`.
 pub const NAVIGATE: &str = "nvimglsl_navigate";
 pub const QUIT: &str = "nvimglsl_quit";
+/// A plugin-registered Ex command reached the editor; the client owns the
+/// plugin host, so the name and its argument travel out as an ordinary
+/// notification.
+pub const PLUGIN: &str = "nvimglsl_plugin";
 
 pub struct Host {
     pub editor: Editor,
@@ -50,6 +54,16 @@ impl Host {
     }
 
     /// A host whose editor behaves the way the owner's `init.lua` says.
+    pub fn configured_with_plugins(
+        vault: Vault,
+        theme: Theme,
+        plugin_commands: Vec<String>,
+    ) -> Self {
+        let mut host = Self::configured(vault, theme);
+        host.editor.set_plugin_commands(plugin_commands);
+        host
+    }
+
     pub fn configured(vault: Vault, theme: Theme) -> Self {
         let config = crate::luaconf::load_default();
         if let Some(error) = &config.error {
@@ -132,6 +146,10 @@ impl Host {
                         Scope::Notes => "notes",
                         Scope::Files => "files",
                     })],
+                )),
+                Request::Plugin { name, argument } => out.push(nvim::notification(
+                    PLUGIN,
+                    vec![Value::from(name), Value::from(argument)],
                 )),
                 Request::Edit(path) => self.open_path(path),
                 Request::NewNote(title) => match self.vault.create(&title) {
