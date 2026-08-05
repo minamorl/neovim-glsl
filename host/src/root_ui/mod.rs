@@ -73,7 +73,7 @@ mod tests {
             semantic: Semantic::new(name, "surface", "rest"),
             kind: BoxKind::RoundBox,
             bounds: Bounds { x: 0.1, y, width: 0.5, height: 0.1 },
-            decoration: Decoration { stroke_width: 0.0 },
+            decoration: Decoration::stroke(0.0),
             color: ColorIntent::new("surface", "outline"),
             corner_radius: CornerRadius::ShorterSideRatio(0.2),
         };

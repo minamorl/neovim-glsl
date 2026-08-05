@@ -124,6 +124,60 @@ impl BoxKind {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Decoration {
     pub stroke_width: f32,
+    /// A cast shadow. The measurements live here; the colour is a role in
+    /// [`ColorIntent`], because how dark a surface's shadow is belongs to the
+    /// scheme like every other colour. Declaring one does not move the box —
+    /// decoration never participates in layout — so the shadow paints outside
+    /// the layout bounds and the adapter rasterizes a larger area than the box.
+    pub shadow: Option<Shadow>,
+}
+
+impl Decoration {
+    pub fn stroke(stroke_width: f32) -> Self {
+        Self { stroke_width, shadow: None }
+    }
+}
+
+/// Offsets, blur and spread as lengths. Blur is not optional: a shadow with no
+/// blur is a second rectangle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shadow {
+    pub offset_x: CornerRadius,
+    pub offset_y: CornerRadius,
+    pub blur: CornerRadius,
+    pub spread: CornerRadius,
+}
+
+impl Shadow {
+    /// The common case: straight down, no spread.
+    pub fn drop(offset_y_px: f32, blur_px: f32) -> Self {
+        Self {
+            offset_x: CornerRadius::Pixels(0.0),
+            offset_y: CornerRadius::Pixels(offset_y_px),
+            blur: CornerRadius::Pixels(blur_px),
+            spread: CornerRadius::Pixels(0.0),
+        }
+    }
+
+    pub fn with_spread(mut self, spread_px: f32) -> Self {
+        self.spread = CornerRadius::Pixels(spread_px);
+        self
+    }
+}
+
+/// The shadow's own rectangle in physical pixels, relative to the box's
+/// top-left. A rectangle rather than offsets to apply, so an adapter cannot get
+/// the spread arithmetic wrong in its own way.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PixelShadowGeometry {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub corner_radius_x: f32,
+    pub corner_radius_y: f32,
+    /// The distance over which the edge fades.
+    pub blur: f32,
 }
 
 /// Semantic colour roles, independent of any concrete scheme.
@@ -131,11 +185,22 @@ pub struct Decoration {
 pub struct ColorIntent {
     pub fill_role: String,
     pub stroke_role: String,
+    /// Required exactly when decoration declares a shadow.
+    pub shadow_role: Option<String>,
 }
 
 impl ColorIntent {
     pub fn new(fill_role: &str, stroke_role: &str) -> Self {
-        Self { fill_role: fill_role.into(), stroke_role: stroke_role.into() }
+        Self {
+            fill_role: fill_role.into(),
+            stroke_role: stroke_role.into(),
+            shadow_role: None,
+        }
+    }
+
+    pub fn with_shadow(mut self, role: &str) -> Self {
+        self.shadow_role = Some(role.into());
+        self
     }
 }
 
@@ -176,6 +241,7 @@ pub struct ResolvedDecoration {
     pub box_kind: BoxKind,
     pub corner_radius: CornerRadius,
     pub stroke_width_ratio: f32,
+    pub shadow: Option<Shadow>,
 }
 
 /// Physical geometry for one render target. Both corner axes take the same
@@ -191,6 +257,7 @@ pub struct PixelBoxGeometry {
     pub corner_radius_x: f32,
     pub corner_radius_y: f32,
     pub stroke_width: f32,
+    pub shadow: Option<PixelShadowGeometry>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -198,6 +265,8 @@ pub struct ResolvedColor {
     pub scheme_id: String,
     pub fill: Rgba,
     pub stroke: Rgba,
+    /// Present exactly when decoration declared a shadow.
+    pub shadow: Option<Rgba>,
 }
 
 /// Layout and decoration, prepared exactly once. A colour preference change
@@ -280,7 +349,29 @@ pub fn resolve_non_color_decoration(
         box_kind: kind,
         corner_radius: corner,
         stroke_width_ratio: stroke,
+        shadow: check_shadow(decoration.shadow)?,
     })
+}
+
+fn check_shadow(shadow: Option<Shadow>) -> Result<Option<Shadow>> {
+    let Some(shadow) = shadow else { return Ok(None) };
+    for (length, field) in [(shadow.blur, "blur"), (shadow.spread, "spread")] {
+        let value = match length {
+            CornerRadius::ShorterSideRatio(v) | CornerRadius::Pixels(v) => v,
+        };
+        if !value.is_finite() || value < 0.0 {
+            return Err(Error::Range(format!("decoration.shadow.{field}")));
+        }
+    }
+    for (length, field) in [(shadow.offset_x, "offsetX"), (shadow.offset_y, "offsetY")] {
+        let value = match length {
+            CornerRadius::ShorterSideRatio(v) | CornerRadius::Pixels(v) => v,
+        };
+        if !value.is_finite() {
+            return Err(Error::Range(format!("decoration.shadow.{field}")));
+        }
+    }
+    Ok(Some(shadow))
 }
 
 pub fn materialize_pixel_box_geometry(
@@ -304,6 +395,27 @@ pub fn materialize_pixel_box_geometry(
     let height = normalized_height * target_height;
     let shorter = width.min(height);
     let radius = decoration.corner_radius.physical(shorter, scale);
+    // Spread grows the rectangle on every side and grows the corner with it, so
+    // a spread shadow stays concentric with the box rather than becoming a
+    // differently-shaped blob behind it. This is what CSS does.
+    let shadow = decoration.shadow.map(|shadow| {
+        let length = |value: CornerRadius| match value {
+            CornerRadius::ShorterSideRatio(ratio) => ratio * shorter,
+            CornerRadius::Pixels(px) => px * scale,
+        };
+        let spread = length(shadow.spread);
+        let shadow_w = (width + spread * 2.0).max(0.0);
+        let shadow_h = (height + spread * 2.0).max(0.0);
+        PixelShadowGeometry {
+            x: length(shadow.offset_x) - spread,
+            y: length(shadow.offset_y) - spread,
+            width: shadow_w,
+            height: shadow_h,
+            corner_radius_x: (radius + spread).clamp(0.0, shadow_w.min(shadow_h) / 2.0),
+            corner_radius_y: (radius + spread).clamp(0.0, shadow_w.min(shadow_h) / 2.0),
+            blur: length(shadow.blur),
+        }
+    });
     Ok(PixelBoxGeometry {
         kind: decoration.box_kind,
         x: x * target_width,
@@ -313,6 +425,7 @@ pub fn materialize_pixel_box_geometry(
         corner_radius_x: radius,
         corner_radius_y: radius,
         stroke_width: decoration.stroke_width_ratio * shorter,
+        shadow,
     })
 }
 
@@ -331,10 +444,27 @@ pub fn resolve_color(intent: &ColorIntent, runtime: &ColorRuntime) -> Result<Res
         .colors
         .get(&intent.stroke_role)
         .ok_or_else(|| Error::MissingRole(intent.stroke_role.clone()))?;
-    Ok(ResolvedColor { scheme_id: scheme.id.clone(), fill, stroke })
+    let shadow = match &intent.shadow_role {
+        Some(role) => Some(
+            *scheme.colors.get(role).ok_or_else(|| Error::MissingRole(role.clone()))?,
+        ),
+        None => None,
+    };
+    Ok(ResolvedColor { scheme_id: scheme.id.clone(), fill, stroke, shadow })
+}
+
+/// A shadow needs both halves: measurements in decoration and a role in colour.
+/// Either alone is a shadow someone meant to draw and will never see.
+fn check_shadow_is_whole(sample: &Sample) -> Result<()> {
+    match (sample.decoration.shadow.is_some(), sample.color.shadow_role.is_some()) {
+        (true, false) => Err(Error::Semantic("decoration.shadow without color.shadowRole".into())),
+        (false, true) => Err(Error::Semantic("color.shadowRole without decoration.shadow".into())),
+        _ => Ok(()),
+    }
 }
 
 pub fn prepare_design_language(sample: &Sample) -> Result<PreparedDesign> {
+    check_shadow_is_whole(sample)?;
     let layout = resolve_layout(&sample.semantic, sample.bounds)?;
     let decoration = resolve_non_color_decoration(
         &layout,
@@ -384,7 +514,7 @@ mod tests {
             semantic: Semantic::new("Dialog", "surface", "open"),
             kind: BoxKind::RoundBox,
             bounds: Bounds { x: 0.1, y: 0.2, width: 0.5, height: 0.25 },
-            decoration: Decoration { stroke_width: 0.01 },
+            decoration: Decoration::stroke(0.01),
             color: ColorIntent::new("surface", "outline"),
             corner_radius: CornerRadius::ShorterSideRatio(0.08),
         }
