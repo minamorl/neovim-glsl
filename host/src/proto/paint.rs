@@ -380,7 +380,12 @@ impl Painter {
                 self.fill(screen_row, 1, hl::DEFAULT);
                 continue;
             }
-            let number = format!("{:>width$} ", line + 1, width = gutter - 1);
+            // `number` + `relativenumber` from the owner's config: the cursor's
+            // own line reads its number, the rest read the distance to it.
+            let number = match editor.options.line_number(line, editor.cursor.0) {
+                Some(value) => format!("{:>width$} ", value, width = gutter - 1),
+                None => " ".repeat(gutter),
+            };
             let number_hl = if line == editor.cursor.0 { hl::CURSOR_LINE_NR } else { hl::LINE_NR };
             self.write(screen_row, 0, &number, number_hl);
 
