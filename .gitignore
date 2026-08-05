@@ -15,4 +15,6 @@ secrets/
 target/
 nvimgl.app/
 nvimglsl.app/
+# Neovim drops this where a test ran it. Empty, and not ours.
+.nvimlog
 .DS_Store

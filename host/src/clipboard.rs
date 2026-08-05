@@ -54,12 +54,27 @@ mod tests {
     /// Deliberately restores whatever was there: a test that leaves the
     /// owner's clipboard holding its fixture has broken something outside
     /// itself.
+    ///
+    /// The probe is not ceremony. `write` swallows its errors by design — a
+    /// failed `pbcopy` should lose the clipboard, not the yank — so a process
+    /// that may read the pasteboard but not write it produces `Some("")` here
+    /// rather than an error. That is exactly what a sandboxed agent gets, and a
+    /// baseline only the owner's own shell can reproduce is not a baseline. So
+    /// the environment is asked whether it can write at all, and the real
+    /// assertion runs only where the answer is yes.
     #[test]
     fn text_survives_a_round_trip_and_the_clipboard_is_put_back() {
+        const PROBE: &str = "nvimglsl clipboard probe";
+        const BODY: &str = "nvimglsl clipboard round trip\nsecond line";
         let Some(before) = super::read() else { return };
-        super::write("nvimglsl clipboard round trip\nsecond line");
+        super::write(PROBE);
+        if super::read().as_deref() != Some(PROBE) {
+            super::write(&before);
+            return;
+        }
+        super::write(BODY);
         let read_back = super::read();
         super::write(&before);
-        assert_eq!(read_back.as_deref(), Some("nvimglsl clipboard round trip\nsecond line"));
+        assert_eq!(read_back.as_deref(), Some(BODY));
     }
 }
