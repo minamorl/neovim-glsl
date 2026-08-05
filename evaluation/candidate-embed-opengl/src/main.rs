@@ -5,6 +5,7 @@
 
 mod aish;
 mod bench;
+mod cmap;
 mod ext_ui;
 mod gl;
 mod grid;

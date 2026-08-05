@@ -31,6 +31,7 @@ pub mod hl {
     pub const BULLET: u64 = 11;
     pub const LINK: u64 = 12;
     pub const MODIFIED: u64 = 13;
+    pub const CURSOR_LINE: u64 = 14;
 }
 
 /// The editor's own palette.
@@ -59,6 +60,9 @@ pub struct Theme {
     pub link: u32,
     pub modified_fg: u32,
     pub modified_bg: u32,
+    /// `cursorline`: a wash under the line the cursor is on, which has to stay
+    /// under the text rather than compete with the visual selection.
+    pub cursor_line_bg: u32,
 }
 
 impl Theme {
@@ -85,6 +89,7 @@ impl Theme {
             link: 0x6FC7EF,
             modified_fg: 0xE86B7E,
             modified_bg: 0x1B2130,
+            cursor_line_bg: 0x161A24,
         }
     }
 
@@ -108,6 +113,7 @@ impl Theme {
             link: 0x1C6B93,
             modified_fg: 0xC0324B,
             modified_bg: 0xE6EAF3,
+            cursor_line_bg: 0xECEFF6,
         }
     }
 
@@ -391,17 +397,43 @@ impl Painter {
 
             let text = editor.buffer.line_text(line);
             let spans = markdown_spans(&text);
+            let on_cursor_line = editor.options.cursorline && line == editor.cursor.0;
+            let rest = if on_cursor_line { hl::CURSOR_LINE } else { hl::DEFAULT };
+            // `list` + `listchars`: a tab and a trailing space are drawn as the
+            // characters the config names, in the non-text colour, so
+            // whitespace the file carries is visible rather than implied.
+            let trailing_from = if editor.options.list {
+                text.char_indices()
+                    .rev()
+                    .take_while(|(_, c)| c.is_whitespace())
+                    .last()
+                    .map(|_| text.chars().count() - text.chars().rev().take_while(|c| c.is_whitespace()).count())
+            } else {
+                None
+            };
             let mut col = gutter;
             for (index, ch) in text.chars().enumerate() {
                 if col >= self.cols {
                     break;
                 }
-                let mut style = spans.get(index).copied().unwrap_or(hl::DEFAULT);
+                let mut style = spans.get(index).copied().unwrap_or(rest);
+                let mut ch = ch;
+                if editor.options.list {
+                    if ch == '\t' {
+                        ch = editor.options.listchar_tab;
+                        style = hl::NON_TEXT;
+                    } else if trailing_from.is_some_and(|from| index >= from) {
+                        ch = editor.options.listchar_trail;
+                        style = hl::NON_TEXT;
+                    }
+                }
                 if in_visual(visual, visual_kind, line, index, &editor.buffer) {
                     style = hl::VISUAL;
-                } else if let Some(pattern) = editor.last_search.as_deref() {
-                    if !pattern.is_empty() && matches_at(&text, pattern, index) {
-                        style = hl::SEARCH;
+                } else if editor.highlight_search() {
+                    if let Some(pattern) = editor.last_search.as_deref() {
+                        if !pattern.is_empty() && matches_at(&text, pattern, index) {
+                            style = hl::SEARCH;
+                        }
                     }
                 }
                 col = self.put(screen_row, col, ch, style);
@@ -413,7 +445,7 @@ impl Painter {
             {
                 self.fill(screen_row, col, hl::VISUAL);
             } else {
-                self.fill(screen_row, col, hl::DEFAULT);
+                self.fill(screen_row, col, rest);
             }
         }
 
@@ -691,6 +723,7 @@ fn highlight_table(theme: Theme) -> Vec<(u64, Value)> {
         (hl::BULLET, attrs(Some(theme.bullet), None, true, false)),
         (hl::LINK, attrs(Some(theme.link), None, false, false)),
         (hl::MODIFIED, attrs(Some(theme.modified_fg), Some(theme.modified_bg), true, false)),
+        (hl::CURSOR_LINE, attrs(None, Some(theme.cursor_line_bg), false, false)),
     ]
 }
 
@@ -750,10 +783,25 @@ mod tests {
         })
     }
 
+    /// An editor with `number` on, since the gutter is what these read.
+    /// Without a config the gutter is blank, which is vim's own default.
+    fn numbered(text: &str) -> Editor {
+        let mut editor = Editor::new(Buffer::from_text(text));
+        editor.options.number = true;
+        editor
+    }
+
+    #[test]
+    fn without_a_config_the_gutter_is_blank_as_vim_leaves_it() {
+        let mut p = painter();
+        let editor = Editor::new(Buffer::from_text("hello\n"));
+        assert_eq!(row_text(&p.render(&editor), 0).unwrap().trim_end(), "    hello");
+    }
+
     #[test]
     fn the_first_paint_carries_the_buffer_text() {
         let mut p = painter();
-        let editor = Editor::new(Buffer::from_text("hello\n"));
+        let editor = numbered("hello\n");
         let events = p.render(&editor);
         assert_eq!(row_text(&events, 0).unwrap().trim_end(), "  1 hello");
     }
@@ -761,7 +809,7 @@ mod tests {
     #[test]
     fn an_unchanged_row_is_not_sent_again() {
         let mut p = painter();
-        let mut editor = Editor::new(Buffer::from_text("one\ntwo\n"));
+        let mut editor = numbered("one\ntwo\n");
         p.render(&editor);
         editor.feed_str("jx");
         let events = p.render(&editor);
