@@ -1,9 +1,7 @@
 # DESIGN-SPACE — 開いたままにする軸
 
-`pins/domains/neovim-glsl.spec@0.9` の `free` 項目を、spec の文言のまま機械転記したもの。
+`pins/domains/neovim-glsl.spec@0.11` の `free` 項目を、spec の文言のまま機械転記したもの。
 **free は free のまま。** 実装・設定・依存・慣習のどれによっても、ここの軸を事実上固定してはならない。
-
-入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.9.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
 
 規律:
 
@@ -13,7 +11,7 @@
 - 正本は spec。この転記が spec と食い違ったら spec が勝つ。転記側を直す。
 - この file は `python3 tools/sync_design_space.py <spec-or-mirror>` で再生成する。手で書き足さない。
 
-## free 軸 (44 件)
+## free 軸 (54 件)
 
 - `neovim_glsl.integration_strategy`: Neovim の embed / external UI protocol 接続 / 再実装 / fork 等の実現手段。指示文は一つも選択していない。
 - `neovim_glsl.host_implementation_language`: host および周辺実装の言語・runtime・build system(Rust 等を含む)。特定言語を必須条件にしない。
@@ -59,6 +57,16 @@
 - `neovim_glsl.navigation_surface_addressing`: 面の座標系(pixel でそのまま置くか、cell に揃えるか)。grid を出たことは pixel 配置を可能にするが要求しない。
 - `neovim_glsl.navigation_surface_geometry`: 面の位置・大きさ・段組・行送り・余白・透明度・装飾・animation。
 - `neovim_glsl.navigation_surface_compositing`: 面を grid と同じ vertex 列 / draw call に載せるか、別 pass として描くか。同じ window に重なることだけが要求。
+- `neovim_glsl.plugin_layout`: plugin の置き場・file 構成・命名。
+- `neovim_glsl.plugin_discovery_mechanism`: 発見と読み込みの実現手段(directory 走査 / manifest / 明示登録)。
+- `neovim_glsl.plugin_api_shape`: Lua plugin へ渡す関数の名前・粒度・呼び出し規約。
+- `neovim_glsl.plugin_scene_vocabulary`: plugin が組み立てられる root-ui primitive の範囲。
+- `neovim_glsl.lsp_client_design`: LSP client の実装(transport、非同期方式、server の起動と寿命、対応言語)。
+- `neovim_glsl.project_search_mechanism`: 全文検索の実現手段(外部 ripgrep / 自前走査)と結果の提示形式。
+- `neovim_glsl.git_mechanism`: git の読み取り手段(外部 git / library)と gutter・blame の表示形式。
+- `neovim_glsl.task_execution_mechanism`: task 実行の実現手段(捕捉した pipe / 本物の PTY)と出力の置き場。
+- `neovim_glsl.window_layout_algebra`: window の分割・寸法・tabpage の有無と、その protocol 上の表現。
+- `neovim_glsl.file_tree_behaviour`: tree の展開・作成・改名・削除・無視規則。
 
 ## この repository 自身が free を踏んでいないことの確認
 

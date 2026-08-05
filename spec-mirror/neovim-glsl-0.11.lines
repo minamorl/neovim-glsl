@@ -1,6 +1,6 @@
 # Transcription mirror for neovim-glsl.spec.
 #
-# @meta version: 0.9
+# @meta version: 0.11
 #
 # This file is not the source of truth. The authoritative ledger is the
 # external spec-system file pins/domains/neovim-glsl.spec. This mirror contains
@@ -12,8 +12,9 @@
 # file and the spec disagree, the spec wins and this file is wrong.
 #
 # Regenerate the documents with:
-#   python3 tools/sync_undecided.py    spec-mirror/neovim-glsl-0.9.lines
-#   python3 tools/sync_design_space.py spec-mirror/neovim-glsl-0.9.lines
+#
+#   python3 tools/sync_undecided.py    spec-mirror/neovim-glsl-0.11.lines
+#   python3 tools/sync_design_space.py spec-mirror/neovim-glsl-0.11.lines
 
 quarantine neovim_glsl.glsl_scope: 曖昧 — 「NeoVim を GLSL にする」の GLSL 化対象が、表示・UI 描画層だけなのか、Neovim の編集エンジン(buffer・編集意味論)自体まで含むのかは、指示文だけでは解釈が 2 通り以上あり一意に決まらない。
 quarantine neovim_glsl.full_replacement_wish: 曖昧 — 先行発話「neovimをGLSLでフル置換したい」の「フル置換」が何の全体を指すかが一意でなく、かつ「したい」は願望である。今回の指示文はこれを要求として再確定していないため、置換範囲を pin 化しない。
@@ -81,7 +82,6 @@ open_question neovim_glsl.root_ui_visual_editor_ownership: Root-ui が visual pr
 open_question neovim_glsl.vscode_compatibility_vs_defeat: VS Code を defeat 対象と見做し non-compatible にするか、migration path を提供し compatibility を保つか。defeat 対象の名指し catalog も未指定。
 quarantine neovim_glsl.note_change_extent: 未確定 — 「今の yui の notes を少しかえる」の「少し」が指す変更範囲(schema / API / UI / 同期モデルのどこまで)が定量化されておらず、解空間が未固定。
 quarantine neovim_glsl.wysiwyg_fidelity: 未確定 — 「今の実装と似せていい」は許可であって要求ではなく、似せる度合い(視覚的等価 / 操作等価 / 部分的踏襲)の基準が無い。
-quarantine neovim_glsl.ide_level_criterion: 主観 — 「IDE レベル」に observable な受け入れ基準(機能集合・比較対象・閾値)が無い。v0.3 の vscode_defeat / strong_usable と同型。
 quarantine neovim_glsl.root_ui_hardening_definition: 未確定 — 「root-ui をしっかりした」の完了条件が定義されていない。順序の前提となる状態が観測不能なままである。
 quarantine neovim_glsl.aishell_naming: 曖昧 — メモの「aishell」が v0.2 で pin 済みの aish(ai-native-shell)と同一対象を指すのか、別の shell surface を指すのかは字面だけでは一意に定まらない。同一と仮定して新規 pin を作らず、v0.2 の pin を再利用する。
 free neovim_glsl.note_schema: markdown note の schema、frontmatter、tag、link、履歴粒度、embedding の扱い。
@@ -91,7 +91,6 @@ free neovim_glsl.wysiwyg_engine: WYSIWYG モードの実装機構(既存実装�
 free neovim_glsl.delegated_editing_protocol: 編集委譲の transport、承認 UI、差分提示、取り消し、衝突時の扱い。
 free neovim_glsl.lab_integration_surface: lab.minamorl.com と繋ぐ範囲(artifact 参照 / 双方向編集 / 公開範囲)。
 open_question neovim_glsl.note_change_extent_decision: yui notes をどこまで変えるか。schema・API・同期・UI のどれを触るか。
-open_question neovim_glsl.ide_level_acceptance: 「IDE レベル」を何が出来れば達成と判定するか(LSP / DAP / 補完 / 検索 / refactor / task runner のどれを含むか)。
 open_question neovim_glsl.root_ui_hardening_done: 「root-ui をしっかりした」の完了条件は何か。何が観測できれば surface 置換に進んでよいか。
 open_question neovim_glsl.surface_priority: 実装順序として desktop(neovim-glsl 本体)・web・mobile のどれを先に置くか。メモは三者を並べているが順序を述べていない。
 free neovim_glsl.host_implementation_language: 別 host を建てる場合の実装言語・ランタイム。
@@ -116,4 +115,24 @@ free neovim_glsl.navigation_surface_geometry: 面の位置・大きさ・段組�
 free neovim_glsl.navigation_surface_compositing: 面を grid と同じ vertex 列 / draw call に載せるか、別 pass として描くか。同じ window に重なることだけが要求。
 open_question neovim_glsl.navigation_state_owner: picker の state(query・候補列・選択位置)を host が持つか、Neovim 側の plugin が持って host は描くだけか。面の locus は決まったが state の所在は決まっていない。2026-08-03 の人間ゲートは「わからない」を返した(@meta derived_from_v0_9)ので、この問いは人間の入力待ちではなく観測待ちである。決め方: 両案を実際に動かし、(a) 一打鍵あたりのstate 更新から面の再構築までの経路の実測、(b) pin keymap_preservation を満たすためにどちらが何を再実装する必要があるかの列挙、(c) plugin 側 state を採った場合に host が行を取得するために必要な protocol 面の実測、の三点を突き合わせる。観測はevaluation/state-ownership に置く。
 open_question neovim_glsl.navigation_input_routing: picker が開いている間の入力を host が直接受けるか、Neovim へ送って戻すか。pin keymap_preservation(keymap.baseline = current_keymap)との整合をどちらで担保するかも含む。state の所在と独立ではないが同一でもない(host が state を持ちながら入力を Neovim 経由で受ける形も、その逆も構成可能)ため、v0.9 でも別の問いとして残す。
-# AWAITING_OBSERVATION at v0.9 (gate answered 「わからない」): neovim_glsl.navigation_state_owner
+AWAITING_OBSERVATION at v0.9 (gate answered 「わからない」): neovim_glsl.navigation_state_owner
+quarantine neovim_glsl.plugin_compat_expectation: 曖昧 — 「Lua で書ける」が、既存の Neovim Lua plugin が無改変で動くことを指すのか、この host 固有の API に対して書き下ろすことを指すのかは回答の字面だけでは一意に定まらない。
+free neovim_glsl.plugin_layout: plugin の置き場・file 構成・命名。
+free neovim_glsl.plugin_discovery_mechanism: 発見と読み込みの実現手段(directory 走査 / manifest / 明示登録)。
+free neovim_glsl.plugin_api_shape: Lua plugin へ渡す関数の名前・粒度・呼び出し規約。
+free neovim_glsl.plugin_scene_vocabulary: plugin が組み立てられる root-ui primitive の範囲。
+open_question neovim_glsl.plugin_discovery: plugin をどこから読むか。有効化・無効化の単位は何か。
+open_question neovim_glsl.plugin_api_scope: Lua plugin に渡す API はどこまでか。buffer 編集・keymap 登録・note 参照・aish 呼び出しのどれを含むか。
+open_question neovim_glsl.plugin_neovim_compat: 既存の Neovim Lua plugin を無改変で動かすことを目標にするか、この host 固有の API へ書き下ろす前提にするか。
+open_question neovim_glsl.plugin_effect_boundary: plugin は任意の code を実行する。file 書き込み・process 起動・network をどこまで許すか。
+quarantine neovim_glsl.entry_point_form: 未確定 — 「reposから動線がいい」は方向を述べているが、起動直後に何が出るか(repository の一覧 / 直前の repository / note と repository の混在した面)は述べていない。解空間が未固定。
+quarantine neovim_glsl.ide_capability_depth: 未確定 — 四つの能力それぞれが「どこまで出来れば含まれると言えるか」は述べられていない。LSP が診断だけで足りるのか補完まで要るのか、検索が正規表現を要求するのかは未定。
+free neovim_glsl.lsp_client_design: LSP client の実装(transport、非同期方式、server の起動と寿命、対応言語)。
+free neovim_glsl.project_search_mechanism: 全文検索の実現手段(外部 ripgrep / 自前走査)と結果の提示形式。
+free neovim_glsl.git_mechanism: git の読み取り手段(外部 git / library)と gutter・blame の表示形式。
+free neovim_glsl.task_execution_mechanism: task 実行の実現手段(捕捉した pipe / 本物の PTY)と出力の置き場。
+free neovim_glsl.window_layout_algebra: window の分割・寸法・tabpage の有無と、その protocol 上の表現。
+free neovim_glsl.file_tree_behaviour: tree の展開・作成・改名・削除・無視規則。
+open_question neovim_glsl.entry_point_decision: 起動直後に何を出すか。repository の一覧か、直前の repository か、note と repository が同じ面に並ぶか。
+open_question neovim_glsl.ide_capability_thresholds: 四つの能力それぞれの合格ライン。LSP はどの言語まで、検索は正規表現を含むか、task は PTY を要求するか。
+open_question neovim_glsl.dap_and_refactor: DAP と refactor を後から IDE レベルへ足すか、恒久的に範囲外とするか。
