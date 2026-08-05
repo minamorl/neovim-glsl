@@ -37,6 +37,7 @@ impl LineEnding {
     }
 }
 
+#[derive(Clone)]
 pub struct Buffer {
     lines: Vec<Vec<char>>,
     path: Option<PathBuf>,
