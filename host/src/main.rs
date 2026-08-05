@@ -16,6 +16,7 @@ mod picker;
 mod plugin;
 mod proto;
 mod root_ui;
+mod tategaki;
 mod textpos;
 
 // The grid renderer is the measured candidate's, reached by path rather than
@@ -76,12 +77,20 @@ struct Args {
     rows: usize,
     font_size: f32,
     scheme: String,
+    /// Whether `--scheme` was actually passed. The grid has a default scheme;
+    /// the vertical preview does not inherit it, because a reading view is
+    /// paper the way a book is, not dark the way a terminal is.
+    scheme_given: bool,
     snapshot: Option<String>,
     input: Option<String>,
     /// Serve the protocol on stdin/stdout instead of opening a window, the way
     /// `nvim --embed` does. This is what makes "speaks the Neovim protocol"
     /// checkable from outside this program.
     embed: bool,
+    /// Set the note as a vertical page, write it here, and exit. No window and
+    /// no GL, so it runs anywhere — including where the page is then rendered
+    /// by something other than a browser on this machine.
+    tategaki: Option<String>,
 }
 
 impl Default for Args {
@@ -92,9 +101,11 @@ impl Default for Args {
             rows: 30,
             font_size: 15.0,
             scheme: "dark".into(),
+            scheme_given: false,
             snapshot: None,
             input: None,
             embed: false,
+            tategaki: None,
         }
     }
 }
@@ -124,8 +135,12 @@ fn parse_args_from(argv: Vec<String>) -> Args {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(args.font_size)
             }
-            "--scheme" => args.scheme = take(&mut index).unwrap_or(args.scheme),
+            "--scheme" => {
+                args.scheme = take(&mut index).unwrap_or(args.scheme);
+                args.scheme_given = true;
+            }
             "--snapshot" => args.snapshot = take(&mut index),
+            "--tategaki" => args.tategaki = take(&mut index),
             "--input" => args.input = take(&mut index),
             other if !other.starts_with('-') && args.file.is_none() => {
                 args.file = Some(PathBuf::from(other))
@@ -157,6 +172,7 @@ impl Link {
         initial: Option<PathBuf>,
         theme: proto::paint::Theme,
         plugin_commands: Vec<String>,
+        preview_scheme: tategaki::Scheme,
     ) -> std::io::Result<Self> {
         let (host_input, to_host) = std::io::pipe()?;
         let (from_host, host_output) = std::io::pipe()?;
@@ -171,6 +187,7 @@ impl Link {
                     theme,
                     plugin_commands,
                 );
+                host.preview.scheme = preview_scheme;
                 if let Err(error) = proto::serve(&mut host, host_input, host_output, initial) {
                     eprintln!("host: {error}");
                 }
@@ -328,6 +345,11 @@ impl App {
                 proto::server::NAVIGATE => {
                     let files = params.first().and_then(rmpv::Value::as_str) == Some("files");
                     self.open_navigation(files);
+                }
+                proto::server::TATEGAKI => {
+                    if let Some(path) = params.first().and_then(rmpv::Value::as_str) {
+                        open_page(path);
+                    }
                 }
                 proto::server::QUIT => return true,
                 proto::server::PLUGIN => {
@@ -730,6 +752,7 @@ impl ApplicationHandler for App {
             self.args.file.clone(),
             proto::paint::Theme::named(&self.args.scheme),
             plugin_names,
+            preview_scheme(&self.args),
         )
         .expect("host thread");
         link.ui_attach(self.args.cols, self.args.rows, nvim::UiOptions::none())
@@ -1069,8 +1092,69 @@ fn write_png(path: &str, rgba_bottom_up: &[u8], width: u32, height: u32) {
         .unwrap();
 }
 
+/// The paper the vertical preview is set on.
+///
+/// Paper unless `--scheme` was given, because the preview imitates a book rather
+/// than the editor around it. Passing `--scheme dark` moves it, and `t` inside
+/// the page moves it again without touching the editor.
+fn preview_scheme(args: &Args) -> tategaki::Scheme {
+    if args.scheme_given {
+        tategaki::Scheme::parse(&args.scheme)
+    } else {
+        tategaki::Scheme::Paper
+    }
+}
+
+/// Hand a written page to whatever the machine opens HTML with.
+///
+/// `pin first_stage_platform` makes macOS the first stage and
+/// `pin multi_target_portability_direction` forbids stopping there, so the other
+/// two openers are named rather than left out. A failure is reported and not
+/// fatal: the page is already on disk, and saying where it is beats dying.
+fn open_page(path: &str) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    match std::process::Command::new(opener).arg(path).spawn() {
+        Ok(_) => {}
+        Err(error) => eprintln!("nvimglsl: {opener} {path}: {error} (the page is written)"),
+    }
+}
+
 fn main() {
     let args = parse_args_from(std::env::args().skip(1).collect());
+    if let Some(to) = args.tategaki.as_deref() {
+        // Read from the file rather than through the editing core: nothing has
+        // been typed yet, so the buffer and the file are the same text, and this
+        // path needs neither a window nor a pipe.
+        let markdown = match args.file.as_ref() {
+            Some(path) => match std::fs::read_to_string(path) {
+                Ok(text) => text,
+                Err(error) => {
+                    eprintln!("nvimglsl: {}: {error}", path.display());
+                    std::process::exit(1);
+                }
+            },
+            None => {
+                eprintln!("nvimglsl: --tategaki needs a note to set");
+                std::process::exit(1);
+            }
+        };
+        let style = tategaki::Style {
+            scheme: preview_scheme(&args),
+            ..tategaki::Style::default()
+        };
+        if let Err(error) = tategaki::write(&markdown, &style, std::path::Path::new(to)) {
+            eprintln!("nvimglsl: {to}: {error}");
+            std::process::exit(1);
+        }
+        println!("{to}");
+        return;
+    }
     if args.embed {
         // The protocol face, served the way `nvim --embed` serves it.
         let mut host = proto::Host::new(core::Editor::default());

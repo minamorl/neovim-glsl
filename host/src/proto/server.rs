@@ -29,6 +29,10 @@ pub const QUIT: &str = "nvimglsl_quit";
 /// plugin host, so the name and its argument travel out as an ordinary
 /// notification.
 pub const PLUGIN: &str = "nvimglsl_plugin";
+/// A vertical page was set, and this is where it was written. The host writes
+/// the file; opening it is the client's business, the same way drawing the
+/// navigation surface is.
+pub const TATEGAKI: &str = "nvimglsl_tategaki";
 
 /// Work the protocol server can receive without blocking on client input.
 ///
@@ -47,6 +51,12 @@ pub struct Host {
     /// than something this host owns, so it is opened, never created.
     pub vault: Vault,
     theme: Theme,
+    /// The page the vertical preview is set on.
+    ///
+    /// A reading view is paper by default even when the editor is dark, because
+    /// what it imitates is a book rather than a terminal. `--scheme` moves it,
+    /// and `t` in the page moves it again without touching the editor.
+    pub preview: crate::tategaki::Style,
     painter: Option<Painter>,
     channel: u64,
     pub quit: bool,
@@ -97,6 +107,7 @@ impl Host {
             editor,
             vault,
             theme,
+            preview: crate::tategaki::Style::default(),
             painter: None,
             channel: 1,
             quit: false,
@@ -169,6 +180,24 @@ impl Host {
                     vec![Value::from(name), Value::from(argument)],
                 )),
                 Request::Edit(path) => self.open_path(path),
+                // Set from the buffer rather than from the file on disk: the
+                // point of a preview is to see what has not been written yet.
+                Request::Preview => {
+                    let to = crate::tategaki::preview_path(&self.editor.buffer.name());
+                    let text = self.editor.buffer.text();
+                    match crate::tategaki::write(&text, &self.preview, &to) {
+                        Ok(()) => {
+                            out.push(nvim::notification(
+                                TATEGAKI,
+                                vec![Value::from(to.to_string_lossy().as_ref())],
+                            ));
+                            self.report(format!("\"{}\" tategaki", to.display()), false);
+                        }
+                        Err(error) => {
+                            self.report(format!("E212: can't write preview: {error}"), true)
+                        }
+                    }
+                }
                 Request::NewNote(title) => match self.vault.create(&title) {
                     Ok(path) => {
                         self.open_path(path.clone());
@@ -633,6 +662,56 @@ mod tests {
             .and_then(|params| params.first())
             .and_then(Value::as_str);
         assert_eq!(scope, Some("files"));
+    }
+
+    #[test]
+    fn the_vertical_page_is_written_and_the_client_is_told_where() {
+        let mut host = attached_host("# 草枕\n\n山路を登りながら、こう考えた。\n");
+        let out = host.handle(&input(" p"));
+        let path = out
+            .iter()
+            .filter_map(|m| m.as_array())
+            .find(|p| p.get(1).and_then(Value::as_str) == Some(TATEGAKI))
+            .and_then(|p| p[2].as_array())
+            .and_then(|params| params.first())
+            .and_then(Value::as_str)
+            .expect("the tategaki notification");
+        let page = std::fs::read_to_string(path).expect("the written page");
+        assert!(
+            page.contains("writing-mode: vertical-rl"),
+            "the page is not set vertically"
+        );
+        assert!(
+            page.contains("<title>草枕</title>"),
+            "the note's title did not reach the page"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn the_page_is_set_from_the_buffer_rather_than_from_the_file() {
+        // The whole point of a preview is seeing text that has not been saved.
+        let mut host = attached_host("もとの一行。\n");
+        host.handle(&input("ccあとから書いた行。<Esc>"));
+        let out = host.handle(&input(" p"));
+        let path = out
+            .iter()
+            .filter_map(|m| m.as_array())
+            .find(|p| p.get(1).and_then(Value::as_str) == Some(TATEGAKI))
+            .and_then(|p| p[2].as_array())
+            .and_then(|params| params.first())
+            .and_then(Value::as_str)
+            .expect("the tategaki notification");
+        let page = std::fs::read_to_string(path).expect("the written page");
+        assert!(
+            page.contains("あとから書いた行。"),
+            "the unsaved edit did not reach the page"
+        );
+        assert!(
+            !page.contains("もとの一行。"),
+            "the page was set from the file on disk"
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
