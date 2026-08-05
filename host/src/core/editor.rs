@@ -156,6 +156,13 @@ pub struct Options {
     pub ignorecase: bool,
     pub smartcase: bool,
     pub hlsearch: bool,
+    /// `list` + `listchars`.
+    pub list: bool,
+    pub listchar_tab: char,
+    pub listchar_trail: char,
+    /// `clipboard = unnamedplus`: yanks and deletes reach the system
+    /// clipboard, and puts come back from it.
+    pub clipboard_unnamed: bool,
 }
 
 impl Default for Options {
@@ -170,6 +177,10 @@ impl Default for Options {
             ignorecase: false,
             smartcase: false,
             hlsearch: true,
+            list: false,
+            listchar_tab: '>',
+            listchar_trail: '-',
+            clipboard_unnamed: false,
         }
     }
 }
@@ -186,6 +197,21 @@ impl Options {
             ignorecase: config.bool_option("ignorecase", fallback.ignorecase),
             smartcase: config.bool_option("smartcase", fallback.smartcase),
             hlsearch: config.bool_option("hlsearch", fallback.hlsearch),
+            list: config.bool_option("list", fallback.list),
+            listchar_tab: config
+                .option("listchars")
+                .and_then(|set| set.get("tab"))
+                .and_then(|text| text.chars().next())
+                .unwrap_or(fallback.listchar_tab),
+            listchar_trail: config
+                .option("listchars")
+                .and_then(|set| set.get("trail"))
+                .and_then(|text| text.chars().next())
+                .unwrap_or(fallback.listchar_trail),
+            clipboard_unnamed: config
+                .option("clipboard")
+                .map(|value| matches!(value, crate::luaconf::Setting::Text(text) if text.contains("unnamed")))
+                .unwrap_or(fallback.clipboard_unnamed),
         }
     }
 
@@ -1217,11 +1243,32 @@ impl Editor {
         if let Some(name) = register {
             self.registers.insert(name, value.clone());
         }
+        if self.options.clipboard_unnamed {
+            // A failed clipboard write loses the clipboard, not the yank: the
+            // register is set either way.
+            let mut text = value.lines.join("\n");
+            if value.linewise {
+                text.push('\n');
+            }
+            crate::clipboard::write(&text);
+        }
         self.registers.insert('"', value);
     }
 
     fn paste(&mut self, register: Option<char>, after: bool, count: usize) {
         let name = register.unwrap_or('"');
+        // With `clipboard = unnamedplus` the unnamed register *is* the system
+        // clipboard, so a copy made in another program is what `p` puts.
+        if register.is_none() && self.options.clipboard_unnamed {
+            if let Some(text) = crate::clipboard::read() {
+                let linewise = text.ends_with('\n');
+                let body = text.strip_suffix('\n').unwrap_or(&text);
+                self.registers.insert(
+                    '"',
+                    Register { lines: body.split('\n').map(str::to_string).collect(), linewise },
+                );
+            }
+        }
         let Some(value) = self.registers.get(&name).cloned() else { return };
         if value.lines.is_empty() {
             return;

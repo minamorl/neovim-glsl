@@ -82,6 +82,8 @@ pub struct Atlas {
     /// the renderer's upload path; never by the reporter.
     pub stats: AtlasStats,
     fonts: Vec<Font>,
+    /// One per font, parsed from the same bytes.
+    cmaps: Vec<crate::cmap::Cmap>,
     cache: HashMap<StyleKey, Option<Glyph>>,
     px: f32,
     shelf_x: usize,
@@ -102,7 +104,7 @@ impl Atlas {
         // missing glyphs so the grid stays monospaced. The environment override
         // keeps this evaluation candidate portable without declaring any one
         // platform font stack canonical.
-        let fonts = load_fonts(px);
+        let (fonts, cmaps) = load_fonts(px);
         assert!(!fonts.is_empty(), "no usable font found");
 
         let primary = &fonts[0];
@@ -124,6 +126,7 @@ impl Atlas {
             dirty: true,
             stats: AtlasStats::default(),
             fonts,
+            cmaps,
             cache: HashMap::new(),
             px,
             shelf_x: 4,
@@ -205,7 +208,14 @@ impl Atlas {
         if ch == ' ' || ch == '\0' {
             return Rasterized::NoInk;
         }
-        let Some(font) = self.fonts.iter().find(|f| f.lookup_glyph_index(ch) != 0) else {
+        // The font's own Unicode subtable decides coverage, not the
+        // rasteriser's char lookup — that one takes the legacy Macintosh table
+        // on Menlo and Monaco and answers with a MacRoman glyph for anything in
+        // Latin-1. See [`crate::cmap`].
+        let Some((font, glyph_index)) = self.fonts.iter().zip(&self.cmaps).find_map(|(font, cmap)| {
+            let index = if cmap.is_usable() { cmap.glyph(ch) } else { font.lookup_glyph_index(ch) };
+            (index != 0).then_some((font, index))
+        }) else {
             return Rasterized::NoInk;
         };
         // Fit the glyph's own em box to the cells it occupies, then centre what
@@ -222,7 +232,7 @@ impl Atlas {
         // deliberately off-centre inside its own em — 。 sits low and left in
         // its square — has to stay where the font put it.
         let cells = cell_span(ch) as f32;
-        let em = font.metrics(ch, self.px).advance_width;
+        let em = font.metrics_indexed(glyph_index, self.px).advance_width;
         let fit = if em > 0.0 {
             (cells * self.cell_w / em).min(self.cell_h / self.px).max(0.1)
         } else {
@@ -230,7 +240,7 @@ impl Atlas {
         };
         let px = if (fit - 1.0).abs() < 0.01 { self.px } else { self.px * fit };
 
-        let (m, base) = font.rasterize(ch, px);
+        let (m, base) = font.rasterize_indexed(glyph_index, px);
         if m.width == 0 || m.height == 0 {
             return Rasterized::NoInk;
         }
@@ -396,11 +406,17 @@ fn parse_font(bytes: Vec<u8>, idx: u32, px: f32) -> Option<Font> {
 }
 
 /// Every candidate font that reads *and parses*, in preference order.
-fn load_fonts(px: f32) -> Vec<Font> {
-    candidate_font_paths()
-        .into_iter()
-        .filter_map(|(path, idx)| parse_font(std::fs::read(path).ok()?, idx, px))
-        .collect()
+fn load_fonts(px: f32) -> (Vec<Font>, Vec<crate::cmap::Cmap>) {
+    let mut fonts = Vec::new();
+    let mut cmaps = Vec::new();
+    for (path, idx) in candidate_font_paths() {
+        let Some(bytes) = std::fs::read(path).ok() else { continue };
+        let cmap = crate::cmap::Cmap::parse(&bytes, idx);
+        let Some(font) = parse_font(bytes, idx, px) else { continue };
+        fonts.push(font);
+        cmaps.push(cmap);
+    }
+    (fonts, cmaps)
 }
 
 /// Whether [`Atlas::new`] would succeed on this host, so callers that must
@@ -412,6 +428,7 @@ fn load_fonts(px: f32) -> Vec<Font> {
 /// panicked in `Atlas::new`, which made the guard worse than no guard.
 pub fn font_available() -> bool {
     load_fonts(PROBE_PX)
+        .0
         .first()
         .is_some_and(|primary| primary.horizontal_line_metrics(PROBE_PX).is_some())
 }

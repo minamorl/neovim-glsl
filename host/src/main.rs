@@ -6,6 +6,7 @@
 //! an outside client gets through `--embed`, and cannot quietly drift into a
 //! function call that only this program knows how to make.
 
+mod clipboard;
 mod core;
 mod keymap;
 mod luaconf;
@@ -20,6 +21,9 @@ mod root_ui;
 // work away, and `open_question embed_candidate_disposition` has not chosen
 // between keeping the candidate and discarding it — including its files leaves
 // that artefact exactly as it was measured.
+#[path = "../../evaluation/candidate-embed-opengl/src/cmap.rs"]
+mod cmap;
+
 #[path = "../../evaluation/candidate-embed-opengl/src/grid.rs"]
 mod grid;
 #[path = "../../evaluation/candidate-embed-opengl/src/text.rs"]
