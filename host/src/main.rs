@@ -13,6 +13,7 @@ mod luaconf;
 mod notes;
 mod nvim;
 mod picker;
+mod plugin;
 mod proto;
 mod root_ui;
 
@@ -139,14 +140,22 @@ struct Link {
 }
 
 impl Link {
-    fn spawn(initial: Option<PathBuf>, theme: proto::paint::Theme) -> std::io::Result<Self> {
+    fn spawn(
+        initial: Option<PathBuf>,
+        theme: proto::paint::Theme,
+        plugin_commands: Vec<String>,
+    ) -> std::io::Result<Self> {
         let (host_input, to_host) = std::io::pipe()?;
         let (from_host, host_output) = std::io::pipe()?;
 
         std::thread::Builder::new().name("nvimglsl-host".into()).spawn(move || {
             // The grid and the navigation surface take the same theme, so the
             // two halves of one window cannot disagree about it.
-            let mut host = proto::Host::configured(notes::Vault::default_vault(), theme);
+            let mut host = proto::Host::configured_with_plugins(
+                notes::Vault::default_vault(),
+                theme,
+                plugin_commands,
+            );
             if let Err(error) = proto::serve(&mut host, host_input, host_output, initial) {
                 eprintln!("host: {error}");
             }
@@ -220,6 +229,12 @@ struct App {
     /// Whether the open surface lists notes, so a choice can be resolved
     /// against the vault rather than the working directory.
     picker_in_vault: bool,
+    /// Plugins live on this side because a surface is a UI concern and this is
+    /// the UI. The editor only learns their command *names*, so that a name
+    /// belonging to no plugin can still report itself as unknown.
+    plugins: plugin::Host,
+    /// The plugin surface currently open, if any.
+    plugin_surface: Option<String>,
     mods: ModifiersState,
     /// Physical pixels per density-independent pixel, from the display.
     scale: f32,
@@ -244,6 +259,8 @@ impl App {
             link: None,
             picker: None,
             picker_in_vault: false,
+            plugins: plugin::Host::load_default(),
+            plugin_surface: None,
             mods: ModifiersState::empty(),
             scale: 1.0,
             preedit: String::new(),
@@ -270,6 +287,12 @@ impl App {
                     self.open_navigation(files);
                 }
                 proto::server::QUIT => return true,
+                proto::server::PLUGIN => {
+                    let name = params.first().and_then(rmpv::Value::as_str).unwrap_or_default();
+                    let argument =
+                        params.get(1).and_then(rmpv::Value::as_str).unwrap_or_default();
+                    self.run_plugin(name, argument);
+                }
                 other => eprintln!("note: {other} (no handler)"),
             }
         }
@@ -324,6 +347,17 @@ impl App {
     /// the required one: the keys never reach the editing core, and the choice
     /// made on the surface comes back as an ordinary `:e` over the protocol.
     fn feed_picker(&mut self, keys: &str) {
+        // A plugin surface has no input model — `open_question plugin_api_scope`
+        // has not said whether plugins receive keys — so the only key it takes
+        // is the one that closes it. Routing keys into it would be answering
+        // that question by accident.
+        if self.plugin_surface.is_some() {
+            if keys.contains("<Esc>") || keys == "q" {
+                self.plugin_surface = None;
+                self.request_redraw();
+            }
+            return;
+        }
         let Some(picker) = self.picker.as_mut() else { return };
         match picker.feed(keys) {
             picker::Outcome::Open => {}
@@ -350,6 +384,72 @@ impl App {
             Some(screen) if !self.ext_ui.is_idle() => self.ext_ui.layout(screen.cols(), screen.rows()),
             _ => ext_ui::Overlay::default(),
         }
+    }
+
+    /// Run what a plugin registered under `name`.
+    ///
+    /// A surface opens; a command runs. A name can be both, and the surface
+    /// wins, because the surface is the thing the owner can see.
+    fn run_plugin(&mut self, name: &str, argument: &str) {
+        if self.plugins.surface_names().iter().any(|known| *known == name) {
+            self.plugin_surface = Some(name.to_string());
+            self.picker = None;
+            self.request_redraw();
+            return;
+        }
+        if let Err(error) = self.plugins.run_command(name, argument) {
+            eprintln!("plugin: {error}");
+        }
+        for message in std::mem::take(&mut self.plugins.messages) {
+            eprintln!("plugin: {message}");
+        }
+        self.request_redraw();
+    }
+
+    /// Push a plugin's declared scene into the adapter.
+    ///
+    /// `pin plugin_surface_renderer` puts the drawing here: the plugin said
+    /// what it wanted, and this is the only place that turns it into quads.
+    fn build_plugin_surface(&mut self, width: f32, height: f32) {
+        let Some(name) = self.plugin_surface.clone() else { return };
+        let composed = match self.plugins.surface(&name, (width, height), self.scale) {
+            Ok(scene) => scene,
+            Err(error) => {
+                eprintln!("plugin surface {name}: {error}");
+                self.plugin_surface = None;
+                return;
+            }
+        };
+        for role in &composed.unknown_roles {
+            eprintln!("plugin surface {name}: no colour role named {role}");
+        }
+        let (Some(adapter), Some(atlas)) = (self.adapter.as_mut(), self.atlas.as_mut()) else {
+            return;
+        };
+        let runtime = root_ui::navigation::color_runtime(&self.args.scheme);
+        let Ok(prepared) = root_ui::prepare_flat_scene(&composed.scene) else {
+            eprintln!("plugin surface {name}: the declared scene did not resolve");
+            self.plugin_surface = None;
+            return;
+        };
+        let Ok(scene) = root_ui::bind_flat_scene_user_color_scheme(&prepared, &runtime) else {
+            eprintln!("plugin surface {name}: the declared scene has no colour");
+            self.plugin_surface = None;
+            return;
+        };
+        adapter.begin();
+        let mut stats = adapter.push_scene(&scene, width, height, atlas.cell_h, self.scale);
+        let scheme = runtime
+            .schemes
+            .iter()
+            .find(|scheme| scheme.id == runtime.scheme_id)
+            .unwrap_or(&runtime.schemes[0]);
+        for run in &composed.texts {
+            let color = scheme.colors.get(run.role).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            stats.glyph_quads +=
+                adapter.push_text(atlas, run.x, run.baseline, &run.text, color, run.max_x);
+        }
+        self.last_stats = stats;
     }
 
     /// Push the navigation surface, as a root-ui scene, into the adapter.
@@ -430,8 +530,9 @@ impl App {
             renderer.draw(gl, atlas, size.width as i32, size.height as i32, &[]);
         }
 
-        if self.picker.is_some() {
+        if self.plugin_surface.is_some() || self.picker.is_some() {
             self.build_navigation(size.width as f32, size.height as f32);
+            self.build_plugin_surface(size.width as f32, size.height as f32);
             if let (Some(adapter), Some(atlas), Some(gl)) =
                 (self.adapter.as_mut(), self.atlas.as_mut(), self.gl.as_ref())
             {
@@ -498,9 +599,30 @@ impl ApplicationHandler for App {
             );
         }
 
+        let mut plugin_names: Vec<String> = self
+            .plugins
+            .command_names()
+            .into_iter()
+            .chain(self.plugins.surface_names())
+            .map(str::to_string)
+            .collect();
+        plugin_names.sort();
+        plugin_names.dedup();
+        if !self.plugins.plugins.is_empty() || !self.plugins.errors.is_empty() {
+            eprintln!(
+                "plugins: {} loaded, {} command(s), {} surface(s)",
+                self.plugins.plugins.len(),
+                self.plugins.command_names().len(),
+                self.plugins.surface_names().len()
+            );
+            for error in &self.plugins.errors {
+                eprintln!("plugin: {error}");
+            }
+        }
         let mut link = Link::spawn(
             self.args.file.clone(),
             proto::paint::Theme::named(&self.args.scheme),
+            plugin_names,
         )
         .expect("host thread");
         link.ui_attach(self.args.cols, self.args.rows, nvim::UiOptions::none()).expect("ui_attach");
@@ -563,7 +685,7 @@ impl ApplicationHandler for App {
                     Ime::Commit(text) => {
                         self.preedit.clear();
                         let keys = text.replace('<', "<lt>");
-                        if self.picker.is_some() {
+                        if self.plugin_surface.is_some() || self.picker.is_some() {
                             self.feed_picker(&keys);
                         } else if let Some(link) = self.link.as_mut() {
                             let _ = link.input(&keys);
@@ -578,7 +700,7 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { .. } if !self.preedit.is_empty() => {}
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 if let Some(keys) = encode_key(&event.logical_key, self.mods) {
-                    if self.picker.is_some() {
+                    if self.plugin_surface.is_some() || self.picker.is_some() {
                         self.feed_picker(&keys);
                     } else if let Some(link) = self.link.as_mut() {
                         let _ = link.input(&keys);
@@ -631,7 +753,7 @@ impl App {
             // A snapshot script may open the navigation surface, in which case
             // the rest of the keys belong to it and not to the editor.
             for key in split_keys(&keys) {
-                if self.picker.is_some() {
+                if self.plugin_surface.is_some() || self.picker.is_some() {
                     self.feed_picker(&key);
                 } else if let Some(link) = self.link.as_mut() {
                     let _ = link.input(&key);
@@ -644,8 +766,9 @@ impl App {
         // The surface's vertices are built before the GL block opens: nothing
         // in root-ui's phases needs a context, and building inside the block
         // would hold a borrow of `self.gl` across a call that takes all of self.
-        if self.picker.is_some() {
+        if self.plugin_surface.is_some() || self.picker.is_some() {
             self.build_navigation(width as f32, height as f32);
+            self.build_plugin_surface(width as f32, height as f32);
         }
 
         let gl = self.gl.as_ref().unwrap();
@@ -690,7 +813,7 @@ impl App {
             );
             renderer.draw(gl, self.atlas.as_mut().unwrap(), width as i32, height as i32, &[]);
 
-            if self.picker.is_some() {
+            if self.plugin_surface.is_some() || self.picker.is_some() {
                 let adapter = self.adapter.as_mut().unwrap();
                 adapter.draw(gl, self.atlas.as_mut().unwrap(), width as i32, height as i32);
             }
