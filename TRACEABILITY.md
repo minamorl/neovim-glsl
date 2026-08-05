@@ -1,6 +1,6 @@
 # TRACEABILITY — pin id と成果物の対応
 
-`pins/domains/neovim-glsl.spec@0.9` を `pins/house_style.pin@1.8` まで flatten した pin と、この repository のどこがそれを満たすかの対応表。1 行で辿れることが目的 (`impl.traceable`)。
+`pins/domains/neovim-glsl.spec@0.11` を `pins/house_style.pin@1.8` まで flatten した pin と、この repository のどこがそれを満たすかの対応表。1 行で辿れることが目的 (`impl.traceable`)。
 
 この表は生成物ではない。3 列目「honored at」は *この repository* についての主張であり、spec のどの行にも書かれていないため。機械で確かめられるのは「spec の pin id が漏れなく表に現れているか」だけで、それは `python3 tools/check_traceability.py <spec-or-mirror>` が見る。v0.8 を丸ごと取り落とした（`@0.7` のまま、domain pin 14 のまま、locus pin 5 行が不在）ことに誰も気づかなかったので、次は黙って腐らず落ちる。
 
@@ -181,6 +181,62 @@ spec 側の pin / property / example は 93 件。内訳を手で数えるのは
 | neovim_glsl.navigation_ui_locus        | free          | RETIRED@0.8   | lifted into navigation_locus_choice by gate answer glsl_overlay   |
 | neovim_glsl.external_surface_boundary  | quarantine    | RETIRED@0.8   | the boundary the question asked about is the answer               |
 | neovim_glsl.navigation_surface_decision | open_question | RESOLVED@0.8 | resolved by gate answer glsl_overlay                              |
+
+## domain pin — v0.10 plugin 拡張点 (5)
+
+人間ゲート回答 A+C。plugin は Lua で書き、面を寄与でき、その面は root-ui の scene で、
+描くのは host。
+
+| pin id                                    | statement                                                        | honored at                                                                 |
+| ----------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| neovim_glsl.plugin_mechanism              | require neovim_glsl.plugin.mechanism = required                  | host/src/plugin.rs `Host::load_directory`; plugins/README.md                |
+| neovim_glsl.plugin_language_lua           | require neovim_glsl.plugin.language includes lua                 | host/src/plugin.rs `API` (the `nvimglsl` table handed to a Lua chunk)       |
+| neovim_glsl.plugin_surface_contribution   | require neovim_glsl.plugin.surface_contribution = required       | host/src/plugin.rs `nvimglsl.surface`; `Host::surface`                      |
+| neovim_glsl.plugin_surface_form           | require neovim_glsl.plugin.surface.form = root_ui_scene          | host/src/plugin.rs `read_scene` builds root_ui `Sample`s and nothing else   |
+| neovim_glsl.plugin_surface_renderer       | require neovim_glsl.plugin.surface.renderer = host               | host/src/main.rs `build_plugin_surface`; a plugin issues no draw call       |
+
+| id                                      | kind     | statement                                                | trace                                                              |
+| --------------------------------------- | -------- | -------------------------------------------------------- | ------------------------------------------------------------------ |
+| neovim_glsl.plugin_surface_renderer_witness | property | forall plugin_frame . plugin_surface_renderer(..) == host | host/src/plugin.rs exposes no GL context, atlas or frame loop      |
+| neovim_glsl.lua_plugin                  | example  | plugin_written_in_lua => accepted                        | plugins/clock.lua; `a_plugin_registers_a_command_and_it_runs`      |
+| neovim_glsl.plugin_scene                | example  | plugin_returning_a_root_ui_scene => accepted             | `a_plugin_surface_becomes_root_ui_samples_the_host_draws`          |
+| neovim_glsl.plugin_drawing_directly     | example  | plugin_issuing_its_own_draw_calls => rejected            | no drawing API is reachable; `a_plugin_cannot_reach_the_filesystem_or_spawn_anything` |
+| neovim_glsl.no_plugin_mechanism         | example  | proposal_with_no_extension_point => rejected             | host/src/plugin.rs exists and is wired in host/src/main.rs         |
+| neovim_glsl.rpc_plugin_face_not_selected | example | rpc_api_face_as_the_plugin_mechanism => not_selected     | no `nvim_*` write face serves plugins; protocol_surface_scope open |
+
+## domain pin — v0.11 IDE レベルの中身 (13)
+
+人間ゲート回答。四つの能力が名指しされ、ツリーは本物のウィンドウ分割、Git は読む側。
+**まだ一つも実装されていない。** trace 列は「どこで満たすか」ではなく「どこで満たす予定か」を
+述べており、そう書いてあること自体がこの表の未達を可視化する。
+
+| pin id                                    | statement                                                          | honored at                                                        |
+| ----------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| neovim_glsl.ide_level_includes_lsp        | require neovim_glsl.ide_level.acceptance includes lsp              | NOT YET — planned lane: LSP client + ext_popupmenu 補完            |
+| neovim_glsl.ide_level_includes_project_search | require .. includes project_search                             | NOT YET — planned lane: project search                            |
+| neovim_glsl.ide_level_includes_git        | require .. includes git_integration                                | NOT YET — planned lane: git gutter / blame / diff                 |
+| neovim_glsl.ide_level_includes_task_execution | require .. includes task_execution                             | NOT YET — planned lane: task runner / terminal                    |
+| neovim_glsl.file_tree                     | require neovim_glsl.file_tree = required                           | NOT YET — planned lane: file tree                                 |
+| neovim_glsl.file_tree_locus               | require neovim_glsl.file_tree.locus = window_split                 | NOT YET — depends on the window system lane                       |
+| neovim_glsl.file_tree_not_overlay         | forbid neovim_glsl.file_tree.locus = overlay                       | NOT YET — the picker overlay is navigation, not the tree          |
+| neovim_glsl.window_model_splits           | require neovim_glsl.editor.window_model = splits                   | NOT YET — host/src/core/editor.rs holds exactly one buffer today  |
+| neovim_glsl.git_gutter                    | require neovim_glsl.git.capability includes gutter_signs           | NOT YET — host/src/proto/paint.rs gutter holds only line numbers  |
+| neovim_glsl.git_blame                     | require neovim_glsl.git.capability includes blame                  | NOT YET                                                            |
+| neovim_glsl.git_diff_view                 | require neovim_glsl.git.capability includes diff_view              | NOT YET — needs a second window                                   |
+| neovim_glsl.git_does_not_rewrite_history  | forbid neovim_glsl.git.history = rewritten                         | holds vacuously: nothing runs git yet, and the lane is read-only  |
+| neovim_glsl.entry_point_orientation       | require neovim_glsl.entry_point.orientation = repository           | NOT YET — a bare launch opens the note vault (host/src/main.rs)   |
+
+| id                                    | kind     | statement                                                   | trace                                                          |
+| ------------------------------------- | -------- | ----------------------------------------------------------- | --------------------------------------------------------------- |
+| neovim_glsl.window_model_witness      | property | forall session . concurrent_windows_supported(session)==true | NOT YET — this is the property the window lane must make true   |
+| neovim_glsl.tree_as_window            | example  | file_tree_as_a_window_split => accepted                     | NOT YET                                                          |
+| neovim_glsl.tree_as_overlay           | example  | file_tree_as_a_toggled_overlay => rejected                  | NOT YET                                                          |
+| neovim_glsl.single_window_only        | example  | editor_supporting_one_window_at_a_time => rejected          | **currently violated** — this is the gap the plan exists to close |
+| neovim_glsl.git_read_only             | example  | git_gutter_blame_and_diff_view => accepted                  | NOT YET                                                          |
+| neovim_glsl.git_rewrite               | example  | proposal_rewriting_git_history => rejected                  | holds vacuously                                                  |
+| neovim_glsl.git_staging_not_selected  | example  | staging_and_commit_ui => not_selected                       | absent by choice, not forbidden                                  |
+| neovim_glsl.dap_not_selected          | example  | debug_adapter_protocol_as_ide_level_criterion => not_selected | absent by choice, not forbidden                                |
+| neovim_glsl.refactor_not_selected     | example  | refactoring_as_ide_level_criterion => not_selected          | absent by choice, not forbidden                                  |
 
 ## v0.9 non-pin state change
 

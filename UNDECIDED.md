@@ -1,9 +1,8 @@
 # UNDECIDED — 決まっていない事項
 
-`pins/domains/neovim-glsl.spec@0.9` の `quarantine` と `open_question` を、spec の文言のまま
+`pins/domains/neovim-glsl.spec@0.11` の `quarantine` と `open_question` を、spec の文言のまま
 機械転記したもの。**ここにあるものは決まっていない。** 実装で埋めてはならない。
 
-入力は `pins/domains/neovim-glsl.spec` ではなく `spec-mirror/neovim-glsl-0.9.lines`。これは外部 spec ledger からの転記であり、正本ではない。食い違ったら spec が勝つ。
 
 規律:
 
@@ -13,7 +12,7 @@
 - 正本は spec。この転記が spec と食い違ったら spec が勝つ。転記側を直す。
 - この file は `python3 tools/sync_undecided.py <spec-or-mirror>` で再生成する。手で書き足さない。
 
-## quarantine — 隔離 (26 件)
+## quarantine — 隔離 (28 件)
 
 曖昧 (語義が二義的)・未確定 (解空間が未固定)・主観 (検証可能な基準が無い) を分けて隔離してある。
 
@@ -35,7 +34,6 @@
 - `neovim_glsl.zeno_adoption`: 未確定 — Zeno evaluation 後に Zeno を actual platform target として採用するか、observation のみに留めるかが未定。evaluation は pin 済みだが adoption 決定は人間ゲート待ち。
 - `neovim_glsl.note_change_extent`: 未確定 — 「今の yui の notes を少しかえる」の「少し」が指す変更範囲(schema / API / UI / 同期モデルのどこまで)が定量化されておらず、解空間が未固定。
 - `neovim_glsl.wysiwyg_fidelity`: 未確定 — 「今の実装と似せていい」は許可であって要求ではなく、似せる度合い(視覚的等価 / 操作等価 / 部分的踏襲)の基準が無い。
-- `neovim_glsl.ide_level_criterion`: 主観 — 「IDE レベル」に observable な受け入れ基準(機能集合・比較対象・閾値)が無い。v0.3 の vscode_defeat / strong_usable と同型。
 - `neovim_glsl.root_ui_hardening_definition`: 未確定 — 「root-ui をしっかりした」の完了条件が定義されていない。順序の前提となる状態が観測不能なままである。
 - `neovim_glsl.aishell_naming`: 曖昧 — メモの「aishell」が v0.2 で pin 済みの aish(ai-native-shell)と同一対象を指すのか、別の shell surface を指すのかは字面だけでは一意に定まらない。同一と仮定して新規 pin を作らず、v0.2 の pin を再利用する。
 - `neovim_glsl.protocol_speaking_direction_residue`: 曖昧 — 「protocol を喋る」の面が、UI protocol(ui_attach / redraw)の server 側なのか、API protocol(nvim_* RPC)の server 側なのか、その双方なのかは回答の字面だけでは一意に定まらない。三択の中で core process を持たない案が選ばれた以上、自前 host が Neovim 側の端に座ること自体は確定するが、どの面を実装するかは未定として隔離する。
@@ -43,8 +41,11 @@
 - `neovim_glsl.glsl_advantage_criterion`: 主観 — 「glsl の利点を活かす」に observable な受け入れ基準(何が描けれ ば活かしたと言えるか、grid 制約からの解放をどう測るか)が無い。v0.3 の vscode_defeat、v0.4 の ide_level_criterion と同型。
 - `neovim_glsl.navigation_object_scope`: 未確定 — navigation の対象が file なのか markdown note なのか両方なのかが未固定。v0.4 で主 object が markdown note へ移り、user_facing.file_awareness = not_required も pin された以上、「ファイルの移動」を note の移動として読む余地が生じている。v0.4 の逐語は file だが、v0.7 で機構名が外れたことで対象側の二義性が露出した。
 - `neovim_glsl.navigation_mechanism_residue`: 曖昧 — 面が host 描画に確定したことで、v0.7 が候補に残した telescope は「行を供給する側」としてしか残れない。plugin が自分の floating window を picker の面として描く形は pin navigation_locus_choice と両立しないが、同じ plugin の finder / sorter を headless に使い host 描画の面へ行を供給する形は却下されない。どちらを指して「telescope を使う」と言うかが未固定。
+- `neovim_glsl.plugin_compat_expectation`: 曖昧 — 「Lua で書ける」が、既存の Neovim Lua plugin が無改変で動くことを指すのか、この host 固有の API に対して書き下ろすことを指すのかは回答の字面だけでは一意に定まらない。
+- `neovim_glsl.entry_point_form`: 未確定 — 「reposから動線がいい」は方向を述べているが、起動直後に何が出るか(repository の一覧 / 直前の repository / note と repository の混在した面)は述べていない。解空間が未固定。
+- `neovim_glsl.ide_capability_depth`: 未確定 — 四つの能力それぞれが「どこまで出来れば含まれると言えるか」は述べられていない。LSP が診断だけで足りるのか補完まで要るのか、検索が正規表現を要求するのかは未定。
 
-## open_question — 人間ゲート待ち (30 件)
+## open_question — 人間ゲート待ち (36 件)
 
 決めるべきだが情報がない箇所。
 
@@ -69,7 +70,6 @@
 - `neovim_glsl.root_ui_visual_editor_ownership`: Root-ui が visual primitive/shader のみを所有し editor state/semantics は neovim-glsl が所有するか、editor state も Root-ui へ委譲するか。
 - `neovim_glsl.vscode_compatibility_vs_defeat`: VS Code を defeat 対象と見做し non-compatible にするか、migration path を提供し compatibility を保つか。defeat 対象の名指し catalog も未指定。
 - `neovim_glsl.note_change_extent_decision`: yui notes をどこまで変えるか。schema・API・同期・UI のどれを触るか。
-- `neovim_glsl.ide_level_acceptance`: 「IDE レベル」を何が出来れば達成と判定するか(LSP / DAP / 補完 / 検索 / refactor / task runner のどれを含むか)。
 - `neovim_glsl.root_ui_hardening_done`: 「root-ui をしっかりした」の完了条件は何か。何が観測できれば surface 置換に進んでよいか。
 - `neovim_glsl.surface_priority`: 実装順序として desktop(neovim-glsl 本体)・web・mobile のどれを先に置くか。メモは三者を並べているが順序を述べていない。
 - `neovim_glsl.neovim_asset_reuse_scope`: Neovim 資産のどこを継承するか。v0.6 で protocol の継承だけが確定した(pin asset_reuse_includes_protocol)。残る未確定は plugin 生態系・Lua runtime・keymap 意味論の実装深度・既存 UI client 実装の去就。
@@ -78,6 +78,13 @@
 - `neovim_glsl.embed_candidate_disposition`: 実測済み embed candidate を UI client 資産として温存するか、廃棄するか。温存するなら host 差し替えの seam をどこに置くか。
 - `neovim_glsl.navigation_mechanism_selection`: navigation の機構として実際に何を採るか。telescope を選び直すこともできる(必然性が無いだけで禁止ではない)。
 - `neovim_glsl.navigation_input_routing`: picker が開いている間の入力を host が直接受けるか、Neovim へ送って戻すか。pin keymap_preservation(keymap.baseline = current_keymap)との整合をどちらで担保するかも含む。state の所在と独立ではないが同一でもない(host が state を持ちながら入力を Neovim 経由で受ける形も、その逆も構成可能)ため、v0.9 でも別の問いとして残す。
+- `neovim_glsl.plugin_discovery`: plugin をどこから読むか。有効化・無効化の単位は何か。
+- `neovim_glsl.plugin_api_scope`: Lua plugin に渡す API はどこまでか。buffer 編集・keymap 登録・note 参照・aish 呼び出しのどれを含むか。
+- `neovim_glsl.plugin_neovim_compat`: 既存の Neovim Lua plugin を無改変で動かすことを目標にするか、この host 固有の API へ書き下ろす前提にするか。
+- `neovim_glsl.plugin_effect_boundary`: plugin は任意の code を実行する。file 書き込み・process 起動・network をどこまで許すか。
+- `neovim_glsl.entry_point_decision`: 起動直後に何を出すか。repository の一覧か、直前の repository か、note と repository が同じ面に並ぶか。
+- `neovim_glsl.ide_capability_thresholds`: 四つの能力それぞれの合格ライン。LSP はどの言語まで、検索は正規表現を含むか、task は PTY を要求するか。
+- `neovim_glsl.dap_and_refactor`: DAP と refactor を後から IDE レベルへ足すか、恒久的に範囲外とするか。
 
 ## open_question — 観測待ち (1 件)
 
@@ -100,7 +107,38 @@
   廃棄するかもこの repository では決めない。
 - Root-ui projection も同様に、`root_ui_integration_adoption` を決めていない。
 
-## 決着したもの
+## 決着したもの（参考・spec の closure marker から機械生成）
 
-この生成は mirror 入力なので closure marker を持たない。決着の一覧は
-`pins/domains/neovim-glsl.spec` を入力にして再生成すると出る。
+各項目は spec 側で `# RESOLVED at vX.Y` / `# RETIRED at vX.Y` と記録された行の主題だけを
+写している。理由は spec にあり、ここには複製しない。
+
+### v0.11 — 御主人様が機能集合を名指しした
+
+- Retired: quarantine neovim_glsl.ide_level_criterion
+- Resolved: open_question neovim_glsl.ide_level_acceptance
+
+### v0.8 — 人間ゲート回答 glsl_overlay
+
+- Retired: quarantine neovim_glsl.external_surface_boundary — 「外部に出す」の「外部」が
+- Retired: free neovim_glsl.navigation_ui_locus
+- Resolved: open_question neovim_glsl.navigation_surface_decision
+
+### v0.7 — 2026-08-03「telescopeである必然性は特にない」
+
+- Retired: pin neovim_glsl.file_navigation_mechanism: require neovim_glsl.file_navigation.mechanism = telescope
+- Retired: example neovim_glsl.navigation: file_move_operation => telescope
+- Retired: free neovim_glsl.telescope_customization(telescope 名指しに依存していたため)。
+- Retired: quarantine neovim_glsl.telescope_under_own_host — 「telescope が plugin そのものを指すのか
+- Resolved: open_question neovim_glsl.telescope_realization_decision
+
+### v0.6
+
+- Retired: quarantine neovim_glsl.architecture — 人間ゲート own_host_protocol により解消。
+- Resolved: open_question neovim_glsl.architecture_decision
+- Resolved: open_question neovim_glsl.basis_selection
+
+### v0.5 — 2026-08-02 人間ゲート回答 relax
+
+- Retired: pin neovim_glsl.editor_basis: require neovim_glsl.editor.basis = neovim
+- Retired: property neovim_glsl.editor_basis_witness / no_substitution_witness
+- Retired: example neovim_glsl.editor_retained (editor_basis 退役に伴う)

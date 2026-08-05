@@ -290,4 +290,28 @@ picker の state を誰が持つか（`navigation_state_owner`）、開いてい
 間違っている。時間の数字は勝敗ではない: matcher が別物なので、比べられるのは越えの回数と、
 plugin 所有では**渡ってこないもの**（match 位置・score・幾何）である。
 
+2026-08-05、spec v0.10 の人間ゲート回答 `A+C` で **拡張点が決まった**。plugin は Lua で
+書き、面を寄与でき、その面は root-ui の scene で、描くのは host である。plugin は draw call を
+発行しない — 描ける plugin は GL context と atlas と frame loop を要求することになり、そうなると
+どの plugin も他の全部の frame を壊せる。宣言なら、画面に対してできる最悪のことは「悪い絵を
+記述する」ことだけになる。書き方は [plugins/README.md](plugins/README.md)。
+
+三択のうち残る一つ — protocol の API 面を server として喋り既存 plugin 生態系を繋ぐ案 — は
+**選ばれなかっただけで禁止されていない**。`open_question protocol_surface_scope` は開いたまま。
+
+2026-08-06、spec v0.11 で **「IDE レベル」の中身が決まった**。v0.4 から開いていた
+`ide_level_acceptance` への回答は、LSP・プロジェクト全文検索・Git 連携・タスク実行/ターミナルの
+四つ。同時に、左のファイルツリーは **本物のウィンドウ分割**（grid の外の常設パネルでも overlay
+でもない）、Git は **読む側** — gutter・blame・diff 閲覧であって staging でも commit でもない、と
+決まった。DAP・refactor・staging はいずれも選ばれなかっただけで、禁止ではない。
+
+これに伴い `quarantine ide_level_criterion` は退役した。隔離理由は「observable な受け入れ基準
+（機能集合）が無い」だったが、機能集合が名指しされた時点でその理由が消える。閾値は依然として
+無いけれど、それは `performance_criteria` の担当であってここではない。
+
+**v0.11 の pin は一つも実装されていない。** [TRACEABILITY.md](TRACEABILITY.md) の該当行は
+`NOT YET` と書いてあり、`example single_window_only`（一度に一つの window しか持てない editor は
+却下）は **現に破られている** — `host/` は今のところバッファを一枚しか持たない。表がそう言うのは
+欠落ではなく、計画が閉じにいく穴の位置である。
+
 Emacs 系への置換は、v0.5 で退役した basis pin とは独立した明示的拒否として今も残っている。
