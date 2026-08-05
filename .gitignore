@@ -7,7 +7,12 @@
 *.key
 secrets/
 
-# Build output of the evaluation candidate. Not a product artifact.
+# Assembled app bundles. Both are build output — `make-app.sh` rebuilds either
+# in seconds — and a committed one is worse than useless: it is a binary in the
+# history, and macOS indexes every .app under the home directory, so a bundle
+# sitting in the working tree shows up in Launchpad beside the installed copy
+# under the same name.
 target/
 nvimgl.app/
+nvimglsl.app/
 .DS_Store
