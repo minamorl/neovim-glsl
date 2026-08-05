@@ -74,11 +74,20 @@ impl Mapping {
         let body = if let Some(rest) = lower.strip_prefix("<cmd>") {
             &rhs[5..5 + rest.trim_end_matches("<cr>").len()]
         } else if let Some(rest) = rhs.strip_prefix(':') {
-            &rest[..rest.len() - rest.to_ascii_lowercase().split("<cr>").last().map_or(0, str::len)]
+            &rest[..rest.len()
+                - rest
+                    .to_ascii_lowercase()
+                    .split("<cr>")
+                    .last()
+                    .map_or(0, str::len)]
         } else {
             return None;
         };
-        Some(body.trim_end_matches("<CR>").trim_end_matches("<cr>").trim())
+        Some(
+            body.trim_end_matches("<CR>")
+                .trim_end_matches("<cr>")
+                .trim(),
+        )
     }
 }
 
@@ -98,11 +107,15 @@ impl NvimConfig {
     }
 
     pub fn bool_option(&self, name: &str, fallback: bool) -> bool {
-        self.option(name).and_then(Setting::as_bool).unwrap_or(fallback)
+        self.option(name)
+            .and_then(Setting::as_bool)
+            .unwrap_or(fallback)
     }
 
     pub fn usize_option(&self, name: &str, fallback: usize) -> usize {
-        self.option(name).and_then(Setting::as_usize).unwrap_or(fallback)
+        self.option(name)
+            .and_then(Setting::as_usize)
+            .unwrap_or(fallback)
     }
 
     pub fn leader(&self) -> String {
@@ -115,8 +128,11 @@ impl NvimConfig {
     /// Mappings for one mode, longest left-hand side first so that `ss` is
     /// matched before `s`.
     pub fn for_mode(&self, mode: char) -> Vec<&Mapping> {
-        let mut found: Vec<&Mapping> =
-            self.mappings.iter().filter(|m| m.mode.contains(mode)).collect();
+        let mut found: Vec<&Mapping> = self
+            .mappings
+            .iter()
+            .filter(|m| m.mode.contains(mode))
+            .collect();
         found.sort_by_key(|m| std::cmp::Reverse(m.lhs.chars().count()));
         found
     }
@@ -143,7 +159,10 @@ pub fn load_default() -> NvimConfig {
 }
 
 pub fn load(path: &Path) -> NvimConfig {
-    let mut config = NvimConfig { path: Some(path.to_path_buf()), ..NvimConfig::default() };
+    let mut config = NvimConfig {
+        path: Some(path.to_path_buf()),
+        ..NvimConfig::default()
+    };
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
         Err(error) => {
@@ -418,9 +437,8 @@ mod tests {
 
     #[test]
     fn longer_left_hand_sides_are_offered_first() {
-        let config = config_from(
-            "vim.keymap.set('n', 's', 'a', {})\nvim.keymap.set('n', 'ss', 'b', {})\n",
-        );
+        let config =
+            config_from("vim.keymap.set('n', 's', 'a', {})\nvim.keymap.set('n', 'ss', 'b', {})\n");
         assert_eq!(config.for_mode('n')[0].lhs, "ss");
     }
 
@@ -435,7 +453,10 @@ vim.opt.number = true
 vim.api.nvim_set_keymap('n', 'Y', 'y$', {})
 "#,
         );
-        assert_eq!(config.error, None, "a stubbed plugin must not stop the config");
+        assert_eq!(
+            config.error, None,
+            "a stubbed plugin must not stop the config"
+        );
         assert!(config.bool_option("number", false));
         assert_eq!(config.mappings.len(), 1);
     }
@@ -477,7 +498,11 @@ vim.api.nvim_set_keymap('n', 'Y', 'y$', {})
             rhs: "<cmd>Telescope find_files<cr>".into(),
         };
         assert_eq!(cmd.command(), Some("Telescope find_files"));
-        let keys = Mapping { mode: "n".into(), lhs: "Y".into(), rhs: "y$".into() };
+        let keys = Mapping {
+            mode: "n".into(),
+            lhs: "Y".into(),
+            rhs: "y$".into(),
+        };
         assert_eq!(keys.command(), None);
     }
 
@@ -485,7 +510,9 @@ vim.api.nvim_set_keymap('n', 'Y', 'y$', {})
     /// module is that it reads the real thing.
     #[test]
     fn the_real_config_yields_options_and_keymaps() {
-        let Some(path) = default_config_path() else { return };
+        let Some(path) = default_config_path() else {
+            return;
+        };
         let config = load(&path);
         assert!(
             config.mappings.len() > 10,

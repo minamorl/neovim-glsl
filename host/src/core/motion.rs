@@ -17,16 +17,26 @@ pub enum Motion {
     LineStart,
     FirstNonBlank,
     LineEnd,
-    WordForward { big: bool },
-    WordBack { big: bool },
-    WordEnd { big: bool },
+    WordForward {
+        big: bool,
+    },
+    WordBack {
+        big: bool,
+    },
+    WordEnd {
+        big: bool,
+    },
     FileStart,
     FileEnd,
     GotoLine(usize),
     ParagraphForward,
     ParagraphBack,
     /// `f` / `t` / `F` / `T`.
-    FindChar { ch: char, forward: bool, till: bool },
+    FindChar {
+        ch: char,
+        forward: bool,
+        till: bool,
+    },
     /// `%`
     MatchPair,
 }
@@ -114,7 +124,9 @@ fn first_non_blank(buffer: &Buffer, line: usize) -> usize {
 
 fn word_forward(buffer: &Buffer, from: (usize, usize), big: bool) -> (usize, usize) {
     let (mut line, mut col) = from;
-    let start_class = char_at(buffer, line, col).map(|c| char_class(c, big)).unwrap_or(0);
+    let start_class = char_at(buffer, line, col)
+        .map(|c| char_class(c, big))
+        .unwrap_or(0);
     // Leave the current run…
     if start_class != 0 {
         while let Some(next) = forward(buffer, line, col) {
@@ -158,7 +170,9 @@ fn word_forward(buffer: &Buffer, from: (usize, usize), big: bool) -> (usize, usi
 
 fn word_back(buffer: &Buffer, from: (usize, usize), big: bool) -> (usize, usize) {
     let (mut line, mut col) = from;
-    let Some(prev) = backward(buffer, line, col) else { return (line, col) };
+    let Some(prev) = backward(buffer, line, col) else {
+        return (line, col);
+    };
     line = prev.0;
     col = prev.1;
     loop {
@@ -179,7 +193,9 @@ fn word_back(buffer: &Buffer, from: (usize, usize), big: bool) -> (usize, usize)
             None => return (line, col),
         }
     }
-    let class = char_at(buffer, line, col).map(|c| char_class(c, big)).unwrap_or(0);
+    let class = char_at(buffer, line, col)
+        .map(|c| char_class(c, big))
+        .unwrap_or(0);
     while let Some((l, c)) = backward(buffer, line, col) {
         if l != line {
             break;
@@ -197,10 +213,15 @@ fn word_back(buffer: &Buffer, from: (usize, usize), big: bool) -> (usize, usize)
 
 fn word_end(buffer: &Buffer, from: (usize, usize), big: bool) -> (usize, usize) {
     let (mut line, mut col) = from;
-    let Some(next) = forward(buffer, line, col) else { return (line, col) };
+    let Some(next) = forward(buffer, line, col) else {
+        return (line, col);
+    };
     line = next.0;
     col = next.1;
-    while char_at(buffer, line, col).map(|c| c.is_whitespace()).unwrap_or(true) {
+    while char_at(buffer, line, col)
+        .map(|c| c.is_whitespace())
+        .unwrap_or(true)
+    {
         match forward(buffer, line, col) {
             Some((l, c)) => {
                 line = l;
@@ -209,7 +230,9 @@ fn word_end(buffer: &Buffer, from: (usize, usize), big: bool) -> (usize, usize) 
             None => return (line, col.min(buffer.line_len(line).saturating_sub(1))),
         }
     }
-    let class = char_at(buffer, line, col).map(|c| char_class(c, big)).unwrap_or(0);
+    let class = char_at(buffer, line, col)
+        .map(|c| char_class(c, big))
+        .unwrap_or(0);
     while let Some((l, c)) = forward(buffer, line, col) {
         if l != line {
             break;
@@ -306,7 +329,18 @@ fn find_char(
             (0..at).rev().find(|&i| row[i] == ch)?
         };
     }
-    Some((line, if till { if forward_dir { at.saturating_sub(1) } else { at + 1 } } else { at }))
+    Some((
+        line,
+        if till {
+            if forward_dir {
+                at.saturating_sub(1)
+            } else {
+                at + 1
+            }
+        } else {
+            at
+        },
+    ))
 }
 
 /// Where a motion lands, given a count.
@@ -400,31 +434,68 @@ mod tests {
 
     #[test]
     fn w_stops_at_the_next_word() {
-        assert_eq!(at("one two three\n", (0, 0), Motion::WordForward { big: false }, 1), (0, 4));
-        assert_eq!(at("one two three\n", (0, 0), Motion::WordForward { big: false }, 2), (0, 8));
+        assert_eq!(
+            at(
+                "one two three\n",
+                (0, 0),
+                Motion::WordForward { big: false },
+                1
+            ),
+            (0, 4)
+        );
+        assert_eq!(
+            at(
+                "one two three\n",
+                (0, 0),
+                Motion::WordForward { big: false },
+                2
+            ),
+            (0, 8)
+        );
     }
 
     #[test]
     fn w_treats_punctuation_as_its_own_word_and_W_does_not() {
-        assert_eq!(at("a.b c\n", (0, 0), Motion::WordForward { big: false }, 1), (0, 1));
-        assert_eq!(at("a.b c\n", (0, 0), Motion::WordForward { big: true }, 1), (0, 4));
+        assert_eq!(
+            at("a.b c\n", (0, 0), Motion::WordForward { big: false }, 1),
+            (0, 1)
+        );
+        assert_eq!(
+            at("a.b c\n", (0, 0), Motion::WordForward { big: true }, 1),
+            (0, 4)
+        );
     }
 
     #[test]
     fn w_crosses_the_line_break() {
-        assert_eq!(at("one\ntwo\n", (0, 1), Motion::WordForward { big: false }, 1), (1, 0));
+        assert_eq!(
+            at("one\ntwo\n", (0, 1), Motion::WordForward { big: false }, 1),
+            (1, 0)
+        );
     }
 
     #[test]
     fn e_lands_on_the_last_character_of_the_word() {
-        assert_eq!(at("one two\n", (0, 0), Motion::WordEnd { big: false }, 1), (0, 2));
-        assert_eq!(at("one two\n", (0, 2), Motion::WordEnd { big: false }, 1), (0, 6));
+        assert_eq!(
+            at("one two\n", (0, 0), Motion::WordEnd { big: false }, 1),
+            (0, 2)
+        );
+        assert_eq!(
+            at("one two\n", (0, 2), Motion::WordEnd { big: false }, 1),
+            (0, 6)
+        );
     }
 
     #[test]
     fn b_lands_on_the_first_character_of_the_previous_word() {
-        assert_eq!(at("one two\n", (0, 5), Motion::WordBack { big: false }, 1), (0, 4));
-        assert_eq!(at("one two\n", (0, 4), Motion::WordBack { big: false }, 1), (0, 0));
+        assert_eq!(
+            at("one two\n", (0, 5), Motion::WordBack { big: false }, 1),
+            (0, 4)
+        );
+        assert_eq!(
+            at("one two\n", (0, 4), Motion::WordBack { big: false }, 1),
+            (0, 0)
+        );
     }
 
     #[test]
@@ -444,9 +515,45 @@ mod tests {
 
     #[test]
     fn f_and_t_differ_by_one_cell() {
-        assert_eq!(at("a,b,c\n", (0, 0), Motion::FindChar { ch: ',', forward: true, till: false }, 1), (0, 1));
-        assert_eq!(at("a,b,c\n", (0, 0), Motion::FindChar { ch: ',', forward: true, till: true }, 1), (0, 0));
-        assert_eq!(at("a,b,c\n", (0, 0), Motion::FindChar { ch: ',', forward: true, till: false }, 2), (0, 3));
+        assert_eq!(
+            at(
+                "a,b,c\n",
+                (0, 0),
+                Motion::FindChar {
+                    ch: ',',
+                    forward: true,
+                    till: false
+                },
+                1
+            ),
+            (0, 1)
+        );
+        assert_eq!(
+            at(
+                "a,b,c\n",
+                (0, 0),
+                Motion::FindChar {
+                    ch: ',',
+                    forward: true,
+                    till: true
+                },
+                1
+            ),
+            (0, 0)
+        );
+        assert_eq!(
+            at(
+                "a,b,c\n",
+                (0, 0),
+                Motion::FindChar {
+                    ch: ',',
+                    forward: true,
+                    till: false
+                },
+                2
+            ),
+            (0, 3)
+        );
     }
 
     #[test]
@@ -457,6 +564,9 @@ mod tests {
 
     #[test]
     fn paragraph_motion_stops_on_the_blank_line() {
-        assert_eq!(at("a\nb\n\nc\n", (0, 0), Motion::ParagraphForward, 1), (2, 0));
+        assert_eq!(
+            at("a\nb\n\nc\n", (0, 0), Motion::ParagraphForward, 1),
+            (2, 0)
+        );
     }
 }

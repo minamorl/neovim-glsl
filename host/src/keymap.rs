@@ -69,7 +69,10 @@ impl Keymap {
         for slot in by_mode.values_mut() {
             slot.sort_by_key(|(lhs, _)| std::cmp::Reverse(lhs.len()));
         }
-        Self { by_mode, unsupported: Vec::new() }
+        Self {
+            by_mode,
+            unsupported: Vec::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -82,18 +85,26 @@ impl Keymap {
 
     /// How the keys typed so far relate to this mode's mappings.
     pub fn lookup(&self, mode: char, keys: &[Key]) -> Match<'_> {
-        let Some(slot) = self.by_mode.get(&mode) else { return Match::None };
+        let Some(slot) = self.by_mode.get(&mode) else {
+            return Match::None;
+        };
         if let Some((_, rhs)) = slot.iter().find(|(lhs, _)| lhs.as_slice() == keys) {
             // An exact hit still yields to a longer mapping that starts the same
             // way: `<Space>` is mapped to <NOP> and `<Space>o` opens the
             // picker, and firing the shorter one would make the longer
             // unreachable.
-            if slot.iter().any(|(lhs, _)| lhs.len() > keys.len() && lhs.starts_with(keys)) {
+            if slot
+                .iter()
+                .any(|(lhs, _)| lhs.len() > keys.len() && lhs.starts_with(keys))
+            {
                 return Match::Prefix;
             }
             return Match::Exact(rhs);
         }
-        if slot.iter().any(|(lhs, _)| lhs.len() > keys.len() && lhs.starts_with(keys)) {
+        if slot
+            .iter()
+            .any(|(lhs, _)| lhs.len() > keys.len() && lhs.starts_with(keys))
+        {
             return Match::Prefix;
         }
         Match::None
@@ -131,7 +142,10 @@ mod tests {
 
     fn config(mappings: &[(&str, &str, &str)]) -> NvimConfig {
         let mut config = NvimConfig::default();
-        config.globals.insert("mapleader".into(), crate::luaconf::Setting::Text(" ".into()));
+        config.globals.insert(
+            "mapleader".into(),
+            crate::luaconf::Setting::Text(" ".into()),
+        );
         for (mode, lhs, rhs) in mappings {
             config.mappings.push(Mapping {
                 mode: mode.to_string(),
@@ -148,7 +162,10 @@ mod tests {
             ("n", "Y", "y$"),
             ("n", "<space>o", "<cmd>Telescope find_files<cr>"),
         ]));
-        assert_eq!(keymap.lookup('n', &parse("Y")), Match::Exact(&Rhs::Keys(parse("y$"))));
+        assert_eq!(
+            keymap.lookup('n', &parse("Y")),
+            Match::Exact(&Rhs::Keys(parse("y$")))
+        );
         assert_eq!(
             keymap.lookup('n', &parse(" o")),
             Match::Exact(&Rhs::Command("Telescope find_files".into()))
@@ -164,7 +181,10 @@ mod tests {
             ("n", "<space>o", "<cmd>Telescope find_files<cr>"),
         ]));
         assert_eq!(keymap.lookup('n', &parse(" ")), Match::Prefix);
-        assert!(matches!(keymap.lookup('n', &parse(" o")), Match::Exact(Rhs::Command(_))));
+        assert!(matches!(
+            keymap.lookup('n', &parse(" o")),
+            Match::Exact(Rhs::Command(_))
+        ));
         assert_eq!(keymap.lookup('n', &parse(" z")), Match::None);
     }
 
@@ -181,12 +201,18 @@ mod tests {
     #[test]
     fn the_leader_is_expanded_from_the_config_not_assumed() {
         let keymap = Keymap::from_config(&config(&[("n", "<Leader>q", "<cmd>q<CR>")]));
-        assert!(matches!(keymap.lookup('n', &parse(" q")), Match::Exact(Rhs::Command(_))));
+        assert!(matches!(
+            keymap.lookup('n', &parse(" q")),
+            Match::Exact(Rhs::Command(_))
+        ));
 
         let mut backslash = config(&[("n", "<Leader>q", "<cmd>q<CR>")]);
         backslash.globals.clear();
         let keymap = Keymap::from_config(&backslash);
-        assert!(matches!(keymap.lookup('n', &parse("\\q")), Match::Exact(Rhs::Command(_))));
+        assert!(matches!(
+            keymap.lookup('n', &parse("\\q")),
+            Match::Exact(Rhs::Command(_))
+        ));
     }
 
     #[test]
@@ -232,11 +258,49 @@ mod tests {
         assert_eq!(
             keymap.lookup('n', &parse("fj")),
             Match::Exact(&Rhs::Keys(vec![
-                Key { code: Code::Char('1'), ctrl: false, alt: false },
-                Key { code: Code::Char('5'), ctrl: false, alt: false },
-                Key { code: Code::Char('j'), ctrl: false, alt: false },
+                Key {
+                    code: Code::Char('1'),
+                    ctrl: false,
+                    alt: false
+                },
+                Key {
+                    code: Code::Char('5'),
+                    ctrl: false,
+                    alt: false
+                },
+                Key {
+                    code: Code::Char('j'),
+                    ctrl: false,
+                    alt: false
+                },
             ]))
         );
+    }
+
+    /// The two bindings that could not arrive at all before F-keys and ctrl
+    /// case-folding existed.
+    ///
+    /// `<F5>` used to split into `<`, `F`, `5`, `>` and `<c-S>` used to be a
+    /// different key from `<C-s>`, so `pin keymap_preservation` was false for
+    /// these two however good the mapping engine was. Reading them out of the
+    /// owner's real file is what says otherwise.
+    #[test]
+    fn the_owners_f_key_and_ctrl_bindings_are_reachable() {
+        let config = crate::luaconf::load_default();
+        if config.mappings.is_empty() {
+            return;
+        }
+        let keymap = Keymap::from_config(&config);
+        for keys in ["<F5>", "<c-S>", "<C-s>"] {
+            let parsed = parse(keys);
+            assert_eq!(parsed.len(), 1, "{keys} did not parse as one key: {parsed:?}");
+            assert!(
+                matches!(keymap.lookup('n', &parsed), Match::Exact(Rhs::Command(_))),
+                "{keys} reaches no command in the owner's config",
+            );
+        }
+        // `<c-S>` and `<C-s>` are the same key, so they must resolve alike.
+        assert_eq!(keymap.lookup('n', &parse("<c-S>")), keymap.lookup('n', &parse("<C-s>")));
     }
 
     /// The owner's own file, when it is there.
@@ -249,8 +313,39 @@ mod tests {
         let keymap = Keymap::from_config(&config);
         assert!(keymap.len() > 10, "only {} mappings", keymap.len());
         // The three the owner would notice first.
-        assert!(matches!(keymap.lookup('i', &parse("kj")), Match::Exact(Rhs::Keys(_))));
-        assert!(matches!(keymap.lookup('n', &parse("H")), Match::Exact(Rhs::Keys(_))));
-        assert!(matches!(keymap.lookup('n', &parse(" o")), Match::Exact(Rhs::Command(_))));
+        assert!(matches!(
+            keymap.lookup('i', &parse("kj")),
+            Match::Exact(Rhs::Keys(_))
+        ));
+        assert!(matches!(
+            keymap.lookup('n', &parse("H")),
+            Match::Exact(Rhs::Keys(_))
+        ));
+        assert!(matches!(
+            keymap.lookup('n', &parse(" o")),
+            Match::Exact(Rhs::Command(_))
+        ));
+    }
+
+    /// The owner's own file, when it is there, binds these keys today.
+    #[test]
+    fn the_real_config_keeps_f5_and_ctrl_s_reachable() {
+        let config = crate::luaconf::load_default();
+        if config.path.is_none() {
+            return;
+        }
+        let keymap = Keymap::from_config(&config);
+        let f5 = parse("<F5>");
+        assert_eq!(f5.len(), 1);
+        assert!(
+            matches!(keymap.lookup('n', &f5), Match::Exact(Rhs::Command(command)) if command == "Jaq")
+        );
+
+        let ctrl_s = parse("<c-S>");
+        assert_eq!(ctrl_s.len(), 1);
+        assert_eq!(ctrl_s, parse("<C-s>"));
+        assert!(
+            matches!(keymap.lookup('n', &ctrl_s), Match::Exact(Rhs::Command(command)) if command == "FzfLua live_grep")
+        );
     }
 }

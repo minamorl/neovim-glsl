@@ -149,7 +149,10 @@ impl TreeSource {
         notes.sort();
         files.sort();
         notes.extend(files);
-        Self { root, entries: notes }
+        Self {
+            root,
+            entries: notes,
+        }
     }
 }
 
@@ -159,11 +162,21 @@ impl Source for TreeSource {
     }
 
     fn label(&self) -> &str {
-        self.root.file_name().and_then(|n| n.to_str()).unwrap_or("/")
+        self.root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("/")
     }
 }
 
-const SKIP: [&str; 6] = [".git", "target", "node_modules", ".venv", "dist", "__pycache__"];
+const SKIP: [&str; 6] = [
+    ".git",
+    "target",
+    "node_modules",
+    ".venv",
+    "dist",
+    "__pycache__",
+];
 
 fn walk(
     root: &std::path::Path,
@@ -175,7 +188,9 @@ fn walk(
     if depth > 8 || notes.len() + files.len() > 20_000 {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name();
@@ -189,7 +204,11 @@ fn walk(
         match entry.file_type() {
             Ok(kind) if kind.is_dir() => walk(root, &path, depth + 1, notes, files),
             Ok(_) => {
-                let relative = path.strip_prefix(root).unwrap_or(&path).display().to_string();
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string();
                 if relative.ends_with(".md") || relative.ends_with(".markdown") {
                     notes.push(relative);
                 } else {
@@ -258,7 +277,10 @@ mod tests {
         let mut picker = Picker::open(&source(), 8);
         picker.feed("alp");
         let rows = picker.visible();
-        assert!(!rows[0].positions.is_empty(), "no match positions reached the surface");
+        assert!(
+            !rows[0].positions.is_empty(),
+            "no match positions reached the surface"
+        );
     }
 
     #[test]

@@ -28,8 +28,11 @@ pub fn write(text: &str) {
     if COPY.0.is_empty() {
         return;
     }
-    let Ok(mut child) =
-        Command::new(COPY.0).args(COPY.1).stdin(Stdio::piped()).stdout(Stdio::null()).spawn()
+    let Ok(mut child) = Command::new(COPY.0)
+        .args(COPY.1)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
     else {
         return;
     };

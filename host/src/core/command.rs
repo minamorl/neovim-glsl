@@ -27,7 +27,10 @@ pub fn execute(editor: &mut Editor, line: &str) {
 
     let range_all = line.starts_with('%');
     let body = if range_all { &line[1..] } else { line };
-    if body.starts_with('s') && body.len() > 1 && !body[1..].starts_with(|c: char| c.is_alphanumeric()) {
+    if body.starts_with('s')
+        && body.len() > 1
+        && !body[1..].starts_with(|c: char| c.is_alphanumeric())
+    {
         substitute(editor, &body[1..], range_all);
         return;
     }
@@ -58,8 +61,10 @@ pub fn execute(editor: &mut Editor, line: &str) {
                 match editor.buffer.path().map(PathBuf::from) {
                     Some(path) => editor.requests.push(Request::Edit(path)),
                     None => {
-                        editor.message =
-                            Some(Message { text: "E32: No file name".into(), error: true })
+                        editor.message = Some(Message {
+                            text: "E32: No file name".into(),
+                            error: true,
+                        })
                     }
                 }
             } else if editor.buffer.modified() && !bang {
@@ -102,7 +107,11 @@ pub fn execute(editor: &mut Editor, line: &str) {
 }
 
 fn write(editor: &mut Editor, rest: &str, then_quit: bool) {
-    let target = if rest.is_empty() { None } else { Some(expand(rest)) };
+    let target = if rest.is_empty() {
+        None
+    } else {
+        Some(expand(rest))
+    };
     match editor.buffer.write(target.as_deref()) {
         Ok(path) => {
             let lines = editor.buffer.line_count();
@@ -115,7 +124,10 @@ fn write(editor: &mut Editor, rest: &str, then_quit: bool) {
             }
         }
         Err(error) => {
-            editor.message = Some(Message { text: format!("E212: {error}"), error: true });
+            editor.message = Some(Message {
+                text: format!("E212: {error}"),
+                error: true,
+            });
         }
     }
 }
@@ -131,14 +143,21 @@ fn substitute(editor: &mut Editor, spec: &str, all_lines: bool) {
     let Some(sep) = chars.next() else { return };
     let parts: Vec<&str> = spec[sep.len_utf8()..].split(sep).collect();
     if parts.is_empty() || parts[0].is_empty() {
-        editor.message = Some(Message { text: "E35: No previous regular expression".into(), error: true });
+        editor.message = Some(Message {
+            text: "E35: No previous regular expression".into(),
+            error: true,
+        });
         return;
     }
     let pattern = parts[0];
     let replacement = parts.get(1).copied().unwrap_or("");
     let global = parts.get(2).is_some_and(|flags| flags.contains('g'));
 
-    let range = if all_lines { 0..editor.buffer.line_count() } else { editor.cursor.0..editor.cursor.0 + 1 };
+    let range = if all_lines {
+        0..editor.buffer.line_count()
+    } else {
+        editor.cursor.0..editor.cursor.0 + 1
+    };
     let mut changed = 0usize;
     let mut last_line = editor.cursor.0;
     editor.buffer.begin_change(editor.cursor);
@@ -152,20 +171,28 @@ fn substitute(editor: &mut Editor, spec: &str, all_lines: bool) {
         } else {
             text.replacen(pattern, replacement, 1)
         };
-        editor.buffer.replace_line(index, replaced.chars().collect());
+        editor
+            .buffer
+            .replace_line(index, replaced.chars().collect());
         changed += 1;
         last_line = index;
     }
     if changed == 0 {
         editor.buffer.abort_change();
-        editor.message =
-            Some(Message { text: format!("E486: Pattern not found: {pattern}"), error: true });
+        editor.message = Some(Message {
+            text: format!("E486: Pattern not found: {pattern}"),
+            error: true,
+        });
         return;
     }
     editor.buffer.commit_change();
     editor.cursor = (last_line, 0);
     editor.message = Some(Message {
-        text: format!("{changed} substitution{} on {changed} line{}", plural(changed), plural(changed)),
+        text: format!(
+            "{changed} substitution{} on {changed} line{}",
+            plural(changed),
+            plural(changed)
+        ),
         error: false,
     });
 }
@@ -244,7 +271,10 @@ mod tests {
         e.feed_str(":Note<CR>");
         assert!(e.message.as_ref().unwrap().error);
         e.feed_str(":Note daily/2026-08-03<CR>");
-        assert_eq!(e.requests, vec![Request::NewNote("daily/2026-08-03".into())]);
+        assert_eq!(
+            e.requests,
+            vec![Request::NewNote("daily/2026-08-03".into())]
+        );
     }
 
     #[test]

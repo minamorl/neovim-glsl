@@ -42,7 +42,12 @@ pub struct UiOptions {
 
 impl Default for UiOptions {
     fn default() -> Self {
-        Self { ext_multigrid: false, ext_popupmenu: false, ext_cmdline: true, ext_messages: true }
+        Self {
+            ext_multigrid: false,
+            ext_popupmenu: false,
+            ext_cmdline: true,
+            ext_messages: true,
+        }
     }
 }
 
@@ -105,7 +110,11 @@ pub fn write_message(writer: &mut impl Write, message: &Value) -> std::io::Resul
 }
 
 pub fn notification(method: &str, params: Vec<Value>) -> Value {
-    Value::Array(vec![Value::from(NOTIFY), Value::from(method), Value::Array(params)])
+    Value::Array(vec![
+        Value::from(NOTIFY),
+        Value::from(method),
+        Value::Array(params),
+    ])
 }
 
 pub fn response(msgid: u64, error: Option<Value>, result: Value) -> Value {
@@ -122,7 +131,9 @@ pub fn response(msgid: u64, error: Option<Value>, result: Value) -> Value {
 pub fn split_notification(v: &Value) -> (Vec<RedrawEvent>, Vec<Notification>) {
     let mut out = Vec::new();
     let mut custom = Vec::new();
-    let Some(arr) = v.as_array() else { return (out, custom) };
+    let Some(arr) = v.as_array() else {
+        return (out, custom);
+    };
     if arr.len() != 3 || arr[0].as_u64() != Some(NOTIFY) {
         return (out, custom);
     }
@@ -132,10 +143,16 @@ pub fn split_notification(v: &Value) -> (Vec<RedrawEvent>, Vec<Notification>) {
         }
         return (out, custom);
     }
-    let Some(events) = arr[2].as_array() else { return (out, custom) };
+    let Some(events) = arr[2].as_array() else {
+        return (out, custom);
+    };
     for event in events {
-        let Some(parts) = event.as_array() else { continue };
-        let Some(name) = parts.first().and_then(|n| n.as_str()) else { continue };
+        let Some(parts) = event.as_array() else {
+            continue;
+        };
+        let Some(name) = parts.first().and_then(|n| n.as_str()) else {
+            continue;
+        };
         for call in &parts[1..] {
             if let Some(args) = call.as_array() {
                 out.push((name.to_string(), args.clone()));
@@ -189,7 +206,11 @@ pub struct RedrawQueue {
 
 impl RedrawQueue {
     pub fn new(rx: Receiver<Value>) -> Self {
-        Self { rx, pending: None, custom: Vec::new() }
+        Self {
+            rx,
+            pending: None,
+            custom: Vec::new(),
+        }
     }
 
     pub fn wait_ready(&mut self, timeout: Duration) -> Ready {
@@ -243,7 +264,10 @@ mod tests {
     #[test]
     fn packing_and_splitting_are_inverse() {
         let events: Vec<RedrawEvent> = vec![
-            ("grid_resize".into(), vec![Value::from(1), Value::from(80), Value::from(24)]),
+            (
+                "grid_resize".into(),
+                vec![Value::from(1), Value::from(80), Value::from(24)],
+            ),
             ("grid_line".into(), vec![Value::from(1), Value::from(0)]),
             ("grid_line".into(), vec![Value::from(1), Value::from(1)]),
             ("flush".into(), vec![]),
@@ -275,7 +299,10 @@ mod tests {
 
     #[test]
     fn ui_options_round_trip_and_messages_imply_cmdline() {
-        let options = UiOptions { ext_messages: true, ..UiOptions::none() };
+        let options = UiOptions {
+            ext_messages: true,
+            ..UiOptions::none()
+        };
         let map = options.to_map();
         let parsed = UiOptions::from_map(map.as_map().unwrap());
         assert!(parsed.ext_cmdline && parsed.ext_messages);

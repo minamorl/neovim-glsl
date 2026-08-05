@@ -72,7 +72,12 @@ mod tests {
         let sample = |name: &str, y: f32| Sample {
             semantic: Semantic::new(name, "surface", "rest"),
             kind: BoxKind::RoundBox,
-            bounds: Bounds { x: 0.1, y, width: 0.5, height: 0.1 },
+            bounds: Bounds {
+                x: 0.1,
+                y,
+                width: 0.5,
+                height: 0.1,
+            },
             decoration: Decoration::stroke(0.0),
             color: ColorIntent::new("surface", "outline"),
             corner_radius: CornerRadius::ShorterSideRatio(0.2),
@@ -94,8 +99,14 @@ mod tests {
         ColorRuntime {
             scheme_id: id.to_string(),
             schemes: vec![
-                ColorScheme { id: "dark".into(), colors },
-                ColorScheme { id: "light".into(), colors: other },
+                ColorScheme {
+                    id: "dark".into(),
+                    colors,
+                },
+                ColorScheme {
+                    id: "light".into(),
+                    colors: other,
+                },
             ],
         }
     }
@@ -105,7 +116,10 @@ mod tests {
         let prepared = prepare_flat_scene(&scene()).unwrap();
         let dark = bind_flat_scene_user_color_scheme(&prepared, &runtime("dark")).unwrap();
         let light = bind_flat_scene_user_color_scheme(&prepared, &runtime("light")).unwrap();
-        assert_eq!(flat_scene_layout_identity(&dark), flat_scene_layout_identity(&light));
+        assert_eq!(
+            flat_scene_layout_identity(&dark),
+            flat_scene_layout_identity(&light)
+        );
         assert_ne!(dark.surfaces[0].1.color, light.surfaces[0].1.color);
     }
 

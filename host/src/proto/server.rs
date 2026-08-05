@@ -9,6 +9,7 @@
 
 use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
 
 use rmpv::Value;
 
@@ -28,6 +29,17 @@ pub const QUIT: &str = "nvimglsl_quit";
 /// plugin host, so the name and its argument travel out as an ordinary
 /// notification.
 pub const PLUGIN: &str = "nvimglsl_plugin";
+
+/// Work the protocol server can receive without blocking on client input.
+///
+/// Only `Client` is produced today. The other variant is the slot later LSP,
+/// git or task output can use to ask the host to flush state pushed from
+/// outside the UI client's msgpack stream.
+#[derive(Debug)]
+pub enum Incoming {
+    Client(Value),
+    Flush,
+}
 
 pub struct Host {
     pub editor: Editor,
@@ -98,7 +110,10 @@ impl Host {
 
     fn open_path(&mut self, path: std::path::PathBuf) {
         if let Err(error) = self.editor.open(path.clone()) {
-            self.report(format!("E484: Can't open file {}: {error}", path.display()), true);
+            self.report(
+                format!("E484: Can't open file {}: {error}", path.display()),
+                true,
+            );
         }
     }
 
@@ -108,7 +123,9 @@ impl Host {
 
     /// Handle one incoming message, returning everything to send back.
     pub fn handle(&mut self, message: &Value) -> Vec<Value> {
-        let Some(parts) = message.as_array() else { return Vec::new() };
+        let Some(parts) = message.as_array() else {
+            return Vec::new();
+        };
         match parts.first().and_then(Value::as_u64) {
             Some(nvim::REQUEST) if parts.len() == 4 => {
                 let msgid = parts[1].as_u64().unwrap_or(0);
@@ -259,8 +276,14 @@ impl Host {
             "nvim_get_mode" => (
                 None,
                 Value::Map(vec![
-                    (Value::from("mode"), Value::from(self.editor.mode.short_name())),
-                    (Value::from("blocking"), Value::from(self.editor.mode == Mode::Cmdline)),
+                    (
+                        Value::from("mode"),
+                        Value::from(self.editor.mode.short_name()),
+                    ),
+                    (
+                        Value::from("blocking"),
+                        Value::from(self.editor.mode == Mode::Cmdline),
+                    ),
                 ]),
             ),
             "nvim_get_current_buf" => (None, Value::from(1u64)),
@@ -287,7 +310,10 @@ impl Host {
                     .get(4)
                     .and_then(Value::as_array)
                     .map(|lines| {
-                        lines.iter().map(|l| l.as_str().unwrap_or("").to_string()).collect()
+                        lines
+                            .iter()
+                            .map(|l| l.as_str().unwrap_or("").to_string())
+                            .collect()
                     })
                     .unwrap_or_default();
                 self.editor.buffer.begin_change(self.editor.cursor);
@@ -295,15 +321,22 @@ impl Host {
                 self.editor.buffer.commit_change();
                 (None, Value::Nil)
             }
-            "nvim_set_client_info" | "nvim_ui_set_option" | "nvim_input_mouse" => (None, Value::Nil),
+            "nvim_set_client_info" | "nvim_ui_set_option" | "nvim_input_mouse" => {
+                (None, Value::Nil)
+            }
             // `free lua_runtime_presence` leaves a Lua runtime optional and this
             // host does not embed one. Saying so is not the same as ignoring the
             // call: a client that gets `nil` back would believe its code ran.
             "nvim_exec_lua" => (
-                Some(Value::from("nvimglsl has no Lua runtime; open_question neovim_asset_reuse_scope")),
+                Some(Value::from(
+                    "nvimglsl has no Lua runtime; open_question neovim_asset_reuse_scope",
+                )),
                 Value::Nil,
             ),
-            other => (Some(Value::from(format!("unknown method: {other}"))), Value::Nil),
+            other => (
+                Some(Value::from(format!("unknown method: {other}"))),
+                Value::Nil,
+            ),
         }
     }
 
@@ -340,22 +373,43 @@ fn index(value: Option<&Value>, count: usize, default: usize) -> usize {
 /// Neovim protocol" checkable from outside.
 pub fn serve(
     host: &mut Host,
-    input: impl Read,
+    input: impl Read + Send + 'static,
+    output: impl Write,
+    initial_path: Option<PathBuf>,
+) -> std::io::Result<()> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("nvimglsl-proto-reader".into())
+        .spawn(move || {
+            let mut reader = BufReader::new(input);
+            while let Ok(message) = nvim::read_message(&mut reader) {
+                if tx.send(Incoming::Client(message)).is_err() {
+                    return;
+                }
+            }
+        })?;
+
+    serve_incoming(host, rx, output, initial_path)
+}
+
+pub fn serve_incoming(
+    host: &mut Host,
+    incoming: Receiver<Incoming>,
     mut output: impl Write,
     initial_path: Option<PathBuf>,
 ) -> std::io::Result<()> {
     if let Some(path) = initial_path {
         let _ = host.editor.open(path);
     }
-    let mut reader = BufReader::new(input);
     loop {
-        let message = match nvim::read_message(&mut reader) {
-            Ok(message) => message,
-            // A closed pipe is how a UI client leaves.
+        let outgoing = match incoming.recv() {
+            Ok(Incoming::Client(message)) => host.handle(&message),
+            Ok(Incoming::Flush) => host.flush_ui(),
+            // A closed channel is how a UI client leaves.
             Err(_) => return Ok(()),
         };
-        for outgoing in host.handle(&message) {
-            nvim::write_message(&mut output, &outgoing)?;
+        for message in outgoing {
+            nvim::write_message(&mut output, &message)?;
         }
         if let Some(events) = host.take_attach_events() {
             nvim::write_message(&mut output, &nvim::pack_redraw(&events))?;
@@ -385,7 +439,11 @@ mod tests {
         host.handle(&request(
             1,
             "nvim_ui_attach",
-            vec![Value::from(40u64), Value::from(8u64), UiOptions::none().to_map()],
+            vec![
+                Value::from(40u64),
+                Value::from(8u64),
+                UiOptions::none().to_map(),
+            ],
         ));
         host.take_attach_events();
         host
@@ -405,7 +463,11 @@ mod tests {
         host.handle(&request(
             1,
             "nvim_ui_attach",
-            vec![Value::from(40u64), Value::from(8u64), UiOptions::none().to_map()],
+            vec![
+                Value::from(40u64),
+                Value::from(8u64),
+                UiOptions::none().to_map(),
+            ],
         ));
         let events = host.take_attach_events().expect("attach events");
         let names: Vec<&str> = events.iter().map(|(n, _)| n.as_str()).collect();
@@ -445,7 +507,12 @@ mod tests {
         let out = host.handle(&request(
             2,
             "nvim_buf_get_lines",
-            vec![Value::from(0u64), Value::from(0u64), Value::from(-1i64), Value::from(false)],
+            vec![
+                Value::from(0u64),
+                Value::from(0u64),
+                Value::from(-1i64),
+                Value::from(false),
+            ],
         ));
         let lines = out[0].as_array().unwrap()[3].as_array().unwrap();
         assert_eq!(lines.len(), 2);
@@ -481,7 +548,11 @@ mod tests {
         host.handle(&request(
             1,
             "nvim_ui_attach",
-            vec![Value::from(40u64), Value::from(8u64), UiOptions::none().to_map()],
+            vec![
+                Value::from(40u64),
+                Value::from(8u64),
+                UiOptions::none().to_map(),
+            ],
         ));
         host.take_attach_events();
         host
@@ -528,7 +599,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut host = vault_host("see [[target]]\n", &dir);
         host.handle(&input("gf"));
-        assert!(host.editor.message.as_ref().unwrap().text.contains("no link under cursor"));
+        assert!(host
+            .editor
+            .message
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("no link under cursor"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
