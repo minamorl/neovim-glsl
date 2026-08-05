@@ -383,7 +383,18 @@ impl Adapter {
             gl.uniform_1_i32(self.u_atlas.as_ref(), 0);
             gl.uniform_2_f32(self.u_screen.as_ref(), width as f32, height as f32);
             gl.enable(glow::BLEND);
-            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            // Colour blends as usual, but alpha accumulates towards opaque
+            // instead of being scaled down by every translucent layer. Without
+            // the separate function a scrim at 0.55 leaves the framebuffer
+            // partly transparent, which is invisible against an opaque window
+            // and turns every PNG snapshot into a washed-out picture of
+            // something the screen never showed.
+            gl.blend_func_separate(
+                glow::SRC_ALPHA,
+                glow::ONE_MINUS_SRC_ALPHA,
+                glow::ONE,
+                glow::ONE_MINUS_SRC_ALPHA,
+            );
             let bytes: &[u8] = std::slice::from_raw_parts(
                 self.verts.as_ptr() as *const u8,
                 std::mem::size_of_val(&self.verts[..]),

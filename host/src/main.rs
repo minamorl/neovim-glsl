@@ -513,6 +513,16 @@ impl ApplicationHandler for App {
         self.surface = Some(surface);
         self.link = Some(link);
 
+        // Launched with nothing to edit — from the Dock, say — the useful first
+        // screen is the note list, not an empty buffer. `pin primary_object`
+        // makes notes the primary object, and `pin user_file_awareness_not_required`
+        // says the user should not have to name a file to get started.
+        // Snapshot mode is included deliberately: a first screen that cannot be
+        // photographed cannot be checked.
+        if self.args.file.is_none() {
+            self.open_navigation(false);
+        }
+
         if let Some(path) = self.args.snapshot.clone() {
             self.run_snapshot(&path, width, height);
             el.exit();
