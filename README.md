@@ -42,6 +42,21 @@ adapter が GLSL 側に一つ増えた形になる。`--scheme light` は**同�
 第一級 object は markdown note で、substrate は既存の yui notes（`~/repos/obsidian`）。
 新しい store は作っていない（`note_substrate_not_new`）。
 
+その note を**縦書きで読む**面が `<Space>p` にある。ルビ・圏点・縦中横・厳格禁則・
+明朝で、本当に組んだときの版面が出る。**組版 engine は書いていない**：組んでいるのは
+`host/assets/tategaki.css` と、それを解釈する engine である。CSS Writing Modes の縦組み
+（`writing-mode: vertical-rl`・`text-orientation`・`text-combine-upright`・`ruby`・
+`line-break: strict`）は電子書籍が実際に通っている経路で、字面も禁則も約物の詰めも
+既に実装されている。host 側は markdown を意味のある要素へ落とすところまでしかしない。
+
+![note を縦書きで組んだ版面](evaluation/evidence/tategaki-preview.png)
+
+再現するコマンド（`host/` から）:
+
+```bash
+./target/debug/nvimglsl ../evaluation/evidence/tategaki-sample.md --tategaki /tmp/page.html
+```
+
 詳細と未決の扱いは [host/README.md](host/README.md)。
 
 ![text と画像が同じ画面に共存している様子](evaluation/evidence/image-and-text-coexist.png)

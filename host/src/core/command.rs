@@ -80,6 +80,9 @@ pub fn execute(editor: &mut Editor, line: &str) {
         // The navigation surface has `:` names as well as the `<Space>o`
         // mapping, so it can be reached without the leader.
         "Notes" | "notes" => editor.requests.push(Request::OpenNavigation(Scope::Notes)),
+        // The vertical preview has a `:` name as well as `<Space>p`, the same
+        // way the navigation surface does.
+        "Tategaki" | "tategaki" | "Preview" | "preview" => editor.requests.push(Request::Preview),
         "Files" | "files" | "Nav" | "nav" => {
             editor.requests.push(Request::OpenNavigation(Scope::Files))
         }
@@ -275,6 +278,14 @@ mod tests {
             e.requests,
             vec![Request::NewNote("daily/2026-08-03".into())]
         );
+    }
+
+    #[test]
+    fn tategaki_and_preview_both_ask_for_the_vertical_page() {
+        let mut e = Editor::new(Buffer::from_text("本文。\n"));
+        e.feed_str(":Tategaki<CR>");
+        e.feed_str(":preview<CR>");
+        assert_eq!(e.requests, vec![Request::Preview, Request::Preview]);
     }
 
     #[test]

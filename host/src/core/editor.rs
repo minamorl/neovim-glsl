@@ -159,6 +159,10 @@ pub enum Request {
         name: String,
         argument: String,
     },
+    /// `<Space>p` — set the buffer as a vertical page. The core does not
+    /// typeset it: `crate::tategaki` owns the page and the host owns somewhere
+    /// to put it.
+    Preview,
 }
 
 /// The options this editor can act on, read out of the owner's config.
@@ -894,6 +898,7 @@ impl Editor {
                         self.requests.push(Request::OpenNavigation(Scope::Notes))
                     }
                     Code::Char('f') => self.requests.push(Request::OpenNavigation(Scope::Files)),
+                    Code::Char('p') => self.requests.push(Request::Preview),
                     _ => {}
                 }
                 self.pending.clear();
@@ -1925,6 +1930,13 @@ mod tests {
         assert_eq!(e.views.len(), 2);
         e.feed_str("<C-w>o");
         assert_eq!(e.views.len(), 1);
+    }
+
+    #[test]
+    fn space_p_asks_the_host_for_a_vertical_page() {
+        let mut e = editor("本文。\n");
+        e.feed_str(" p");
+        assert_eq!(e.requests, vec![Request::Preview]);
     }
 
     #[test]

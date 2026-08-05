@@ -1,0 +1,404 @@
+/* tategaki.css — the vertical page.
+ *
+ * This file is the typesetting. The host only gets as far as lowering markdown
+ * into elements that mean something; what decides line breaking, kinsoku,
+ * punctuation compression, ruby placement and character advance is the CSS
+ * written here and the engine reading it. Not writing a typesetting engine is
+ * not a shortcut: vertical Japanese along CSS Writing Modes and JLREQ is already
+ * implemented, and it is the path electronic books actually travel.
+ *
+ * The host (`tategaki::style`) replaces the values of the custom properties this
+ * file declares in `:root`, and nothing else. The property names are canonical
+ * here and copied on the Rust side; a test in `tategaki::style` reads this file
+ * to check the copy has not drifted.
+ *
+ * Terms:
+ *   measure        characters per line. The inline axis is vertical here, so it
+ *                  is `inline-size`.
+ *   line advance   font-size × line-height.
+ *   page           lines per page × line advance. A page turn moves by exactly
+ *                  this width.
+ */
+
+:root {
+  /* Mincho, falling through the faces a machine actually has. Hiragino and Yu
+   * Mincho lead because `pin first_stage_platform` makes macOS the first stage;
+   * Noto Serif CJK and Source Han Serif are the catch that exists on any OS.
+   * The chain stops at `serif` rather than `sans-serif` on purpose: on a machine
+   * with no mincho at all, stopping at a serif makes the miss visible, where
+   * falling to gothic would quietly set the page in the wrong kind of face. */
+  --tategaki-serif:
+    "Hiragino Mincho ProN", "Hiragino Mincho Pro", "HiraMinProN-W3",
+    "Yu Mincho", YuMincho, "YuMincho",
+    "Noto Serif CJK JP", "Noto Serif JP", "Source Han Serif JP", "源ノ明朝",
+    "IPAmjMincho", "IPA明朝", "IPAMincho",
+    serif;
+
+  --tategaki-font-size: 17px;
+  --tategaki-line-height: 1.9;   /* line advance; 1.75–2.0 reads well vertically */
+  --tategaki-measure: 28;        /* characters per line */
+  --tategaki-lines-per-page: 24; /* the widest a page gets, in lines */
+
+  --tategaki-paper: #f4efe6;
+  --tategaki-ink: #16130f;
+  --tategaki-faint: #8b8175;
+  --tategaki-rule: #d6ccbc;
+  --tategaki-mark: #9a3b2f;      /* headings and kenten */
+
+  /* Derived. --tategaki-page caps how wide the reading area gets, so a page is
+   * a page rather than however wide the window happens to be; the paging script
+   * then turns by as many whole lines as actually fit inside it. A page boundary
+   * therefore always falls on a line boundary, and no line ever arrives at the
+   * head of the next page cut in half. */
+  --tategaki-line-advance: calc(var(--tategaki-font-size) * var(--tategaki-line-height));
+  --tategaki-page: calc(var(--tategaki-line-advance) * var(--tategaki-lines-per-page));
+  --tategaki-column: calc(var(--tategaki-font-size) * var(--tategaki-measure));
+}
+
+/* Registering the derived values with a type makes them computed lengths rather
+ * than token sequences, which is what lets page turning simply read
+ * `--tategaki-page`. An engine without @property returns the initial `0px`, and
+ * the paging script rebuilds the same expression from its parts. */
+@property --tategaki-line-advance {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --tategaki-page {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+:root[data-scheme="night"] {
+  --tategaki-paper: #14161a;
+  --tategaki-ink: #ddd6cb;
+  --tategaki-faint: #6d6a63;
+  --tategaki-rule: #2c3038;
+  --tategaki-mark: #c98b7f;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--tategaki-paper);
+  color: var(--tategaki-ink);
+  font-family: var(--tategaki-serif);
+  font-size: var(--tategaki-font-size);
+  /* Mincho set vertically has thin strokes, so text-rendering leans toward
+   * legibility rather than speed. */
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  transition: background 160ms linear, color 160ms linear;
+}
+
+/* --- The page --------------------------------------------------------------
+ * `writing-mode: vertical-rl` makes the inline axis vertical and the block axis
+ * run right to left: `inline-size` is the length of a line, lines stack
+ * leftwards, and the document grows to the left. */
+
+.tategaki-scroll {
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* A page is a page. Past this width the reading area stops growing and sits
+   * centred, the way a book does on a desk, instead of running a single line
+   * across a whole monitor. Below it the area is the window, and the paging
+   * script turns by the whole lines that fit. */
+  max-width: var(--tategaki-page);
+  margin: 0 auto;
+  /* A line is 28 characters whatever the window is, so the text block rarely
+   * fills the height. Centred, the slack becomes head and foot margin the way a
+   * book's does; left alone it all collects at the foot. */
+  display: flex;
+  align-items: center;
+  scroll-behavior: smooth;
+  /* Physical on purpose. This box is not vertical-rl — only the text inside it
+   * is — so logical padding here would follow the wrong axis. Which end of the
+   * scroller is the opening is settled by the paging script rather than by the
+   * writing mode, for the same reason. */
+  padding: 5vh 0;   /* head and foot margin */
+}
+
+.tategaki {
+  writing-mode: vertical-rl;
+  /* `mixed` stands the characters that belong upright and rotates the rest 90°.
+   * Long Latin runs and multi-digit numbers lying on their side is not a defect;
+   * it is how vertical text is set. One and two digits stand instead, and that
+   * applies where the host wrapped them in a span. */
+  text-orientation: mixed;
+
+  inline-size: var(--tategaki-column);
+  block-size: max-content;
+  min-block-size: 100%;
+  flex: none;
+
+  line-height: var(--tategaki-line-height);
+  /* Strict kinsoku: 、。」）ゃゅょっー never open a line and 「（ never end one. */
+  line-break: strict;
+  word-break: normal;
+  overflow-wrap: normal;
+  /* Punctuation compression: closes the gap before an opening bracket at the
+   * head of a line (CSS Text 4; newer engines only). */
+  text-spacing-trim: trim-start;
+  /* Hanging punctuation. Simply ignored where it is not implemented. */
+  hanging-punctuation: allow-end;
+
+  padding-inline: 0;
+  margin: 0 auto;
+}
+
+/* --- Paragraphs ----------------------------------------------------------- */
+
+.tategaki p {
+  margin: 0;
+  text-indent: 1em;   /* one-character indent, which falls from the head here */
+}
+
+/* No space between paragraphs. Japanese prose marks a paragraph with the indent,
+ * so adding a gap as well states it twice. Where a gap is wanted, an explicit
+ * break carries it. */
+.tategaki p + p { margin: 0; }
+
+/* --- Headings ------------------------------------------------------------- */
+
+.tategaki h1,
+.tategaki h2,
+.tategaki h3,
+.tategaki h4 {
+  font-weight: 600;
+  margin: 0;
+  text-indent: 0;
+  line-height: 1.4;
+}
+
+.tategaki h1 {
+  font-size: 1.9em;
+  letter-spacing: 0.18em;
+  margin-inline-start: 1.5em;   /* space from the head */
+  margin-inline-end: 1.2em;
+  margin-block: 0 1.6em;        /* space from the line to the right */
+}
+
+.tategaki h2 {
+  font-size: 1.35em;
+  letter-spacing: 0.1em;
+  margin-inline-start: 1em;
+  margin-block: 1.2em 0.8em;
+}
+
+.tategaki h3 {
+  font-size: 1.1em;
+  letter-spacing: 0.05em;
+  margin-block: 1em 0.6em;
+}
+
+.tategaki h4 {
+  font-size: 1em;
+  color: var(--tategaki-faint);
+  margin-block: 0.8em 0.4em;
+}
+
+/* --- Quotes, lists, rules --------------------------------------------------- */
+
+.tategaki blockquote {
+  margin: 0;
+  margin-inline: 1.5em;    /* inset from head and foot */
+  margin-block: 0.4em;
+  padding-block-start: 0.7em;
+  /* The block axis runs right to left, so the rule standing to the right of the
+   * quote is block-start. `border-inline-end` would draw it across the foot. */
+  border-block-start: 1px solid var(--tategaki-rule);
+  color: var(--tategaki-faint);
+}
+
+.tategaki blockquote p { text-indent: 0; }
+
+.tategaki ul,
+.tategaki ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  margin-inline-start: 1em;
+}
+
+.tategaki li {
+  text-indent: 0;
+  margin-block: 0 0.3em;   /* between items, which is left-to-right here */
+}
+
+/* The marker goes inside the element rather than outside it. `content` on
+ * `::before` cannot be combined upright, so an arabic numeral there would be the
+ * one thing on the line lying down. The host sends kanji numerals and a nakaguro
+ * in a span. */
+.tategaki-marker {
+  color: var(--tategaki-faint);
+  padding-inline-end: 0.35em;   /* between marker and text, head to foot here */
+}
+
+.tategaki hr {
+  border: none;
+  /* A break in vertical text is a short vertical line, not a horizontal bar:
+   * 4em along the inline axis (which runs down) and no width at all. */
+  border-block-start: 1px solid var(--tategaki-rule);
+  block-size: 0;
+  inline-size: 4em;
+  margin: 2em auto;
+}
+
+/* --- Inline --------------------------------------------------------------- */
+
+/* Kenten. Japanese emphasis is sesame dots, not italics, set on the right. */
+.tategaki em,
+.tategaki .tategaki-em {
+  font-style: normal;
+  text-emphasis: filled sesame var(--tategaki-mark);
+  -webkit-text-emphasis: filled sesame var(--tategaki-mark);
+  text-emphasis-position: over right;
+  -webkit-text-emphasis-position: over right;
+}
+
+.tategaki strong {
+  font-weight: 700;
+}
+
+/* Tate-chu-yoko: one and two digits stand upright, where the host wrapped them. */
+.tategaki .tcy {
+  text-combine-upright: all;
+  -webkit-text-combine: horizontal;
+  font-feature-settings: "pkna" 1;
+}
+
+/* Ruby, which sits to the right of its base in vertical text. */
+.tategaki ruby {
+  ruby-position: over;
+  -webkit-ruby-position: after;   /* older WebKit spells the right side `after` */
+}
+
+.tategaki rt {
+  font-size: 0.5em;
+  line-height: 1;
+  letter-spacing: 0;
+  text-emphasis: none;
+  color: inherit;
+}
+
+.tategaki a {
+  color: inherit;
+  text-decoration: none;
+  /* The line marking a link runs down the left of the text, which is where the
+   * block axis ends. `border-inline-end` would put it under the last character. */
+  border-block-end: 1px solid var(--tategaki-rule);
+}
+
+.tategaki code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  /* Monospaced Latin set upright is unreadable, so it stays on its side. */
+  text-orientation: sideways;
+  color: var(--tategaki-faint);
+}
+
+/* Code blocks are not set vertically. A program is a horizontal object, for the
+ * same reason `pin file_retained_for_programming` kept files for programming
+ * work rather than folding them into the note model. */
+.tategaki pre {
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8em;
+  line-height: 1.55;
+  margin: 0.5em 0;
+  padding: 0.7em 0.9em;
+  inline-size: auto;
+  block-size: auto;
+  max-inline-size: var(--tategaki-column);
+  overflow-x: auto;
+  background: color-mix(in srgb, var(--tategaki-ink) 5%, transparent);
+  border: 1px solid var(--tategaki-rule);
+  border-radius: 3px;
+  color: var(--tategaki-ink);
+}
+
+.tategaki pre code {
+  color: inherit;
+  text-orientation: mixed;
+}
+
+/* --- Runner and folio ------------------------------------------------------ */
+
+/* The runner: the title standing at the edge of the page. */
+.tategaki-runner {
+  position: fixed;
+  inset-block-start: 1.6vh;
+  inset-inline-start: 0;
+  inline-size: 100%;
+  text-align: center;
+  font-size: 0.72rem;
+  letter-spacing: 0.24em;
+  color: var(--tategaki-faint);
+  pointer-events: none;
+  user-select: none;
+}
+
+.tategaki-folio {
+  position: fixed;
+  inset-block-end: 1.6vh;
+  inset-inline-start: 0;
+  inline-size: 100%;
+  text-align: center;
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  color: var(--tategaki-faint);
+  pointer-events: none;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.tategaki-keys {
+  position: fixed;
+  inset-block-end: 1.6vh;
+  inset-inline-end: 1.4vw;
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  color: var(--tategaki-faint);
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* The opening. Title and byline sit in the same flow as the text. */
+.tategaki-title {
+  font-size: 2.1em;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  margin-inline-start: 3em;
+  margin-block: 2em 2.5em;
+  text-indent: 0;
+}
+
+.tategaki-byline {
+  font-size: 0.9em;
+  color: var(--tategaki-faint);
+  letter-spacing: 0.12em;
+  margin-inline-start: 3em;
+  margin-block: 0 3em;
+  text-indent: 0;
+}
+
+@media (max-width: 640px) {
+  :root { --tategaki-font-size: 15px; }
+}
+
+/* Print has no horizontal scroll, so the pages become one long page instead. */
+@media print {
+  .tategaki-scroll { overflow: visible; height: auto; }
+  .tategaki-runner, .tategaki-folio, .tategaki-keys { display: none; }
+  body { background: #fff; color: #000; }
+}
