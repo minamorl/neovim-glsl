@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use super::language::{
     rgba, Bounds, BoxKind, ColorIntent, ColorRuntime, ColorScheme, CornerRadius, Decoration,
-    Sample, Semantic,
+    Sample, Semantic, Shadow,
 };
 use super::FlatScene;
 
@@ -53,8 +53,9 @@ pub struct RowInput {
     pub selected: bool,
 }
 
-pub const ROLES: [&str; 8] = [
+pub const ROLES: [&str; 9] = [
     "scrim",
+    "shadow",
     "surface",
     "surface_raised",
     "outline",
@@ -74,6 +75,7 @@ pub const ROLES: [&str; 8] = [
 pub fn dark_scheme() -> ColorScheme {
     let mut colors = BTreeMap::new();
     colors.insert("scrim".into(), rgba("#05070c", 0.55));
+    colors.insert("shadow".into(), rgba("#000000", 0.55));
     colors.insert("surface".into(), rgba("#1b2130", 1.0));
     colors.insert("surface_raised".into(), rgba("#2c3448", 1.0));
     colors.insert("outline".into(), rgba("#3a4359", 1.0));
@@ -87,6 +89,7 @@ pub fn dark_scheme() -> ColorScheme {
 pub fn light_scheme() -> ColorScheme {
     let mut colors = BTreeMap::new();
     colors.insert("scrim".into(), rgba("#1b2130", 0.30));
+    colors.insert("shadow".into(), rgba("#161b28", 0.22));
     colors.insert("surface".into(), rgba("#ffffff", 1.0));
     colors.insert("surface_raised".into(), rgba("#e4ebfa", 1.0));
     colors.insert("outline".into(), rgba("#c3ccdd", 1.0));
@@ -160,6 +163,22 @@ impl Composer {
         stroke_role: &str,
         stroke_ratio: f32,
     ) {
+        self.elevated(id, name, state, rect, radius, fill_role, stroke_role, stroke_ratio, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn elevated(
+        &mut self,
+        id: &str,
+        name: &str,
+        state: &str,
+        rect: (f32, f32, f32, f32),
+        radius: Option<f32>,
+        fill_role: &str,
+        stroke_role: &str,
+        stroke_ratio: f32,
+        shadow: Option<Shadow>,
+    ) {
         let (x, y, w, h) = rect;
         if w <= 0.0 || h <= 0.0 {
             return;
@@ -170,8 +189,11 @@ impl Composer {
                 semantic: Semantic::new(name, "navigation", state),
                 kind: if radius.is_some() { BoxKind::RoundBox } else { BoxKind::Box },
                 bounds: self.normalized(x, y, w, h),
-                decoration: Decoration { stroke_width: stroke_ratio },
-                color: ColorIntent::new(fill_role, stroke_role),
+                decoration: Decoration { stroke_width: stroke_ratio, shadow },
+                color: match shadow {
+                    Some(_) => ColorIntent::new(fill_role, stroke_role).with_shadow("shadow"),
+                    None => ColorIntent::new(fill_role, stroke_role),
+                },
                 corner_radius: CornerRadius::Pixels(radius.unwrap_or(0.0)),
             },
         ));
@@ -227,7 +249,7 @@ pub fn build(input: Input<'_>) -> NavigationSurface {
         0.0,
     );
 
-    composer.shape(
+    composer.elevated(
         "navigation.panel",
         "Dialog",
         "open",
@@ -236,6 +258,9 @@ pub fn build(input: Input<'_>) -> NavigationSurface {
         "surface",
         "outline",
         composer.hairline(panel_w, panel_h),
+        // Straight down and wide: the panel is a sheet lifted off the editor,
+        // not a card tilted away from a light source.
+        Some(Shadow::drop(10.0, 28.0)),
     );
 
     // The query line is text on the panel with a rule under it, not a box
@@ -465,6 +490,34 @@ mod tests {
         let dark = bind_flat_scene_user_color_scheme(&prepared, &color_runtime("dark")).unwrap();
         let light = bind_flat_scene_user_color_scheme(&prepared, &color_runtime("light")).unwrap();
         assert_eq!(flat_scene_layout_identity(&dark), flat_scene_layout_identity(&light));
+    }
+
+    #[test]
+    fn the_panel_casts_a_shadow_and_nothing_else_does() {
+        let surface = surface();
+        for (id, sample) in &surface.scene.surfaces {
+            let expected = id == "navigation.panel";
+            assert_eq!(
+                sample.decoration.shadow.is_some(),
+                expected,
+                "{id} shadow presence"
+            );
+            // Both halves travel together or the surface will not resolve.
+            assert_eq!(sample.color.shadow_role.is_some(), expected, "{id} shadow role");
+        }
+    }
+
+    #[test]
+    fn the_shadow_reaches_past_the_panel_without_moving_it() {
+        let with_shadow = geometry_of(&surface(), "navigation.panel");
+        let shadow = with_shadow.shadow.expect("the panel casts one");
+        assert!(shadow.y > 0.0, "the shadow should fall below the panel");
+        assert!(
+            shadow.y + shadow.height + shadow.blur > with_shadow.height,
+            "the shadow should reach past the bottom edge"
+        );
+        // Decoration never participates in layout: the panel is where it was.
+        assert_eq!(with_shadow.x, geometry_of(&surface(), "navigation.panel").x);
     }
 
     #[test]

@@ -15,15 +15,15 @@ use crate::text::{Atlas, ATLAS};
 use super::language::{materialize_pixel_box_geometry, BoxKind};
 use super::ShaderFlatScene;
 
-/// pos.xy, rect centre.xy, half extents.xy, (radius, stroke), fill.rgba,
-/// stroke.rgba, uv.xy, mode.
-pub const VERTEX_FLOATS: usize = 19;
+/// pos.xy, rect centre.xy, half extents.xy, (radius, stroke, softness),
+/// fill.rgba, stroke.rgba, uv.xy, mode.
+pub const VERTEX_FLOATS: usize = 20;
 
 const VS: &str = r#"#version 330 core
 layout (location = 0) in vec2 a_pos;
 layout (location = 1) in vec2 a_center;
 layout (location = 2) in vec2 a_half;
-layout (location = 3) in vec2 a_params;
+layout (location = 3) in vec3 a_params;
 layout (location = 4) in vec4 a_fill;
 layout (location = 5) in vec4 a_edge;
 layout (location = 6) in vec2 a_uv;
@@ -31,7 +31,7 @@ layout (location = 7) in float a_mode;
 uniform vec2 u_screen;
 out vec2 v_local;
 out vec2 v_half;
-out vec2 v_params;
+out vec3 v_params;
 out vec4 v_fill;
 out vec4 v_edge;
 out vec2 v_uv;
@@ -55,7 +55,7 @@ void main() {
 const FS: &str = r#"#version 330 core
 in vec2 v_local;
 in vec2 v_half;
-in vec2 v_params;
+in vec3 v_params;
 in vec4 v_fill;
 in vec4 v_edge;
 in vec2 v_uv;
@@ -70,7 +70,10 @@ float sd_round_box(vec2 p, vec2 b, float r) {
 
 void main() {
     float d = sd_round_box(v_local, v_half, v_params.x);
-    float aa = max(fwidth(d), 1e-4);
+    // Softness widens the edge instead of adding a second shape: a shadow is
+    // the same rounded-box field with a longer fade, so it cannot drift out of
+    // agreement with the box it belongs to.
+    float aa = max(max(fwidth(d), 1e-4), v_params.z);
     float coverage = 1.0 - smoothstep(-aa, aa, d);
     float stroke = v_params.y;
     float ring = stroke > 0.0
@@ -100,6 +103,7 @@ pub struct Adapter {
 pub struct AdapterStats {
     pub surfaces: usize,
     pub round_boxes: usize,
+    pub shadows: usize,
     pub glyph_quads: usize,
     /// True when at least one surface origin is not on a cell boundary, which
     /// is the observable difference between this and a grid-addressed window.
@@ -117,7 +121,7 @@ impl Adapter {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
             let stride = (VERTEX_FLOATS * 4) as i32;
             for (index, size, offset) in
-                [(0, 2, 0), (1, 2, 8), (2, 2, 16), (3, 2, 24), (4, 4, 32), (5, 4, 48), (6, 2, 64), (7, 1, 72)]
+                [(0, 2, 0), (1, 2, 8), (2, 2, 16), (3, 3, 24), (4, 4, 36), (5, 4, 52), (6, 2, 68), (7, 1, 76)]
             {
                 gl.enable_vertex_attrib_array(index);
                 gl.vertex_attrib_pointer_f32(index, size, glow::FLOAT, false, stride, offset);
@@ -181,6 +185,22 @@ impl Adapter {
             if cell_h > 0.0 && (geometry.y / cell_h).fract().abs() > 1e-4 {
                 stats.origin_off_grid = true;
             }
+            // Painter order within one surface: the shadow belongs behind its
+            // own box, not behind the scene.
+            if let (Some(shadow), Some(color)) = (geometry.shadow, output.color.shadow) {
+                self.push_soft_box(
+                    geometry.x + shadow.x,
+                    geometry.y + shadow.y,
+                    shadow.width,
+                    shadow.height,
+                    shadow.corner_radius_x,
+                    0.0,
+                    shadow.blur,
+                    color,
+                    color,
+                );
+                stats.shadows += 1;
+            }
             self.push_box(
                 geometry.x,
                 geometry.y,
@@ -207,10 +227,30 @@ impl Adapter {
         fill: [f32; 4],
         edge: [f32; 4],
     ) {
-        // One pixel of bleed so the antialiased edge has somewhere to land.
-        let (x, y, w, h) = (x - 1.0, y - 1.0, w + 2.0, h + 2.0);
+        self.push_soft_box(x, y, w, h, radius, stroke, 0.0, fill, edge);
+    }
+
+    /// A box whose edge fades over `softness` pixels instead of one.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_soft_box(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        stroke: f32,
+        softness: f32,
+        fill: [f32; 4],
+        edge: [f32; 4],
+    ) {
+        // Enough bleed for the fade to land in. One pixel is right for an
+        // antialiased edge; a shadow needs its whole blur, or the quad clips
+        // the softest half of its own edge.
+        let bleed = softness.max(1.0);
+        let (x, y, w, h) = (x - bleed, y - bleed, w + bleed * 2.0, h + bleed * 2.0);
         let centre = (x + w / 2.0, y + h / 2.0);
-        let half = (w / 2.0 - 1.0, h / 2.0 - 1.0);
+        let half = (w / 2.0 - bleed, h / 2.0 - bleed);
         let corners = [
             (x, y),
             (x + w, y),
@@ -220,7 +260,19 @@ impl Adapter {
             (x, y + h),
         ];
         for (px, py) in corners {
-            self.vertex(px, py, centre, half, radius, stroke, fill, edge, (0.0, 0.0), 0.0);
+            self.vertex(
+                px,
+                py,
+                centre,
+                half,
+                radius,
+                stroke,
+                softness,
+                fill,
+                edge,
+                (0.0, 0.0),
+                0.0,
+            );
         }
     }
 
@@ -260,6 +312,7 @@ impl Adapter {
                         (0.0, 0.0),
                         0.0,
                         0.0,
+                        0.0,
                         color,
                         color,
                         (u, v),
@@ -282,14 +335,15 @@ impl Adapter {
         half: (f32, f32),
         radius: f32,
         stroke: f32,
+        softness: f32,
         fill: [f32; 4],
         edge: [f32; 4],
         uv: (f32, f32),
         mode: f32,
     ) {
         self.verts.extend_from_slice(&[
-            x, y, centre.0, centre.1, half.0, half.1, radius, stroke, fill[0], fill[1], fill[2],
-            fill[3], edge[0], edge[1], edge[2], edge[3], uv.0, uv.1, mode,
+            x, y, centre.0, centre.1, half.0, half.1, radius, stroke, softness, fill[0], fill[1],
+            fill[2], fill[3], edge[0], edge[1], edge[2], edge[3], uv.0, uv.1, mode,
         ]);
     }
 
@@ -373,7 +427,7 @@ mod tests {
     #[test]
     fn the_vertex_stride_matches_the_attribute_layout() {
         // pos2 + centre2 + half2 + params2 + fill4 + edge4 + uv2 + mode1
-        assert_eq!(VERTEX_FLOATS, 2 + 2 + 2 + 2 + 4 + 4 + 2 + 1);
+        assert_eq!(VERTEX_FLOATS, 2 + 2 + 2 + 3 + 4 + 4 + 2 + 1);
     }
 
     #[test]
