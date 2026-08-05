@@ -10,9 +10,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::buffer::Buffer;
+use super::buffers::{BufferId, BufferStore};
 use super::command;
 use super::key::{Code, Key, Named};
 use super::motion::{self, Kind, Motion};
+use super::window::{Direction, Rect, Tabs, WindowId, WindowView};
 use crate::keymap::{Keymap, Match, Rhs};
 use crate::luaconf::NvimConfig;
 
@@ -80,6 +82,7 @@ enum Await {
     Z,
     Leader,
     Register,
+    Window,
 }
 
 #[derive(Default)]
@@ -179,6 +182,8 @@ pub struct Options {
     /// `clipboard = unnamedplus`: yanks and deletes reach the system
     /// clipboard, and puts come back from it.
     pub clipboard_unnamed: bool,
+    pub splitbelow: bool,
+    pub splitright: bool,
 }
 
 impl Default for Options {
@@ -197,6 +202,8 @@ impl Default for Options {
             listchar_tab: '>',
             listchar_trail: '-',
             clipboard_unnamed: false,
+            splitbelow: false,
+            splitright: false,
         }
     }
 }
@@ -228,6 +235,8 @@ impl Options {
                 .option("clipboard")
                 .map(|value| matches!(value, crate::luaconf::Setting::Text(text) if text.contains("unnamed")))
                 .unwrap_or(fallback.clipboard_unnamed),
+            splitbelow: config.bool_option("splitbelow", fallback.splitbelow),
+            splitright: config.bool_option("splitright", fallback.splitright),
         }
     }
 
@@ -267,6 +276,9 @@ pub struct Message {
 
 pub struct Editor {
     pub buffer: Buffer,
+    pub buffers: BufferStore,
+    pub tabs: Tabs,
+    pub views: std::collections::BTreeMap<WindowId, WindowView>,
     pub cursor: (usize, usize),
     desired_col: usize,
     pub mode: Mode,
@@ -301,8 +313,15 @@ impl Default for Editor {
 
 impl Editor {
     pub fn new(buffer: Buffer) -> Self {
+        let buffers = BufferStore::new(buffer.clone());
+        let first_window = WindowId(1);
+        let mut views = std::collections::BTreeMap::new();
+        views.insert(first_window, WindowView::new(first_window, 1, BufferId(1)));
         Self {
             buffer,
+            buffers,
+            tabs: Tabs::new(first_window),
+            views,
             cursor: (0, 0),
             desired_col: 0,
             mode: Mode::Normal,
@@ -352,12 +371,58 @@ impl Editor {
         self.desired_col = 0;
         self.top_line = 0;
         self.mode = Mode::Normal;
+        self.save_focused_view();
         Ok(())
     }
 
-    pub fn set_view_rows(&mut self, rows: usize) {
+    pub fn buffer(&self) -> &Buffer {
+        &self.buffer
+    }
+
+    pub fn buffer_mut(&mut self) -> &mut Buffer {
+        &mut self.buffer
+    }
+
+    pub fn cursor(&self) -> (usize, usize) {
+        self.cursor
+    }
+
+    pub fn set_cursor(&mut self, cursor: (usize, usize)) {
+        self.cursor = cursor;
+        self.desired_col = cursor.1;
+        self.clamp_cursor();
+        self.save_focused_view();
+    }
+
+    pub fn top_line(&self) -> usize {
+        self.top_line
+    }
+
+    pub fn focus_window(&self) -> WindowId {
+        self.tabs.focus()
+    }
+
+    pub fn focused_view(&self) -> &WindowView {
+        self.views.get(&self.focus_window()).unwrap()
+    }
+
+    pub fn set_screen(&mut self, cols: usize, rows: usize) {
         self.view_rows = rows.max(1);
+        if let Some(view) = self.views.get_mut(&self.focus_window()) {
+            view.cols = cols.max(1);
+            view.rows = self.view_rows;
+        }
+        self.tabs.remember_geometry(
+            Rect::new(0, 0, self.view_rows, cols.max(1)),
+            self.options.splitbelow,
+            self.options.splitright,
+        );
         self.scroll_into_view();
+        self.save_focused_view();
+    }
+
+    pub fn set_view_rows(&mut self, rows: usize) {
+        self.set_screen(self.focused_view().cols, rows);
     }
 
     pub fn visual_range(&self) -> Option<((usize, usize), (usize, usize))> {
@@ -395,6 +460,7 @@ impl Editor {
         }
         self.feed_mapped(key, 0);
         self.scroll_into_view();
+        self.save_focused_view();
     }
 
     /// Resolve `key` against the owner's mappings, then act.
@@ -768,6 +834,18 @@ impl Editor {
                     };
                     self.consume_motion(motion);
                 }
+                Code::Char('t') => {
+                    self.save_focused_view();
+                    self.tabs.next_tab();
+                    self.load_focused_view();
+                    self.pending.clear();
+                }
+                Code::Char('T') => {
+                    self.save_focused_view();
+                    self.tabs.prev_tab();
+                    self.load_focused_view();
+                    self.pending.clear();
+                }
                 _ => self.pending.clear(),
             },
             Await::Find { forward, till } => match key.as_text() {
@@ -827,6 +905,10 @@ impl Editor {
                     self.pending.clear();
                 }
             }
+            Await::Window => match key.code {
+                Code::Char(ch) => self.window_command(ch),
+                _ => self.pending.clear(),
+            },
         }
     }
 
@@ -866,6 +948,7 @@ impl Editor {
             }
             'e' => self.top_line = (self.top_line + 1).min(self.max_top_line()),
             'y' => self.top_line = self.top_line.saturating_sub(1),
+            'w' => self.pending.awaiting = Some(Await::Window),
             _ => {}
         }
     }
@@ -1566,6 +1649,77 @@ impl Editor {
         self.buffer.line_count().saturating_sub(1)
     }
 
+    fn save_focused_view(&mut self) {
+        let focus = self.focus_window();
+        if let Some(view) = self.views.get_mut(&focus) {
+            view.cursor = self.cursor;
+            view.desired_col = self.desired_col;
+            view.top_line = self.top_line;
+            view.rows = self.view_rows;
+        }
+        let id = self.buffers.current_id();
+        if let Some(slot) = self.buffers.get_mut(id) {
+            *slot = self.buffer.clone();
+        }
+    }
+
+    fn load_focused_view(&mut self) {
+        let focus = self.focus_window();
+        if let Some(view) = self.views.get(&focus).cloned() {
+            self.cursor = view.cursor;
+            self.desired_col = view.desired_col;
+            self.top_line = view.top_line;
+            self.view_rows = view.rows.max(1);
+        }
+        self.clamp_cursor();
+    }
+
+    fn window_command(&mut self, ch: char) {
+        self.save_focused_view();
+        match ch {
+            'h' | 'j' | 'k' | 'l' => {
+                let dir = Direction::from_vim(ch).unwrap();
+                self.tabs.focus_dir(dir);
+                self.load_focused_view();
+            }
+            's' | 'S' => self.split_window(false),
+            'v' => self.split_window(true),
+            'c' | 'q' => {
+                let old = self.focus_window();
+                if self.tabs.close().is_some() {
+                    self.views.remove(&old);
+                    self.load_focused_view();
+                }
+            }
+            'o' => {
+                let focus = self.focus_window();
+                self.tabs.only();
+                self.views.retain(|id, _| *id == focus);
+                self.load_focused_view();
+            }
+            'w' => {
+                self.tabs.cycle_focus();
+                self.load_focused_view();
+            }
+            _ => {}
+        }
+        self.pending.clear();
+    }
+
+    fn split_window(&mut self, vertical: bool) {
+        let old_view = self.focused_view().clone();
+        let id = if vertical {
+            self.tabs.split_vertical(self.options.splitright)
+        } else {
+            self.tabs.split_horizontal(self.options.splitbelow)
+        };
+        let mut view = old_view;
+        view.id = id;
+        view.grid = self.tabs.grid_for_new_window();
+        self.views.insert(id, view);
+        self.load_focused_view();
+    }
+
     fn scroll_into_view(&mut self) {
         let rows = self.view_rows.max(1);
         if self.cursor.0 < self.top_line {
@@ -1745,6 +1899,35 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_w_moves_focus_without_moving_the_cursor_column() {
+        let mut e = editor("abcd\n");
+        e.options.splitright = true;
+        e.feed_str("ll<C-w>v");
+        let right = e.focus_window();
+        assert_eq!(e.cursor.1, 2);
+        e.feed_str("<C-w>h");
+        assert_ne!(e.focus_window(), right);
+        assert_eq!(e.cursor.1, 2);
+        e.feed_str("<C-w>w");
+        assert_eq!(e.focus_window(), right);
+        assert_eq!(e.cursor.1, 2);
+    }
+
+    #[test]
+    fn ctrl_w_split_close_and_only_update_the_window_model() {
+        let mut e = editor("one\n");
+        assert_eq!(e.views.len(), 1);
+        e.feed_str("<C-w>s");
+        assert_eq!(e.views.len(), 2);
+        e.feed_str("<C-w>v");
+        assert_eq!(e.views.len(), 3);
+        e.feed_str("<C-w>c");
+        assert_eq!(e.views.len(), 2);
+        e.feed_str("<C-w>o");
+        assert_eq!(e.views.len(), 1);
+    }
+
+    #[test]
     fn japanese_text_is_edited_by_character_not_byte() {
         let mut e = editor("あいう\n");
         e.feed_str("lx");
@@ -1897,5 +2080,24 @@ mod tests {
         assert_eq!(e.cursor.0, 0);
         e.feed_str("2G");
         assert_eq!(e.cursor.0, 1);
+    }
+
+    #[test]
+    fn the_real_config_tab_window_keys_are_focus_keys_when_present() {
+        let config = crate::luaconf::load_default();
+        if config.path.is_none() {
+            return;
+        }
+        let mut e = Editor::with_config(Buffer::from_text("abcd\n"), &config);
+        e.feed_str("l<C-w>v");
+        let right = e.focus_window();
+        e.feed_str("l");
+        assert_eq!(e.cursor.1, 2);
+        e.feed_str("<tab>h");
+        assert_ne!(e.focus_window(), right);
+        assert_eq!(e.cursor.1, 1);
+        e.feed_str("<tab>l");
+        assert_eq!(e.focus_window(), right);
+        assert_eq!(e.cursor.1, 2);
     }
 }

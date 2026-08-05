@@ -293,14 +293,21 @@ mod tests {
         let keymap = Keymap::from_config(&config);
         for keys in ["<F5>", "<c-S>", "<C-s>"] {
             let parsed = parse(keys);
-            assert_eq!(parsed.len(), 1, "{keys} did not parse as one key: {parsed:?}");
+            assert_eq!(
+                parsed.len(),
+                1,
+                "{keys} did not parse as one key: {parsed:?}"
+            );
             assert!(
                 matches!(keymap.lookup('n', &parsed), Match::Exact(Rhs::Command(_))),
                 "{keys} reaches no command in the owner's config",
             );
         }
         // `<c-S>` and `<C-s>` are the same key, so they must resolve alike.
-        assert_eq!(keymap.lookup('n', &parse("<c-S>")), keymap.lookup('n', &parse("<C-s>")));
+        assert_eq!(
+            keymap.lookup('n', &parse("<c-S>")),
+            keymap.lookup('n', &parse("<C-s>"))
+        );
     }
 
     /// The owner's own file, when it is there.

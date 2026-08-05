@@ -203,7 +203,7 @@ impl Host {
 
     fn render(&mut self) -> Option<Vec<RedrawEvent>> {
         let painter = self.painter.as_mut()?;
-        self.editor.set_view_rows(painter.text_rows());
+        self.editor.set_screen(painter.cols(), painter.text_rows());
         let events = painter.render(&self.editor);
         // A render with nothing but a cursor move and a flush is still traffic
         // worth sending; a render with neither is not.
@@ -259,7 +259,7 @@ impl Host {
                 let rows = args.get(1).and_then(Value::as_u64).unwrap_or(24) as usize;
                 if let Some(painter) = &mut self.painter {
                     painter.resize(cols, rows);
-                    self.editor.set_view_rows(painter.text_rows());
+                    self.editor.set_screen(painter.cols(), painter.text_rows());
                 }
                 (None, Value::Nil)
             }
@@ -342,7 +342,7 @@ impl Host {
 
     fn attach(&mut self, cols: usize, rows: usize, options: UiOptions) {
         let mut painter = Painter::themed(cols, rows, options, self.theme);
-        self.editor.set_view_rows(painter.text_rows());
+        self.editor.set_screen(painter.cols(), painter.text_rows());
         let mut events = painter.attach_events();
         events.extend(painter.render(&self.editor));
         self.painter = Some(painter);

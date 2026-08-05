@@ -8,7 +8,9 @@
 
 use rmpv::Value;
 
-use crate::core::editor::{Editor, Mode, Visual};
+use crate::core::buffer::Buffer;
+use crate::core::editor::{Editor, Mode, Options, Visual};
+use crate::core::window::WindowView;
 use crate::nvim::{RedrawEvent, UiOptions};
 
 pub const GRID: u64 = 1;
@@ -183,6 +185,131 @@ pub struct GridPainter {
     previous: Vec<Cell>,
     current: Vec<Cell>,
     painted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderCell {
+    pub text: char,
+    pub hl: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenderRow {
+    pub cells: Vec<RenderCell>,
+    pub fill: u64,
+}
+
+pub struct FocusRender<'a> {
+    pub visual_range: Option<((usize, usize), (usize, usize))>,
+    pub visual_kind: Option<Visual>,
+    pub last_search: Option<&'a str>,
+    pub highlight_search: bool,
+}
+
+pub fn render_window_lines(
+    view: &WindowView,
+    buffer: &Buffer,
+    options: &Options,
+    focus: Option<FocusRender<'_>>,
+) -> Vec<RenderRow> {
+    let mut rows = Vec::new();
+    let gutter = gutter_width(buffer.line_count());
+    let visual = focus.as_ref().and_then(|state| state.visual_range);
+    let visual_kind = focus.as_ref().and_then(|state| state.visual_kind);
+    let last_search = focus.as_ref().and_then(|state| state.last_search);
+    let highlight_search = focus.as_ref().is_some_and(|state| state.highlight_search);
+
+    for screen_row in 0..view.rows {
+        let line = view.top_line + screen_row;
+        if line >= buffer.line_count() {
+            rows.push(RenderRow {
+                cells: vec![RenderCell {
+                    text: '~',
+                    hl: hl::NON_TEXT,
+                }],
+                fill: hl::DEFAULT,
+            });
+            continue;
+        }
+
+        let mut cells = Vec::new();
+        let number = match options.line_number(line, view.cursor.0) {
+            Some(value) => format!("{:>width$} ", value, width = gutter - 1),
+            None => " ".repeat(gutter),
+        };
+        let number_hl = if line == view.cursor.0 {
+            hl::CURSOR_LINE_NR
+        } else {
+            hl::LINE_NR
+        };
+        for ch in number.chars() {
+            cells.push(RenderCell {
+                text: ch,
+                hl: number_hl,
+            });
+        }
+
+        let text = buffer.line_text(line);
+        let spans = markdown_spans(&text);
+        let on_cursor_line = options.cursorline && line == view.cursor.0;
+        let rest = if on_cursor_line {
+            hl::CURSOR_LINE
+        } else {
+            hl::DEFAULT
+        };
+        let trailing_from = if options.list {
+            text.char_indices()
+                .rev()
+                .take_while(|(_, c)| c.is_whitespace())
+                .last()
+                .map(|_| {
+                    text.chars().count()
+                        - text.chars().rev().take_while(|c| c.is_whitespace()).count()
+                })
+        } else {
+            None
+        };
+        let mut col = gutter;
+        for (index, ch) in text.chars().enumerate() {
+            if col >= view.cols {
+                break;
+            }
+            let mut style = spans.get(index).copied().unwrap_or(rest);
+            let mut ch = ch;
+            if options.list {
+                if ch == '\t' {
+                    ch = options.listchar_tab;
+                    style = hl::NON_TEXT;
+                } else if trailing_from.is_some_and(|from| index >= from) {
+                    ch = options.listchar_trail;
+                    style = hl::NON_TEXT;
+                }
+            }
+            if in_visual(visual, visual_kind, line, index, buffer) {
+                style = hl::VISUAL;
+            } else if highlight_search {
+                if let Some(pattern) = last_search {
+                    if !pattern.is_empty() && matches_at(&text, pattern, index) {
+                        style = hl::SEARCH;
+                    }
+                }
+            }
+            cells.push(RenderCell {
+                text: ch,
+                hl: style,
+            });
+            col += char_width(ch);
+        }
+        let fill = if visual_kind == Some(Visual::Line)
+            && visual.is_some_and(|(a, b)| line >= a.0 && line <= b.0)
+        {
+            hl::VISUAL
+        } else {
+            rest
+        };
+        rows.push(RenderRow { cells, fill });
+    }
+    rows
 }
 
 impl GridPainter {
@@ -465,89 +592,32 @@ impl Painter {
     fn compose(&mut self, editor: &Editor) {
         self.grid.clear_current();
         let text_rows = self.text_rows();
-        let gutter = gutter_width(editor.buffer.line_count());
-        let visual = editor.visual_range();
-        let visual_kind = editor.visual_kind();
+        let mut view = editor.focused_view().clone();
+        view.cursor = editor.cursor;
+        view.top_line = editor.top_line;
+        view.rows = text_rows;
+        view.cols = self.cols();
+        let rows = render_window_lines(
+            &view,
+            &editor.buffer,
+            &editor.options,
+            Some(FocusRender {
+                visual_range: editor.visual_range(),
+                visual_kind: editor.visual_kind(),
+                last_search: editor.last_search.as_deref(),
+                highlight_search: editor.highlight_search(),
+            }),
+        );
 
-        for screen_row in 0..text_rows {
-            let line = editor.top_line + screen_row;
-            if line >= editor.buffer.line_count() {
-                self.grid.put(screen_row, 0, '~', hl::NON_TEXT);
-                self.grid.fill(screen_row, 1, hl::DEFAULT);
-                continue;
-            }
-            // `number` + `relativenumber` from the owner's config: the cursor's
-            // own line reads its number, the rest read the distance to it.
-            let number = match editor.options.line_number(line, editor.cursor.0) {
-                Some(value) => format!("{:>width$} ", value, width = gutter - 1),
-                None => " ".repeat(gutter),
-            };
-            let number_hl = if line == editor.cursor.0 {
-                hl::CURSOR_LINE_NR
-            } else {
-                hl::LINE_NR
-            };
-            self.grid.write(screen_row, 0, &number, number_hl);
-
-            let text = editor.buffer.line_text(line);
-            let spans = markdown_spans(&text);
-            let on_cursor_line = editor.options.cursorline && line == editor.cursor.0;
-            let rest = if on_cursor_line {
-                hl::CURSOR_LINE
-            } else {
-                hl::DEFAULT
-            };
-            // `list` + `listchars`: a tab and a trailing space are drawn as the
-            // characters the config names, in the non-text colour, so
-            // whitespace the file carries is visible rather than implied.
-            let trailing_from = if editor.options.list {
-                text.char_indices()
-                    .rev()
-                    .take_while(|(_, c)| c.is_whitespace())
-                    .last()
-                    .map(|_| {
-                        text.chars().count()
-                            - text.chars().rev().take_while(|c| c.is_whitespace()).count()
-                    })
-            } else {
-                None
-            };
-            let mut col = gutter;
-            for (index, ch) in text.chars().enumerate() {
+        for (screen_row, row) in rows.iter().enumerate() {
+            let mut col = 0;
+            for cell in &row.cells {
                 if col >= self.cols() {
                     break;
                 }
-                let mut style = spans.get(index).copied().unwrap_or(rest);
-                let mut ch = ch;
-                if editor.options.list {
-                    if ch == '\t' {
-                        ch = editor.options.listchar_tab;
-                        style = hl::NON_TEXT;
-                    } else if trailing_from.is_some_and(|from| index >= from) {
-                        ch = editor.options.listchar_trail;
-                        style = hl::NON_TEXT;
-                    }
-                }
-                if in_visual(visual, visual_kind, line, index, &editor.buffer) {
-                    style = hl::VISUAL;
-                } else if editor.highlight_search() {
-                    if let Some(pattern) = editor.last_search.as_deref() {
-                        if !pattern.is_empty() && matches_at(&text, pattern, index) {
-                            style = hl::SEARCH;
-                        }
-                    }
-                }
-                col = self.grid.put(screen_row, col, ch, style);
+                col = self.grid.put(screen_row, col, cell.text, cell.hl);
             }
-            // A linewise visual selection covers the newline too, so the row is
-            // filled to the edge rather than stopping at the last character.
-            if visual_kind == Some(Visual::Line)
-                && visual.is_some_and(|(a, b)| line >= a.0 && line <= b.0)
-            {
-                self.grid.fill(screen_row, col, hl::VISUAL);
-            } else {
-                self.grid.fill(screen_row, col, rest);
-            }
+            self.grid.fill(screen_row, col, row.fill);
         }
 
         self.compose_status(editor);
@@ -911,6 +981,44 @@ mod tests {
         let mut editor = Editor::new(Buffer::from_text(text));
         editor.options.number = true;
         editor
+    }
+
+    #[test]
+    fn render_window_lines_can_be_tested_without_an_editor() {
+        let buffer = Buffer::from_text("# title\nplain  \n");
+        let mut options = Options::default();
+        options.number = true;
+        options.list = true;
+        options.listchar_trail = '.';
+        let view = WindowView {
+            id: crate::core::WindowId(1),
+            grid: 1,
+            buffer: crate::core::BufferId(1),
+            cursor: (1, 0),
+            desired_col: 0,
+            top_line: 0,
+            cols: 20,
+            rows: 3,
+        };
+        let rows = render_window_lines(
+            &view,
+            &buffer,
+            &options,
+            Some(FocusRender {
+                visual_range: None,
+                visual_kind: None,
+                last_search: Some("ain"),
+                highlight_search: true,
+            }),
+        );
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].cells[4].text, '#');
+        assert_eq!(rows[0].cells[4].hl, hl::HEADING);
+        assert!(rows[1]
+            .cells
+            .iter()
+            .any(|cell| cell.text == '.' && cell.hl == hl::NON_TEXT));
+        assert_eq!(rows[2].cells[0].text, '~');
     }
 
     #[test]
