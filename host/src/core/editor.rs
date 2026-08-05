@@ -13,6 +13,8 @@ use super::buffer::Buffer;
 use super::command;
 use super::key::{Code, Key, Named};
 use super::motion::{self, Kind, Motion};
+use crate::keymap::{Keymap, Match, Rhs};
+use crate::luaconf::NvimConfig;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Visual {
@@ -61,6 +63,9 @@ enum Operator {
     Yank,
     Indent,
     Dedent,
+    /// substitute.nvim, which the owner's config maps onto `s` / `ss` / `S`:
+    /// replace the span with the unnamed register instead of deleting it.
+    Substitute,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -137,6 +142,81 @@ pub enum Request {
     FollowLink,
 }
 
+/// The options this editor can act on, read out of the owner's config.
+///
+/// Derived at load time rather than written down: the values live in
+/// `init.lua`, and a copy here would be a second source that drifts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Options {
+    pub shiftwidth: usize,
+    pub expandtab: bool,
+    pub number: bool,
+    pub relativenumber: bool,
+    pub cursorline: bool,
+    pub ignorecase: bool,
+    pub smartcase: bool,
+    pub hlsearch: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        // Vim's defaults, used only when there is no config to read.
+        Self {
+            shiftwidth: 8,
+            expandtab: false,
+            number: false,
+            relativenumber: false,
+            cursorline: false,
+            ignorecase: false,
+            smartcase: false,
+            hlsearch: true,
+        }
+    }
+}
+
+impl Options {
+    pub fn from_config(config: &NvimConfig) -> Self {
+        let fallback = Options::default();
+        Self {
+            shiftwidth: config.usize_option("shiftwidth", fallback.shiftwidth).max(1),
+            expandtab: config.bool_option("expandtab", fallback.expandtab),
+            number: config.bool_option("number", fallback.number),
+            relativenumber: config.bool_option("relativenumber", fallback.relativenumber),
+            cursorline: config.bool_option("cursorline", fallback.cursorline),
+            ignorecase: config.bool_option("ignorecase", fallback.ignorecase),
+            smartcase: config.bool_option("smartcase", fallback.smartcase),
+            hlsearch: config.bool_option("hlsearch", fallback.hlsearch),
+        }
+    }
+
+    pub fn indent(&self) -> String {
+        if self.expandtab {
+            " ".repeat(self.shiftwidth)
+        } else {
+            "\t".to_string()
+        }
+    }
+
+    /// `smartcase` applies only on top of `ignorecase`, and it is the pattern
+    /// that decides: a capital in it was typed on purpose.
+    pub fn case_sensitive(&self, pattern: &str) -> bool {
+        if !self.ignorecase {
+            return true;
+        }
+        self.smartcase && pattern.chars().any(char::is_uppercase)
+    }
+
+    /// The gutter number for `line`, given where the cursor is.
+    pub fn line_number(&self, line: usize, cursor_line: usize) -> Option<usize> {
+        match (self.number, self.relativenumber) {
+            (false, false) => None,
+            (true, false) => Some(line + 1),
+            (_, true) if line == cursor_line => Some(line + 1),
+            (_, true) => Some(line.abs_diff(cursor_line)),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Message {
     pub text: String,
@@ -159,6 +239,10 @@ pub struct Editor {
     visual_anchor: (usize, usize),
     pub top_line: usize,
     pub view_rows: usize,
+    pub options: Options,
+    keymap: Keymap,
+    /// Keys typed that are still a prefix of some mapping.
+    pending_keys: Vec<Key>,
     pub requests: Vec<Request>,
     /// Keys typed while the host owns input (the navigation surface is open).
     /// The core stops interpreting them; it does not stop existing.
@@ -189,9 +273,24 @@ impl Editor {
             visual_anchor: (0, 0),
             top_line: 0,
             view_rows: 24,
+            options: Options::default(),
+            keymap: Keymap::default(),
+            pending_keys: Vec::new(),
             requests: Vec::new(),
             suspended: false,
         }
+    }
+
+    /// An editor that behaves the way the owner's `init.lua` says.
+    pub fn with_config(buffer: Buffer, config: &NvimConfig) -> Self {
+        let mut editor = Self::new(buffer);
+        editor.options = Options::from_config(config);
+        editor.keymap = Keymap::from_config(config);
+        editor
+    }
+
+    pub fn mapping_count(&self) -> usize {
+        self.keymap.len()
     }
 
     pub fn open(&mut self, path: PathBuf) -> std::io::Result<()> {
@@ -241,12 +340,150 @@ impl Editor {
         if self.suspended {
             return;
         }
+        self.feed_mapped(key, 0);
+        self.scroll_into_view();
+    }
+
+    /// Resolve `key` against the owner's mappings, then act.
+    ///
+    /// `depth` stops a mapping whose right-hand side reaches its own left-hand
+    /// side from recursing forever.
+    fn feed_mapped(&mut self, key: Key, depth: usize) {
+        // A key that is an *argument* is not a mapping: after `f`, the next key
+        // names the character to find, and after `"` it names a register.
+        if self.pending.awaiting.is_some() || depth > 16 || self.mode == Mode::Cmdline {
+            self.dispatch(key);
+            return;
+        }
+        let mode = self.keymap_mode();
+        self.pending_keys.push(key);
+        match self.keymap.lookup(mode, &self.pending_keys) {
+            Match::Prefix => {}
+            Match::Exact(rhs) => {
+                let rhs = rhs.clone();
+                self.pending_keys.clear();
+                self.run(&rhs, depth);
+            }
+            Match::None => {
+                let keys = std::mem::take(&mut self.pending_keys);
+                // The longest prefix that *is* a mapping still fires: `s` is
+                // mapped and `sx` is not, so `s` runs its mapping and `x`
+                // becomes the next command — vim's timeout, resolved by the
+                // next key instead of by a clock.
+                let split = (1..=keys.len())
+                    .rev()
+                    .find(|&n| matches!(self.keymap.lookup(mode, &keys[..n]), Match::Exact(_)))
+                    .unwrap_or(0);
+                if split > 0 {
+                    if let Match::Exact(rhs) = self.keymap.lookup(mode, &keys[..split]) {
+                        let rhs = rhs.clone();
+                        self.run(&rhs, depth);
+                    }
+                } else {
+                    self.dispatch(keys[0]);
+                }
+                for key in &keys[split.max(1)..] {
+                    self.feed_mapped(*key, depth);
+                }
+            }
+        }
+    }
+
+    fn keymap_mode(&self) -> char {
+        match self.mode {
+            Mode::Normal => 'n',
+            Mode::Insert => 'i',
+            Mode::Visual(_) => 'v',
+            Mode::Cmdline => 'c',
+        }
+    }
+
+    fn dispatch(&mut self, key: Key) {
         match self.mode {
             Mode::Insert => self.feed_insert(key),
             Mode::Cmdline => self.feed_cmdline(key),
             Mode::Normal | Mode::Visual(_) => self.feed_normal(key),
         }
-        self.scroll_into_view();
+    }
+
+    fn run(&mut self, rhs: &Rhs, depth: usize) {
+        match rhs {
+            Rhs::Nothing => {}
+            Rhs::Keys(keys) => {
+                for key in keys {
+                    self.feed_mapped(*key, depth + 1);
+                }
+            }
+            Rhs::Command(command) => self.run_command(command),
+        }
+    }
+
+    /// Carry out a mapped command, or say plainly that it cannot be.
+    ///
+    /// The alternative — ignoring it — makes a key that used to do something
+    /// look broken rather than unimplemented.
+    fn run_command(&mut self, command: &str) {
+        let command = command.trim();
+        if let Some(call) = command.strip_prefix("lua ") {
+            return self.run_lua_command(call.trim());
+        }
+        match command {
+            "Telescope find_files" | "FzfLua files" | "Telescope git_files" => {
+                self.requests.push(Request::OpenNavigation(Scope::Files))
+            }
+            _ if command.starts_with("Telescope file_browser") => {
+                self.requests.push(Request::OpenNavigation(Scope::Files))
+            }
+            "Telescope buffers" | "Telescope oldfiles" => {
+                self.requests.push(Request::OpenNavigation(Scope::Notes))
+            }
+            _ => {
+                // Anything else is an Ex command; the ones this editor knows
+                // are handled there, and the rest report themselves.
+                let before = self.requests.len();
+                let had_message = self.message.is_some();
+                command::execute(self, command);
+                let unhandled = self.requests.len() == before
+                    && self
+                        .message
+                        .as_ref()
+                        .is_some_and(|m| m.error && m.text.starts_with("E492"));
+                if unhandled {
+                    self.message = Some(Message {
+                        text: format!("{command}: mapped, but this host has no such command"),
+                        error: true,
+                    });
+                } else if !had_message && self.message.is_none() {
+                    // handled quietly
+                }
+            }
+        }
+    }
+
+    /// The `lua require("substitute").…()` family the owner maps onto s/ss/S.
+    fn run_lua_command(&mut self, call: &str) {
+        if !call.contains("substitute") {
+            self.message = Some(Message {
+                text: format!("{call}: no Lua runtime in the editing path"),
+                error: true,
+            });
+            return;
+        }
+        let (line, col) = self.cursor;
+        if call.contains(".line()") {
+            self.apply_operator(Operator::Substitute, Span::Lines { from: line, to: line });
+        } else if call.contains(".eol()") {
+            let end = (line, self.buffer.line_len(line));
+            self.apply_operator(Operator::Substitute, Span::Chars { start: (line, col), end });
+        } else if call.contains(".visual()") {
+            if let Some(kind) = self.visual_kind() {
+                let span = self.visual_span(kind);
+                self.apply_operator(Operator::Substitute, span);
+                self.mode = Mode::Normal;
+            }
+        } else if call.contains(".operator()") {
+            self.pending.operator = Some(Operator::Substitute);
+        }
     }
 
     fn feed_insert(&mut self, key: Key) {
@@ -275,8 +512,9 @@ impl Editor {
                 self.buffer.delete_range_in_line(self.cursor.0, self.cursor.1, self.cursor.1 + 1);
             }
             Code::Named(Named::Tab) => {
-                self.buffer.insert_str(self.cursor.0, self.cursor.1, "    ");
-                self.cursor.1 += 4;
+                let indent = self.options.indent();
+                self.buffer.insert_str(self.cursor.0, self.cursor.1, &indent);
+                self.cursor.1 += indent.chars().count();
             }
             Code::Named(Named::Left) => self.move_by(Motion::Left, 1),
             Code::Named(Named::Right) => self.move_by(Motion::Right, 1),
@@ -881,6 +1119,33 @@ impl Editor {
                 self.cursor = start;
                 self.enter_insert();
             }
+            // substitute.nvim: the span is replaced by the unnamed register
+            // rather than deleted. What it removes does not go into a register
+            // — that is the whole point of having it beside `d`.
+            (Operator::Substitute, span) => {
+                let replacement = self.registers.get(&'"').cloned().unwrap_or_default();
+                self.buffer.begin_change(self.cursor);
+                match span {
+                    Span::Lines { from, to } => {
+                        self.buffer.remove_lines(from, to - from + 1);
+                        let mut at = from;
+                        for line in &replacement.lines {
+                            self.buffer.insert_line(at, line.chars().collect());
+                            at += 1;
+                        }
+                        self.cursor = (from.min(self.buffer.line_count() - 1), 0);
+                    }
+                    Span::Chars { start, end } => {
+                        self.cut(start, end);
+                        let text = replacement.lines.join("\n");
+                        let text = text.replace('\n', " ");
+                        self.buffer.insert_str(start.0, start.1, &text);
+                        self.cursor = (start.0, start.1 + text.chars().count());
+                    }
+                }
+                self.buffer.commit_change();
+                self.clamp_cursor();
+            }
             (Operator::Indent | Operator::Dedent, span) => {
                 let (from, to) = match span {
                     Span::Lines { from, to } => (from, to),
@@ -889,14 +1154,15 @@ impl Editor {
                 self.buffer.begin_change(self.cursor);
                 for line in from..=to.min(self.buffer.line_count() - 1) {
                     let mut row: Vec<char> = self.buffer.line(line).to_vec();
+                    let width = self.options.shiftwidth;
                     if operator == Operator::Indent {
                         if !row.is_empty() {
-                            for _ in 0..4 {
+                            for _ in 0..width {
                                 row.insert(0, ' ');
                             }
                         }
                     } else {
-                        for _ in 0..4 {
+                        for _ in 0..width {
                             if row.first() == Some(&' ') {
                                 row.remove(0);
                             }
@@ -1016,6 +1282,12 @@ impl Editor {
         self.mode = Mode::Insert;
     }
 
+    /// Whether matches should be painted. `hlsearch = false` is in the owner's
+    /// config, and the editor was highlighting every match regardless.
+    pub fn highlight_search(&self) -> bool {
+        self.options.hlsearch
+    }
+
     pub fn search_next(&mut self, forward: bool) {
         let Some(pattern) = self.last_search.clone() else { return };
         if pattern.is_empty() {
@@ -1029,7 +1301,10 @@ impl Editor {
             } else {
                 (line + lines - step % lines) % lines
             };
-            let text = self.buffer.line_text(index);
+            let raw = self.buffer.line_text(index);
+            let sensitive = self.options.case_sensitive(&pattern);
+            let text = if sensitive { raw.clone() } else { raw.to_lowercase() };
+            let pattern = if sensitive { pattern.clone() } else { pattern.to_lowercase() };
             let found = if forward {
                 let from = if step == 0 { char_boundary(&text, col + 1) } else { 0 };
                 if from > text.len() { None } else { text[from..].find(&pattern).map(|at| from + at) }
@@ -1230,13 +1505,110 @@ mod tests {
     }
 
     #[test]
-    fn indent_and_dedent_move_by_four_spaces() {
+    fn indent_moves_by_the_configured_shiftwidth() {
+        // With no config to read, vim's own default applies rather than a
+        // number of this editor's choosing.
         let mut e = editor("one\ntwo\n");
+        assert_eq!(e.options.shiftwidth, 8);
         e.feed_str(">j");
-        assert_eq!(e.buffer.line_text(0), "    one");
-        assert_eq!(e.buffer.line_text(1), "    two");
+        assert_eq!(e.buffer.line_text(0), "        one");
         e.feed_str("<<");
         assert_eq!(e.buffer.line_text(0), "one");
+
+        let mut config = crate::luaconf::NvimConfig::default();
+        config.options.insert("shiftwidth".into(), crate::luaconf::Setting::Number(2.0));
+        config.options.insert("expandtab".into(), crate::luaconf::Setting::Bool(true));
+        let mut e = Editor::with_config(Buffer::from_text("one\ntwo\n"), &config);
+        e.feed_str(">j");
+        assert_eq!(e.buffer.line_text(0), "  one");
+        assert_eq!(e.buffer.line_text(1), "  two");
+    }
+
+    /// The mappings are the owner's, not this editor's. These come from a
+    /// config built in the test, so what is checked is that the engine applies
+    /// whatever it read.
+    #[test]
+    fn a_mapped_key_sequence_replaces_the_builtin() {
+        let mut config = crate::luaconf::NvimConfig::default();
+        config.globals.insert("mapleader".into(), crate::luaconf::Setting::Text(" ".into()));
+        for (mode, lhs, rhs) in [
+            ("n", "Y", "y$"),
+            ("n", "H", "^"),
+            ("n", "L", "$"),
+            ("i", "kj", "<ESC>"),
+            ("n", "fj", "2j"),
+        ] {
+            config.mappings.push(crate::luaconf::Mapping {
+                mode: mode.into(),
+                lhs: lhs.into(),
+                rhs: rhs.into(),
+            });
+        }
+        let mut e = Editor::with_config(Buffer::from_text("  alpha beta\ntwo\nthree\n"), &config);
+
+        // Y is y$, not yy: putting it back gives characters, not a line.
+        e.feed_str("wwY$p");
+        assert_eq!(e.buffer.line_text(0), "  alpha betabeta");
+
+        e.feed_str("H");
+        assert_eq!(e.cursor.1, 2, "H should be ^, the first non-blank");
+        e.feed_str("L");
+        assert_eq!(e.cursor.1, e.buffer.line_len(0) - 1, "L should be $");
+
+        // kj leaves insert mode; the k must not be left in the buffer.
+        e.feed_str("ggIx");
+        assert_eq!(e.mode, Mode::Insert);
+        e.feed_str("kj");
+        assert_eq!(e.mode, Mode::Normal);
+        assert!(e.buffer.line_text(0).starts_with("  x"), "{}", e.buffer.line_text(0));
+
+        // fj is a mapping; f followed by anything else is still find-character.
+        // A fresh buffer, because the edits above moved the columns.
+        let mut e = Editor::with_config(Buffer::from_text("  alpha beta\ntwo\nthree\n"), &config);
+        e.feed_str("fj");
+        assert_eq!(e.cursor.0, 2, "fj should be the mapping, not find-j");
+        e.feed_str("gg0fb");
+        assert_eq!(e.cursor, (0, 8), "f followed by anything else still finds");
+    }
+
+    #[test]
+    fn a_mapped_command_reaches_the_host_and_an_unknown_one_says_so() {
+        let mut config = crate::luaconf::NvimConfig::default();
+        config.globals.insert("mapleader".into(), crate::luaconf::Setting::Text(" ".into()));
+        for (mode, lhs, rhs) in [
+            ("n", "<space>o", "<cmd>Telescope find_files<cr>"),
+            ("n", "<Leader>q", "<cmd>q<CR>"),
+            ("n", "<F5>", "<cmd>Jaq<CR>"),
+        ] {
+            config.mappings.push(crate::luaconf::Mapping {
+                mode: mode.into(),
+                lhs: lhs.into(),
+                rhs: rhs.into(),
+            });
+        }
+        let mut e = Editor::with_config(Buffer::from_text("x\n"), &config);
+        e.feed_str(" o");
+        assert_eq!(e.requests, vec![Request::OpenNavigation(Scope::Files)]);
+        e.feed_str(" q");
+        assert!(e.requests.contains(&Request::Quit));
+        e.feed_str("<F5>");
+        assert!(
+            e.message.as_ref().unwrap().text.contains("no such command"),
+            "an unrunnable mapping must say so: {:?}",
+            e.message
+        );
+    }
+
+    #[test]
+    fn search_follows_ignorecase_and_smartcase() {
+        let mut config = crate::luaconf::NvimConfig::default();
+        config.options.insert("ignorecase".into(), crate::luaconf::Setting::Bool(true));
+        config.options.insert("smartcase".into(), crate::luaconf::Setting::Bool(true));
+        let mut e = Editor::with_config(Buffer::from_text("alpha\nAlpha\n"), &config);
+        e.feed_str("/alpha<CR>");
+        assert_eq!(e.cursor.0, 1, "a lowercase pattern should match either case");
+        e.feed_str("gg/Alpha<CR>");
+        assert_eq!(e.cursor.0, 1, "a capital in the pattern means it was meant");
     }
 
     #[test]

@@ -7,6 +7,8 @@
 //! function call that only this program knows how to make.
 
 mod core;
+mod keymap;
+mod luaconf;
 mod notes;
 mod nvim;
 mod picker;
@@ -140,11 +142,7 @@ impl Link {
         std::thread::Builder::new().name("nvimglsl-host".into()).spawn(move || {
             // The grid and the navigation surface take the same theme, so the
             // two halves of one window cannot disagree about it.
-            let mut host = proto::Host::themed(
-                core::Editor::default(),
-                notes::Vault::default_vault(),
-                theme,
-            );
+            let mut host = proto::Host::configured(notes::Vault::default_vault(), theme);
             if let Err(error) = proto::serve(&mut host, host_input, host_output, initial) {
                 eprintln!("host: {error}");
             }

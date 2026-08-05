@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use rmpv::Value;
 
 use crate::core::editor::{Request, Scope};
-use crate::core::{Editor, Mode};
+use crate::core::{Buffer, Editor, Mode};
 use crate::notes::{self, Vault};
 use crate::nvim::{self, RedrawEvent, UiOptions};
 
@@ -47,6 +47,23 @@ impl Host {
 
     pub fn with_vault(editor: Editor, vault: Vault) -> Self {
         Self::themed(editor, vault, Theme::dark())
+    }
+
+    /// A host whose editor behaves the way the owner's `init.lua` says.
+    pub fn configured(vault: Vault, theme: Theme) -> Self {
+        let config = crate::luaconf::load_default();
+        if let Some(error) = &config.error {
+            eprintln!("nvim config: {error}");
+        }
+        if let Some(path) = &config.path {
+            eprintln!(
+                "nvim config: {} — {} options, {} mappings",
+                path.display(),
+                config.options.len(),
+                config.mappings.len()
+            );
+        }
+        Self::themed(Editor::with_config(Buffer::empty(), &config), vault, theme)
     }
 
     pub fn themed(editor: Editor, vault: Vault, theme: Theme) -> Self {
