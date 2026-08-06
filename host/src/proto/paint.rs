@@ -12,6 +12,7 @@ use rmpv::Value;
 
 use crate::core::buffer::Buffer;
 use crate::core::editor::{Editor, Mode, Options, Visual};
+use crate::core::vcs::{SignKind, VcsState, VcsStatus};
 use crate::core::window::{Rect, WindowId, WindowView};
 use crate::nvim::{RedrawEvent, UiOptions};
 
@@ -40,6 +41,9 @@ pub mod hl {
     pub const TREE_NOTE: u64 = 16;
     pub const TREE_FILE: u64 = 17;
     pub const TREE_SELECTED: u64 = 18;
+    pub const GIT_ADD: u64 = 19;
+    pub const GIT_CHANGE: u64 = 20;
+    pub const GIT_DELETE: u64 = 21;
 }
 
 /// The editor's own palette.
@@ -71,6 +75,9 @@ pub struct Theme {
     /// `cursorline`: a wash under the line the cursor is on, which has to stay
     /// under the text rather than compete with the visual selection.
     pub cursor_line_bg: u32,
+    pub git_add: u32,
+    pub git_change: u32,
+    pub git_delete: u32,
 }
 
 impl Theme {
@@ -98,6 +105,9 @@ impl Theme {
             modified_fg: 0xE86B7E,
             modified_bg: 0x1B2130,
             cursor_line_bg: 0x161A24,
+            git_add: 0x75C47A,
+            git_change: 0xE0C285,
+            git_delete: 0xE86B7E,
         }
     }
 
@@ -122,6 +132,9 @@ impl Theme {
             modified_fg: 0xC0324B,
             modified_bg: 0xE6EAF3,
             cursor_line_bg: 0xECEFF6,
+            git_add: 0x2F7A3F,
+            git_change: 0x9A6B12,
+            git_delete: 0xC0324B,
         }
     }
 
@@ -210,6 +223,8 @@ pub struct FocusRender<'a> {
     pub visual_kind: Option<Visual>,
     pub last_search: Option<&'a str>,
     pub highlight_search: bool,
+    pub vcs: Option<&'a VcsState>,
+    pub cursor_blame: Option<String>,
 }
 
 pub fn render_window_lines(
@@ -239,9 +254,10 @@ pub fn render_window_lines(
         }
 
         let mut cells = Vec::new();
+        let number_width = gutter.saturating_sub(1);
         let number = match options.line_number(line, view.cursor.0) {
-            Some(value) => format!("{:>width$} ", value, width = gutter - 1),
-            None => " ".repeat(gutter),
+            Some(value) => format!("{:>width$} ", value, width = number_width - 1),
+            None => " ".repeat(number_width),
         };
         let number_hl = if line == view.cursor.0 {
             hl::CURSOR_LINE_NR
@@ -254,6 +270,20 @@ pub fn render_window_lines(
                 hl: number_hl,
             });
         }
+        let sign = focus
+            .as_ref()
+            .and_then(|state| state.vcs)
+            .and_then(|vcs| vcs.sign_at(line, buffer.line_count()));
+        let (sign_text, sign_hl) = match sign {
+            Some(SignKind::Add) => ('+', hl::GIT_ADD),
+            Some(SignKind::Change) => ('~', hl::GIT_CHANGE),
+            Some(SignKind::Delete) => ('-', hl::GIT_DELETE),
+            None => (' ', number_hl),
+        };
+        cells.push(RenderCell {
+            text: sign_text,
+            hl: sign_hl,
+        });
 
         let text = buffer.line_text(line);
         let spans = markdown_spans(&text);
@@ -305,6 +335,20 @@ pub fn render_window_lines(
                 hl: style,
             });
             col += char_width(ch);
+        }
+        if line == view.cursor.0 {
+            if let Some(blame) = focus.as_ref().and_then(|state| state.cursor_blame.as_ref()) {
+                for ch in format!("  {blame}").chars() {
+                    if col >= view.cols {
+                        break;
+                    }
+                    cells.push(RenderCell {
+                        text: ch,
+                        hl: hl::NON_TEXT,
+                    });
+                    col += char_width(ch);
+                }
+            }
         }
         let fill = if visual_kind == Some(Visual::Line)
             && visual.is_some_and(|(a, b)| line >= a.0 && line <= b.0)
@@ -648,6 +692,8 @@ impl Painter {
                 visual_kind: editor.visual_kind(),
                 last_search: editor.last_search.as_deref(),
                 highlight_search: editor.highlight_search(),
+                vcs: Some(&editor.vcs),
+                cursor_blame: cursor_blame(editor, &editor.buffer),
             }),
         );
 
@@ -688,6 +734,7 @@ impl Painter {
         if editor.buffer.modified() {
             col = self.grid.write(row, col, " [+]", hl::MODIFIED);
         }
+        col = self.write_vcs_status(row, col, editor);
         let right = format!(
             "{}:{}  {}/{} ",
             editor.cursor.0 + 1,
@@ -913,6 +960,9 @@ impl Painter {
         if buffer.modified() {
             col = self.grid.write(row, col, " [+]", hl::MODIFIED);
         }
+        if focused {
+            col = self.write_vcs_status(row, col, editor);
+        }
         let right = format!(
             "{}:{}  {}/{} ",
             view.cursor.0 + 1,
@@ -947,6 +997,28 @@ impl Painter {
                 }
             }
         }
+    }
+
+    fn write_vcs_status(&mut self, row: usize, col: usize, editor: &Editor) -> usize {
+        let label = match &editor.vcs.status {
+            VcsStatus::Ready | VcsStatus::Unborn => {
+                let head = editor
+                    .vcs
+                    .head
+                    .as_ref()
+                    .map(|head| head.text())
+                    .unwrap_or("git");
+                let counts = editor.vcs.counts();
+                format!(
+                    " [{head} +{} ~{} -{}]",
+                    counts.added, counts.changed, counts.removed
+                )
+            }
+            VcsStatus::TooLarge => " [git too-large]".to_string(),
+            VcsStatus::Error(_) => " [git error]".to_string(),
+            VcsStatus::Unknown | VcsStatus::NotRepository => String::new(),
+        };
+        self.grid.write(row, col, &label, hl::STATUS)
     }
 
     fn cursor_cell(&self, editor: &Editor) -> (u64, usize, usize) {
@@ -1043,6 +1115,8 @@ fn window_rows(editor: &Editor, view: &WindowView, buffer: &Buffer) -> Vec<Rende
         visual_kind: editor.visual_kind(),
         last_search: editor.last_search.as_deref(),
         highlight_search: editor.highlight_search(),
+        vcs: Some(&editor.vcs),
+        cursor_blame: cursor_blame(editor, buffer),
     });
     render_window_lines(view, buffer, &editor.options, focus)
 }
@@ -1142,7 +1216,20 @@ fn encode_row(cells: &[Cell]) -> Vec<Value> {
 }
 
 pub fn gutter_width(lines: usize) -> usize {
-    lines.to_string().len().max(3) + 1
+    lines.to_string().len().max(3) + 2
+}
+
+fn cursor_blame(editor: &Editor, buffer: &Buffer) -> Option<String> {
+    if buffer.modified() {
+        return None;
+    }
+    let blame = editor
+        .vcs
+        .cursor_blame(editor.cursor.0, buffer.revision())?;
+    Some(format!(
+        "{} {} {}",
+        blame.commit, blame.author, blame.summary
+    ))
 }
 
 fn shorten(text: &str, limit: usize) -> String {
@@ -1323,6 +1410,14 @@ fn highlight_table(theme: Theme) -> Vec<(u64, Value)> {
         (
             hl::TREE_SELECTED,
             attrs(Some(theme.fg), Some(theme.visual), false, false),
+        (hl::GIT_ADD, attrs(Some(theme.git_add), None, true, false)),
+        (
+            hl::GIT_CHANGE,
+            attrs(Some(theme.git_change), None, true, false),
+        ),
+        (
+            hl::GIT_DELETE,
+            attrs(Some(theme.git_delete), None, true, false),
         ),
     ]
 }
@@ -1420,11 +1515,16 @@ mod tests {
                 visual_kind: None,
                 last_search: Some("ain"),
                 highlight_search: true,
+                vcs: None,
+                cursor_blame: None,
             }),
         );
         assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].cells[4].text, '#');
-        assert_eq!(rows[0].cells[4].hl, hl::HEADING);
+        assert_eq!(rows[0].cells[gutter_width(buffer.line_count())].text, '#');
+        assert_eq!(
+            rows[0].cells[gutter_width(buffer.line_count())].hl,
+            hl::HEADING
+        );
         assert!(rows[1]
             .cells
             .iter()
@@ -1438,7 +1538,7 @@ mod tests {
         let editor = Editor::new(Buffer::from_text("hello\n"));
         assert_eq!(
             row_text(&p.render(&editor), 0).unwrap().trim_end(),
-            "    hello"
+            "     hello"
         );
     }
 
@@ -1447,7 +1547,40 @@ mod tests {
         let mut p = painter();
         let editor = numbered("hello\n");
         let events = p.render(&editor);
-        assert_eq!(row_text(&events, 0).unwrap().trim_end(), "  1 hello");
+        assert_eq!(row_text(&events, 0).unwrap().trim_end(), "  1  hello");
+    }
+
+    #[test]
+    fn git_signs_occupy_the_sign_column() {
+        let mut p = painter();
+        let mut editor = numbered("one\ntwo\n");
+        editor.vcs.hunks = vec![crate::core::vcs::Hunk {
+            old_start: 0,
+            old_len: 0,
+            new_start: 1,
+            new_len: 1,
+            kind: SignKind::Add,
+        }];
+        let events = p.render(&editor);
+        assert_eq!(row_text(&events, 1).unwrap().trim_end(), "  2 +two");
+    }
+
+    #[test]
+    fn cursor_blame_is_virtual_text_only_on_a_clean_matching_revision() {
+        let mut p = painter();
+        let mut editor = Editor::new(Buffer::from_text("hello\n"));
+        editor.vcs.blame = vec![crate::core::vcs::BlameLine {
+            line: 0,
+            commit: "abc123".into(),
+            author: "Mina".into(),
+            time: None,
+            summary: "initial".into(),
+        }];
+        editor.vcs.blame_revision = Some(editor.buffer.revision());
+        let events = p.render(&editor);
+        assert!(row_text(&events, 0)
+            .unwrap()
+            .contains("abc123 Mina initial"));
     }
 
     #[test]
@@ -1457,7 +1590,7 @@ mod tests {
         p.render(&editor);
         editor.feed_str("jx");
         let events = p.render(&editor);
-        assert_eq!(row_text(&events, 1).unwrap().trim_end(), "  2 wo");
+        assert_eq!(row_text(&events, 1).unwrap().trim_end(), "  2  wo");
         // Row 0 *does* change here — the cursor line number moved off it — but
         // the empty rows past the end of the buffer did not.
         assert!(row_text(&events, 3).is_none(), "row 3 was resent unchanged");

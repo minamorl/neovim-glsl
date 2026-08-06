@@ -8,6 +8,7 @@
 
 mod clipboard;
 mod core;
+mod git;
 mod ignore;
 mod keymap;
 mod luaconf;

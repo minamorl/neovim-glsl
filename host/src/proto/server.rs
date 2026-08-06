@@ -7,6 +7,7 @@
 //! code path and no privileged in-process shortcut that the protocol could
 //! silently diverge from.
 
+use std::collections::BTreeMap;
 use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -14,7 +15,8 @@ use std::sync::mpsc::{self, Receiver};
 use rmpv::Value;
 
 use crate::core::editor::{Request, Scope};
-use crate::core::{Buffer, Editor, Mode};
+use crate::core::vcs::{HeadLabel, Hunk, SignKind, VcsRequest, VcsStatus};
+use crate::core::{Buffer, BufferId, Editor, Mode};
 use crate::notes::{self, Vault};
 use crate::nvim::{self, RedrawEvent, UiOptions};
 
@@ -33,6 +35,18 @@ pub const PLUGIN: &str = "nvimglsl_plugin";
 /// the file; opening it is the client's business, the same way drawing the
 /// navigation surface is.
 pub const TATEGAKI: &str = "nvimglsl_tategaki";
+
+const VCS_MAX_LINES: usize = 20_000;
+const VCS_MAX_BYTES: usize = 1_000_000;
+
+#[derive(Default)]
+struct VcsCache {
+    path: Option<PathBuf>,
+    resolved: bool,
+    repo: Option<PathBuf>,
+    head: Option<HeadLabel>,
+    blob: Option<String>,
+}
 
 /// Work the protocol server can receive without blocking on client input.
 ///
@@ -64,6 +78,7 @@ pub struct Host {
     /// the caller sending traffic. It is kept apart so the response reaches the
     /// client before the redraw that answers it.
     pending_attach: Option<Vec<RedrawEvent>>,
+    vcs: BTreeMap<BufferId, VcsCache>,
 }
 
 impl Host {
@@ -112,6 +127,7 @@ impl Host {
             channel: 1,
             quit: false,
             pending_attach: None,
+            vcs: BTreeMap::new(),
         }
     }
 
@@ -180,6 +196,7 @@ impl Host {
                     vec![Value::from(name), Value::from(argument)],
                 )),
                 Request::Edit(path) => self.open_path(path),
+                Request::Vcs(request) => self.handle_vcs_request(request),
                 // Set from the buffer rather than from the file on disk: the
                 // point of a preview is to see what has not been written yet.
                 Request::Preview => {
@@ -224,10 +241,232 @@ impl Host {
                 }
             }
         }
+        self.refresh_vcs();
+        self.sync_diff_scroll();
         if let Some(events) = self.render() {
             out.push(nvim::pack_redraw(&events));
         }
         out
+    }
+
+    pub fn refresh_vcs(&mut self) {
+        let revision = self.editor.buffer.revision();
+        let line_count = self.editor.buffer.line_count();
+        let text = self.editor.buffer.text();
+        if line_count > VCS_MAX_LINES || text.len() > VCS_MAX_BYTES {
+            self.editor.vcs.status = VcsStatus::TooLarge;
+            self.editor.vcs.head = None;
+            self.editor.vcs.hunks.clear();
+            self.editor.vcs.blame.clear();
+            self.editor.vcs.diff_revision = Some(revision);
+            self.editor.vcs.blame_revision = None;
+            return;
+        }
+
+        let Some(path) = self.editor.buffer.path().map(PathBuf::from) else {
+            self.editor.vcs.status = VcsStatus::NotRepository;
+            self.editor.vcs.head = None;
+            self.editor.vcs.hunks.clear();
+            self.editor.vcs.blame.clear();
+            self.editor.vcs.diff_revision = Some(revision);
+            self.editor.vcs.blame_revision = None;
+            return;
+        };
+
+        let id = self.editor.buffers.current_id();
+        let cache = self.vcs.entry(id).or_default();
+        if cache.path.as_ref() != Some(&path) {
+            *cache = VcsCache {
+                path: Some(path.clone()),
+                ..VcsCache::default()
+            };
+            self.editor.vcs.clear();
+        }
+        if !cache.resolved {
+            cache.repo = crate::git::repo_root(&path);
+            cache.resolved = true;
+        }
+        let Some(repo) = cache.repo.clone() else {
+            self.editor.vcs.status = VcsStatus::NotRepository;
+            self.editor.vcs.head = None;
+            self.editor.vcs.hunks.clear();
+            self.editor.vcs.diff_revision = Some(revision);
+            return;
+        };
+        if cache.head.is_none() {
+            cache.head = crate::git::head_label(&repo);
+        }
+        let Some(head) = cache.head.clone() else {
+            self.editor.vcs.status = VcsStatus::Error("git head failed".into());
+            self.editor.vcs.diff_revision = Some(revision);
+            return;
+        };
+        self.editor.vcs.head = Some(head.clone());
+
+        let lines = self.editor.buffer.lines_text(0, line_count);
+        if head == HeadLabel::Unborn {
+            self.editor.vcs.status = VcsStatus::Unborn;
+            self.editor.vcs.hunks = if lines.is_empty() {
+                Vec::new()
+            } else {
+                vec![Hunk {
+                    old_start: 0,
+                    old_len: 0,
+                    new_start: 0,
+                    new_len: lines.len(),
+                    kind: SignKind::Add,
+                }]
+            };
+            self.editor.vcs.deleted_above = 0;
+            self.editor.vcs.diff_revision = Some(revision);
+            self.editor.vcs.blame.clear();
+            self.editor.vcs.blame_revision = None;
+            return;
+        }
+
+        if cache.blob.is_none() {
+            cache.blob = crate::git::head_blob(&repo, &path);
+        }
+        let Some(blob) = cache.blob.as_ref() else {
+            self.editor.vcs.status = VcsStatus::Error("git blob failed".into());
+            self.editor.vcs.diff_revision = Some(revision);
+            return;
+        };
+        if self.editor.vcs.diff_revision != Some(revision) {
+            let (hunks, deleted_above) = crate::core::diff::hunks_from_text(blob, &lines);
+            self.editor.vcs.hunks = hunks;
+            self.editor.vcs.deleted_above = deleted_above;
+            self.editor.vcs.diff_revision = Some(revision);
+            if self.editor.buffer.modified() {
+                self.editor.vcs.blame.clear();
+                self.editor.vcs.blame_revision = None;
+            }
+        }
+        self.editor.vcs.status = VcsStatus::Ready;
+        if !self.editor.buffer.modified() && self.editor.vcs.blame_revision != Some(revision) {
+            if let Some(blame) = crate::git::blame(&repo, &path, &text) {
+                self.editor.vcs.blame = blame;
+                self.editor.vcs.blame_revision = Some(revision);
+            }
+        }
+    }
+
+    fn handle_vcs_request(&mut self, request: VcsRequest) {
+        self.refresh_vcs();
+        match request {
+            VcsRequest::Blame => self.open_blame_view(),
+            VcsRequest::Hunks => self.open_hunks_view(),
+            VcsRequest::Diff => self.open_diff_view(),
+        }
+    }
+
+    fn current_repo_path(&self) -> Option<(PathBuf, PathBuf)> {
+        let path = self.editor.buffer.path().map(PathBuf::from)?;
+        let cache = self.vcs.get(&self.editor.buffers.current_id())?;
+        let repo = cache.repo.clone()?;
+        Some((repo, path))
+    }
+
+    fn open_blame_view(&mut self) {
+        let Some((repo, path)) = self.current_repo_path() else {
+            self.report("E447: no git repository for buffer".into(), true);
+            return;
+        };
+        let text = self.editor.buffer.text();
+        let Some(blame) = crate::git::blame(&repo, &path, &text) else {
+            self.report("E447: git blame failed".into(), true);
+            return;
+        };
+        let revision = self.editor.buffer.revision();
+        self.editor.vcs.blame = blame.clone();
+        self.editor.vcs.blame_revision = Some(revision);
+        let rows = blame
+            .into_iter()
+            .map(|line| {
+                format!(
+                    "{:>5}  {:<12} {:<18} {}",
+                    line.line + 1,
+                    line.commit,
+                    line.author,
+                    line.summary
+                )
+            })
+            .collect();
+        self.editor.scratch_split("git:blame", rows, false);
+    }
+
+    fn open_hunks_view(&mut self) {
+        let rows = if self.editor.vcs.hunks.is_empty() {
+            vec!["No hunks".to_string()]
+        } else {
+            self.editor
+                .vcs
+                .hunks
+                .iter()
+                .map(|hunk| {
+                    let kind = match hunk.kind {
+                        SignKind::Add => "+",
+                        SignKind::Change => "~",
+                        SignKind::Delete => "-",
+                    };
+                    format!(
+                        "{kind} old {}+{}  new {}+{}",
+                        hunk.old_start + 1,
+                        hunk.old_len,
+                        hunk.new_start + 1,
+                        hunk.new_len
+                    )
+                })
+                .collect()
+        };
+        self.editor.scratch_split("git:hunks", rows, false);
+    }
+
+    fn open_diff_view(&mut self) {
+        self.refresh_vcs();
+        let Some(cache) = self.vcs.get(&self.editor.buffers.current_id()) else {
+            self.report("E447: no git repository for buffer".into(), true);
+            return;
+        };
+        let Some(blob) = cache.blob.clone() else {
+            self.report("E447: no HEAD blob for buffer".into(), true);
+            return;
+        };
+        let rows = blob
+            .strip_suffix('\n')
+            .unwrap_or(&blob)
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+            .collect();
+        self.editor.scratch_split("git:HEAD", rows, true);
+    }
+
+    fn sync_diff_scroll(&mut self) {
+        let source_top = self.editor.views.values().find_map(|view| {
+            let entry = self.editor.buffers.entry(view.buffer)?;
+            entry.scratch_name.is_none().then_some(view.top_line)
+        });
+        let Some(top_line) = source_top else {
+            return;
+        };
+        let targets: Vec<_> = self
+            .editor
+            .views
+            .iter()
+            .filter_map(|(id, view)| {
+                let entry = self.editor.buffers.entry(view.buffer)?;
+                entry
+                    .scratch_name
+                    .as_deref()
+                    .is_some_and(|name| name.starts_with("git:HEAD"))
+                    .then_some(*id)
+            })
+            .collect();
+        for id in targets {
+            if let Some(view) = self.editor.views.get_mut(&id) {
+                view.top_line = top_line;
+            }
+        }
     }
 
     fn render(&mut self) -> Option<Vec<RedrawEvent>> {
@@ -401,6 +640,7 @@ impl Host {
         } else {
             self.editor.set_screen(painter.cols(), painter.text_rows());
         }
+        self.refresh_vcs();
         let mut events = painter.attach_events();
         events.extend(painter.render(&self.editor));
         self.painter = Some(painter);

@@ -14,6 +14,7 @@ use super::buffers::{BufferId, BufferStore};
 use super::command;
 use super::key::{Code, Key, Named};
 use super::motion::{self, Kind, Motion};
+use super::vcs::{VcsRequest, VcsState};
 use super::window::{Direction, Rect, Tabs, WindowId, WindowView};
 use crate::keymap::{Keymap, Match, Rhs};
 use crate::luaconf::NvimConfig;
@@ -84,6 +85,9 @@ enum Await {
     Leader,
     Register,
     Window,
+    Bracket {
+        forward: bool,
+    },
 }
 
 #[derive(Default)]
@@ -164,6 +168,8 @@ pub enum Request {
     /// typeset it: `crate::tategaki` owns the page and the host owns somewhere
     /// to put it.
     Preview,
+    /// Read-only Git/VCS views. The host owns Git and any spawned process.
+    Vcs(VcsRequest),
 }
 
 pub struct TreePane {
@@ -312,6 +318,7 @@ pub struct Editor {
     /// Keys typed that are still a prefix of some mapping.
     pending_keys: Vec<Key>,
     pub requests: Vec<Request>,
+    pub vcs: VcsState,
     /// Keys typed while the host owns input (the navigation surface is open).
     /// The core stops interpreting them; it does not stop existing.
     pub suspended: bool,
@@ -354,6 +361,7 @@ impl Editor {
             keymap: Keymap::default(),
             pending_keys: Vec::new(),
             requests: Vec::new(),
+            vcs: VcsState::default(),
             suspended: false,
             tree: None,
         }
@@ -388,6 +396,7 @@ impl Editor {
         self.desired_col = 0;
         self.top_line = 0;
         self.mode = Mode::Normal;
+        self.vcs.clear();
         if let Some(view) = self.views.get_mut(&self.focus_window()) {
             view.buffer = id;
         }
@@ -511,6 +520,26 @@ impl Editor {
         view.grid = self.tabs.grid_for_new_window();
         self.views.insert(id, view);
         self.load_focused_view();
+    }
+
+    pub fn scratch_split(&mut self, name: impl Into<String>, lines: Vec<String>, vertical: bool) {
+        self.split_window(vertical);
+        let id = self.buffers.scratch(name);
+        if let Some(buffer) = self.buffers.get_mut(id) {
+            buffer.set_lines(lines);
+        }
+        let focus = self.focus_window();
+        if let Some(view) = self.views.get_mut(&focus) {
+            view.buffer = id;
+            view.cursor = (0, 0);
+            view.desired_col = 0;
+            view.top_line = self.top_line;
+        }
+        self.buffer = self.buffers.get(id).unwrap().clone();
+        self.cursor = (0, 0);
+        self.desired_col = 0;
+        self.vcs.clear();
+        self.save_focused_view();
     }
 
     pub fn new_window(&mut self) {
@@ -1502,6 +1531,22 @@ impl Editor {
                 Code::Char(ch) => self.window_command(ch),
                 _ => self.pending.clear(),
             },
+            Await::Bracket { forward } => match key.code {
+                Code::Char('c') => {
+                    if let Some(line) = self.vcs.next_hunk(self.cursor.0, forward) {
+                        self.cursor = (line.min(self.buffer.line_count() - 1), 0);
+                        self.desired_col = 0;
+                        self.scroll_into_view();
+                    } else {
+                        self.message = Some(Message {
+                            text: "E787: No git hunk".into(),
+                            error: true,
+                        });
+                    }
+                    self.pending.clear();
+                }
+                _ => self.pending.clear(),
+            },
         }
     }
 
@@ -1594,6 +1639,14 @@ impl Editor {
             }
             'r' => {
                 self.pending.awaiting = Some(Await::Replace);
+                return;
+            }
+            ']' => {
+                self.pending.awaiting = Some(Await::Bracket { forward: true });
+                return;
+            }
+            '[' => {
+                self.pending.awaiting = Some(Await::Bracket { forward: false });
                 return;
             }
             _ => {}
@@ -2279,6 +2332,7 @@ impl Editor {
         if let Some(buffer) = self.buffers.get(id) {
             self.buffer = buffer.clone();
         }
+        self.vcs.clear();
         if reset_view {
             self.cursor = (0, 0);
             self.desired_col = 0;
@@ -2410,6 +2464,33 @@ mod tests {
         assert_eq!(e.cursor, (1, 1));
         e.feed_str("kh");
         assert_eq!(e.cursor, (0, 0));
+    }
+
+    #[test]
+    fn bracket_c_moves_between_git_hunks() {
+        let mut e = editor("one\ntwo\nthree\nfour\n");
+        e.vcs.hunks = vec![
+            crate::core::vcs::Hunk {
+                old_start: 0,
+                old_len: 1,
+                new_start: 1,
+                new_len: 1,
+                kind: crate::core::vcs::SignKind::Change,
+            },
+            crate::core::vcs::Hunk {
+                old_start: 3,
+                old_len: 0,
+                new_start: 3,
+                new_len: 1,
+                kind: crate::core::vcs::SignKind::Add,
+            },
+        ];
+        e.feed_str("]c");
+        assert_eq!(e.cursor.0, 1);
+        e.feed_str("]c");
+        assert_eq!(e.cursor.0, 3);
+        e.feed_str("[c");
+        assert_eq!(e.cursor.0, 1);
     }
 
     #[test]
