@@ -201,11 +201,33 @@ impl Theme {
         }
     }
 
+    /// Every scheme this host can paint, grid and overlays alike.
+    pub const SCHEMES: &'static [&'static str] = &["dark", "light", "onedark"];
+
     pub fn named(name: &str) -> Self {
-        match name {
-            "light" => Self::light(),
-            "onedark" | "onedark_dark" | "onedark_darker" | "one_dark" => Self::onedark(),
+        match Self::canonical(name) {
+            Some("light") => Self::light(),
+            Some("onedark") => Self::onedark(),
             _ => Self::dark(),
+        }
+    }
+
+    /// The scheme id to paint with, for whatever name the owner or their config
+    /// used.
+    ///
+    /// Aliases collapse here rather than downstream. The grid and the overlays
+    /// on top of it are chosen by this one string, and a name only one of them
+    /// recognises does not degrade — the overlay fails to resolve and is simply
+    /// not drawn, which looks like a picker that stopped opening.
+    pub fn canonical(name: &str) -> Option<&'static str> {
+        match name {
+            "dark" => Some("dark"),
+            "light" => Some("light"),
+            "onedark" | "one_dark" | "onedark_dark" | "onedark_darker" | "onedark_vivid"
+            | "onedark_cool" | "onedark_deep" | "onedark_warm" | "onedark_warmer" => {
+                Some("onedark")
+            }
+            _ => None,
         }
     }
 
@@ -216,10 +238,7 @@ impl Theme {
     /// "the scheme was applied" and "the scheme was not recognised" look the
     /// same from the outside.
     pub fn knows(name: &str) -> bool {
-        matches!(
-            name,
-            "dark" | "light" | "onedark" | "onedark_dark" | "onedark_darker" | "one_dark"
-        )
+        Self::canonical(name).is_some()
     }
 }
 

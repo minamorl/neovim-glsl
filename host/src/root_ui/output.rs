@@ -83,6 +83,38 @@ pub fn dark_scheme() -> ColorScheme {
     }
 }
 
+/// One Dark's own surfaces and its sixteen terminal colours.
+pub fn onedark_scheme() -> ColorScheme {
+    let mut colors = BTreeMap::new();
+    colors.insert("surface".into(), rgba("#21252b", 0.98));
+    colors.insert("surface_raised".into(), rgba("#2c313a", 1.0));
+    colors.insert("outline".into(), rgba("#3e4451", 1.0));
+    colors.insert("separator".into(), rgba("#31353f", 1.0));
+    colors.insert("muted".into(), rgba("#5c6370", 1.0));
+    colors.insert("stdout".into(), rgba("#abb2bf", 1.0));
+    colors.insert("stderr".into(), rgba("#e06c75", 1.0));
+    colors.insert("black".into(), rgba("#5c6370", 1.0));
+    colors.insert("red".into(), rgba("#e06c75", 1.0));
+    colors.insert("green".into(), rgba("#98c379", 1.0));
+    colors.insert("yellow".into(), rgba("#e5c07b", 1.0));
+    colors.insert("blue".into(), rgba("#61afef", 1.0));
+    colors.insert("magenta".into(), rgba("#c678dd", 1.0));
+    colors.insert("cyan".into(), rgba("#56b6c2", 1.0));
+    colors.insert("white".into(), rgba("#abb2bf", 1.0));
+    colors.insert("bright_black".into(), rgba("#848b98", 1.0));
+    colors.insert("bright_red".into(), rgba("#e88892", 1.0));
+    colors.insert("bright_green".into(), rgba("#b3d69b", 1.0));
+    colors.insert("bright_yellow".into(), rgba("#eccf9a", 1.0));
+    colors.insert("bright_blue".into(), rgba("#89c4f4", 1.0));
+    colors.insert("bright_magenta".into(), rgba("#d79ae6", 1.0));
+    colors.insert("bright_cyan".into(), rgba("#7ecad3", 1.0));
+    colors.insert("bright_white".into(), rgba("#e6e9ef", 1.0));
+    ColorScheme {
+        id: "onedark".into(),
+        colors,
+    }
+}
+
 pub fn light_scheme() -> ColorScheme {
     let mut colors = BTreeMap::new();
     colors.insert("surface".into(), rgba("#ffffff", 0.98));
@@ -117,7 +149,7 @@ pub fn light_scheme() -> ColorScheme {
 pub fn color_runtime(scheme_id: &str) -> ColorRuntime {
     ColorRuntime {
         scheme_id: scheme_id.to_string(),
-        schemes: vec![dark_scheme(), light_scheme()],
+        schemes: vec![dark_scheme(), light_scheme(), onedark_scheme()],
     }
 }
 

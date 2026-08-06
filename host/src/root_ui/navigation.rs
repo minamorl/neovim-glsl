@@ -89,6 +89,26 @@ pub fn dark_scheme() -> ColorScheme {
     }
 }
 
+/// One Dark's own surfaces, so an overlay is painted by the same scheme as the
+/// grid behind it. Without this the two halves of one window are chosen by the
+/// same name and only one of them understands it.
+pub fn onedark_scheme() -> ColorScheme {
+    let mut colors = BTreeMap::new();
+    colors.insert("scrim".into(), rgba("#181a1f", 0.55));
+    colors.insert("shadow".into(), rgba("#000000", 0.55));
+    colors.insert("surface".into(), rgba("#21252b", 1.0));
+    colors.insert("surface_raised".into(), rgba("#31353f", 1.0));
+    colors.insert("outline".into(), rgba("#3e4451", 1.0));
+    colors.insert("separator".into(), rgba("#2c313a", 1.0));
+    colors.insert("on_surface".into(), rgba("#abb2bf", 1.0));
+    colors.insert("on_surface_muted".into(), rgba("#5c6370", 1.0));
+    colors.insert("accent".into(), rgba("#61afef", 1.0));
+    ColorScheme {
+        id: "onedark".into(),
+        colors,
+    }
+}
+
 pub fn light_scheme() -> ColorScheme {
     let mut colors = BTreeMap::new();
     colors.insert("scrim".into(), rgba("#1b2130", 0.30));
@@ -109,7 +129,7 @@ pub fn light_scheme() -> ColorScheme {
 pub fn color_runtime(scheme_id: &str) -> ColorRuntime {
     ColorRuntime {
         scheme_id: scheme_id.to_string(),
-        schemes: vec![dark_scheme(), light_scheme()],
+        schemes: vec![dark_scheme(), light_scheme(), onedark_scheme()],
     }
 }
 

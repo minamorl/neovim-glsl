@@ -502,14 +502,20 @@ fn resolve_scheme(args: &Args) -> String {
         return args.scheme.clone();
     }
     match luaconf::load_default().colorscheme {
-        Some(name) if proto::paint::Theme::knows(&name) => {
-            eprintln!("colorscheme: {name} (from init.lua)");
-            name
-        }
-        Some(name) => {
-            eprintln!("colorscheme: {name} is named by init.lua but this host has no colours for it");
-            args.scheme.clone()
-        }
+        // Canonical, not as written: everything downstream looks this string up
+        // in two places, and an alias is known to neither.
+        Some(name) => match proto::paint::Theme::canonical(&name) {
+            Some(id) => {
+                eprintln!("colorscheme: {name} (from init.lua)");
+                id.to_string()
+            }
+            None => {
+                eprintln!(
+                    "colorscheme: {name} is named by init.lua but this host has no colours for it"
+                );
+                args.scheme.clone()
+            }
+        },
         None => args.scheme.clone(),
     }
 }
@@ -1641,6 +1647,53 @@ fn main() {
     let event_loop = EventLoop::new().expect("event loop");
     let mut app = App::new(args);
     event_loop.run_app(&mut app).expect("run_app");
+}
+
+#[cfg(test)]
+mod scheme_tests {
+    use super::*;
+
+    /// The grid and the overlays on top of it are chosen by one string. When
+    /// only the grid understood it, `prepare_flat_scene` returned
+    /// `UnknownScheme` and the surface was skipped — so the picker, the grep
+    /// results and the task output all simply stopped appearing, with nothing
+    /// on screen to say why.
+    #[test]
+    fn every_scheme_the_grid_knows_is_known_to_the_overlays_too() {
+        for id in proto::paint::Theme::SCHEMES {
+            assert!(proto::paint::Theme::knows(id), "grid lost {id}");
+            let navigation = root_ui::navigation::color_runtime(id);
+            assert!(
+                navigation.schemes.iter().any(|scheme| scheme.id == *id),
+                "the navigation surface has no colours for {id}"
+            );
+            let output = root_ui::output::color_runtime(id);
+            assert!(
+                output.schemes.iter().any(|scheme| scheme.id == *id),
+                "the output surface has no colours for {id}"
+            );
+        }
+    }
+
+    /// An alias has to collapse before it is used, not after: nothing
+    /// downstream has a second chance to recognise it.
+    #[test]
+    fn an_alias_resolves_to_a_scheme_both_halves_carry() {
+        let id = proto::paint::Theme::canonical("onedark_darker").unwrap();
+        assert_eq!(id, "onedark");
+        assert!(proto::paint::Theme::SCHEMES.contains(&id));
+        assert_eq!(proto::paint::Theme::canonical("gruvbox"), None);
+    }
+
+    #[test]
+    fn a_scheme_named_on_the_command_line_wins_over_the_config() {
+        let args = Args {
+            scheme: "light".into(),
+            scheme_given: true,
+            ..Args::default()
+        };
+        assert_eq!(resolve_scheme(&args), "light");
+    }
 }
 
 #[cfg(test)]
