@@ -7,7 +7,7 @@
 //! the `:` line are reproduced, not reconsidered.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::buffer::Buffer;
 use super::buffers::{BufferId, BufferStore};
@@ -694,6 +694,7 @@ impl Editor {
             None
         }
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let root = crate::workspace::workable_root(root);
         let reveal = command
             .contains("select_buffer=true")
             .then_some(current)
@@ -905,11 +906,16 @@ impl Editor {
         self.tabs.focus_window(target);
         self.load_focused_view();
         if let Err(error) = self.open(path.clone()) {
-            self.message = Some(Message {
-                text: format!("E484: Can't open file {}: {error}", path.display()),
-                error: true,
-            });
+            self.report_open_failure(&path, &error);
         }
+    }
+
+    /// One wording for a failed open, wherever the attempt came from.
+    pub fn report_open_failure(&mut self, path: &Path, error: &std::io::Error) {
+        self.message = Some(Message {
+            text: format!("E484: Can't open file {}: {error}", path.display()),
+            error: true,
+        });
     }
 
     fn tree_delete_key(&mut self) {

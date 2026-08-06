@@ -133,6 +133,29 @@ impl Source for WorkspaceSource {
     }
 }
 
+/// A directory the owner would plausibly be working in.
+///
+/// A Dock or Finder launch carries no working directory of its own: the process
+/// inherits `/`. Rooting the file tree there is not just unhelpful, it is how
+/// `/dev` and a 23,000-entry `/nix/store` end up one keystroke from the cursor —
+/// and a path under `/dev` is exactly the kind that blocks `open(2)` forever.
+///
+/// `pin entry_point_orientation = repository` already says where work begins.
+/// This applies the same answer to the tree, so a launch with no argument lands
+/// on the repositories instead of the filesystem root.
+/// Only the filesystem root is rejected. Where else the owner keeps a checkout —
+/// an external volume, `/opt`, a mount — is their business, and a rule that
+/// second-guessed it would move the tree out from under work that was fine.
+pub fn workable_root(candidate: PathBuf) -> PathBuf {
+    if candidate.parent().is_some() {
+        return candidate;
+    }
+    workspace_roots()
+        .into_iter()
+        .find(|root| root.is_dir())
+        .unwrap_or(candidate)
+}
+
 fn workspace_roots() -> Vec<PathBuf> {
     if let Ok(value) = std::env::var("NVIMGLSL_WORKSPACES") {
         let roots: Vec<PathBuf> = std::env::split_paths(&value).collect();
@@ -194,5 +217,23 @@ mod tests {
             EntryPointOrientation::pinned_default(),
             EntryPointOrientation::Repository
         );
+    }
+
+    /// A Dock launch inherits `/`, and `/` must never become the tree root:
+    /// that is what put `/dev` within reach of the cursor.
+    #[test]
+    fn filesystem_root_is_replaced_by_the_repositories() {
+        let root = workable_root(PathBuf::from("/"));
+        assert_ne!(root, PathBuf::from("/"));
+        assert!(root.ends_with("repos"), "unexpected fallback: {:?}", root);
+    }
+
+    #[test]
+    fn a_directory_under_home_is_kept_as_is() {
+        let Ok(home) = std::env::var("HOME") else {
+            return;
+        };
+        let mine = PathBuf::from(&home).join("repos/neovim-glsl");
+        assert_eq!(workable_root(mine.clone()), mine);
     }
 }

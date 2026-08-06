@@ -411,6 +411,7 @@ impl App {
                 .and_then(|path| path.parent().map(PathBuf::from))
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let root = workspace::workable_root(root);
             let source = picker::TreeSource::new(root);
             self.overlay = Overlay::Picker {
                 picker: picker::Picker::open(&source, visible),
