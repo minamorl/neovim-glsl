@@ -693,9 +693,19 @@ mod tests {
         assert_eq!(scope, Some("files"));
     }
 
+    /// The preview path is derived from the note's name on purpose — previewing
+    /// the same note twice replaces the same file instead of leaving a trail of
+    /// stale pages. A buffer with no path is therefore `[No Name]` for
+    /// everybody, so two copies of this test running at once write and delete
+    /// one file between them: it passes alone and fails beside itself. Giving
+    /// the note a name of its own keeps the product's stable path under test
+    /// while making the test independent of what else is running.
     #[test]
     fn the_vertical_page_is_written_and_the_client_is_told_where() {
         let mut host = attached_host("# 草枕\n\n山路を登りながら、こう考えた。\n");
+        host.editor
+            .buffer
+            .set_path(std::env::temp_dir().join("nvimglsl-tategaki-test/草枕.md"));
         let out = host.handle(&input(" p"));
         let path = out
             .iter()
