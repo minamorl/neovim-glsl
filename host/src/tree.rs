@@ -216,7 +216,7 @@ impl FileTree {
         let Ok(entries) = std::fs::read_dir(path) else {
             return;
         };
-        let mut children = Vec::new();
+        let mut children: Vec<((u8, String), PathBuf)> = Vec::new();
         for entry in entries.flatten() {
             let child = entry.path();
             let Ok(kind) = entry.file_type() else {
@@ -233,15 +233,22 @@ impl FileTree {
             } else {
                 RowKind::File
             };
-            children.push(normalize(child.clone()));
-            self.nodes.entry(normalize(child)).or_insert(Node {
+            let normalized = normalize(child);
+            // The sort key is built once per child, from the kind `read_dir`
+            // already reported. Asking the filesystem inside the comparator
+            // instead cost one `is_dir` per comparison — about 700,000 stats to
+            // order a 23,000-entry directory, which is where 1.12 seconds of
+            // opening `/nix/store` went.
+            children.push((sort_key_of(row_kind, &normalized), normalized.clone()));
+            self.nodes.entry(normalized).or_insert(Node {
                 kind: row_kind,
                 open: false,
                 loaded: !is_dir,
                 children: Vec::new(),
             });
         }
-        children.sort_by(|a, b| compare_paths(a, b));
+        children.sort_by(|a, b| a.0.cmp(&b.0));
+        let children: Vec<PathBuf> = children.into_iter().map(|(_, path)| path).collect();
         if let Some(node) = self.nodes.get_mut(path) {
             node.children = children;
             node.loaded = true;
@@ -314,19 +321,13 @@ pub fn row_label(root: &Path, row: &TreeRow) -> String {
     format!("{}{} {}", "  ".repeat(row.depth), marker, name)
 }
 
-fn compare_paths(a: &Path, b: &Path) -> std::cmp::Ordering {
-    let ak = sort_key(a);
-    let bk = sort_key(b);
-    ak.cmp(&bk)
-}
-
-fn sort_key(path: &Path) -> (u8, String) {
-    let class = if path.is_dir() {
-        0
-    } else if is_note(path) {
-        1
-    } else {
-        2
+/// Directory, then note, then any other file — so a file never sits at the top
+/// of the screen where the owner looks first.
+fn sort_key_of(kind: RowKind, path: &Path) -> (u8, String) {
+    let class = match kind {
+        RowKind::Dir => 0,
+        RowKind::Note => 1,
+        RowKind::File => 2,
     };
     let name = path
         .file_name()
@@ -392,5 +393,66 @@ mod tests {
         assert_eq!(tree.selected_path(), Some(note.as_path()));
         assert!(tree.rows().iter().any(|row| row.path == note));
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod expand_cost {
+    use super::*;
+    use std::time::Instant;
+
+    /// A floor, not a budget. Building the sort key inside the comparator meant
+    /// one `is_dir` per comparison — roughly 700,000 stats to order a
+    /// 23,000-entry directory — and opening `/nix/store` took 1.12s. Computing
+    /// the key once per child brings the same expansion to about 270ms.
+    ///
+    /// The warm-up is not padding: a cold page cache costs about 550ms on its
+    /// own, which would put a fixed threshold on the wrong side of the line
+    /// depending only on what the machine happened to have read before.
+    #[test]
+    fn a_large_directory_expands_without_stat_per_comparison() {
+        if !Path::new("/nix/store").is_dir() {
+            eprintln!("skip: no /nix/store to measure against");
+            return;
+        }
+        let Some(child) = std::fs::read_dir("/nix/store")
+            .ok()
+            .and_then(|entries| entries.flatten().next())
+            .map(|entry| entry.path())
+        else {
+            return;
+        };
+        FileTree::new(Path::new("/"), |_, _| false).reveal(&child, |_, _| false);
+
+        let mut model = FileTree::new(Path::new("/"), |_, _| false);
+        let started = Instant::now();
+        model.reveal(&child, |_, _| false);
+        let elapsed = started.elapsed();
+        eprintln!("expand {} rows in {:?}", model.rows().len(), elapsed);
+        assert!(
+            elapsed.as_millis() < 600,
+            "expanding {} rows took {:?}",
+            model.rows().len(),
+            elapsed
+        );
+    }
+
+    #[test]
+    fn a_directory_comes_before_a_note_which_comes_before_a_file() {
+        let dir = std::env::temp_dir().join("nvimglsl-tree-order");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("zzz-dir")).unwrap();
+        std::fs::write(dir.join("aaa.txt"), "").unwrap();
+        std::fs::write(dir.join("mmm.md"), "").unwrap();
+
+        let model = FileTree::new(&dir, |_, _| false);
+        let names: Vec<String> = model
+            .rows()
+            .iter()
+            .skip(1)
+            .filter_map(|row| row.path.file_name()?.to_str().map(String::from))
+            .collect();
+        assert_eq!(names, vec!["zzz-dir", "mmm.md", "aaa.txt"]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
