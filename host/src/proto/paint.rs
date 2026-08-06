@@ -162,11 +162,64 @@ impl Theme {
         }
     }
 
+    /// One Dark, as the owner's `init.lua` actually asks for.
+    ///
+    /// The values are One Dark's own, not an approximation reached by eye: this
+    /// host does not run the colorscheme plugin, so if the numbers drifted there
+    /// would be nothing to notice the drift against.
+    pub fn onedark() -> Self {
+        // bg0 #282c34, bg1 #31353f, bg2 #393f4a, bg_d #21252b, grey #5c6370.
+        Self {
+            bg: 0x282C34,
+            fg: 0xABB2BF,
+            line_nr: 0x495162,
+            cursor_line_nr: 0xABB2BF,
+            status_fg: 0xABB2BF,
+            status_bg: 0x21252B,
+            visual: 0x3E4451,
+            search_fg: 0x282C34,
+            search_bg: 0xE5C07B,
+            error: 0xE06C75,
+            non_text: 0x3B3F4C,
+            heading: 0x61AFEF,
+            code: 0x98C379,
+            emphasis: 0xC678DD,
+            bullet: 0xE5C07B,
+            link: 0x56B6C2,
+            modified_fg: 0xE06C75,
+            modified_bg: 0x31353F,
+            cursor_line_bg: 0x2D323B,
+            git_add: 0x98C379,
+            git_change: 0xE5C07B,
+            git_delete: 0xE06C75,
+            diag_error: 0xE06C75,
+            diag_warn: 0xE5C07B,
+            diag_info: 0x61AFEF,
+            diag_hint: 0x56B6C2,
+            pmenu_bg: 0x21252B,
+            pmenu_sel_bg: 0x3E4451,
+        }
+    }
+
     pub fn named(name: &str) -> Self {
         match name {
             "light" => Self::light(),
+            "onedark" | "onedark_dark" | "onedark_darker" | "one_dark" => Self::onedark(),
             _ => Self::dark(),
         }
+    }
+
+    /// Whether this host has colours for a colorscheme by that name.
+    ///
+    /// `named` falls back to dark for anything it does not know, which is the
+    /// right thing to draw and the wrong thing to reason with: without this,
+    /// "the scheme was applied" and "the scheme was not recognised" look the
+    /// same from the outside.
+    pub fn knows(name: &str) -> bool {
+        matches!(
+            name,
+            "dark" | "light" | "onedark" | "onedark_dark" | "onedark_darker" | "one_dark"
+        )
     }
 }
 
@@ -1248,10 +1301,23 @@ fn render_tree_lines(view: &WindowView, tree: &crate::core::editor::TreePane) ->
             }
         };
         let label = crate::tree::row_label(tree.model.root(), row);
+        // The indent guides carry the shape of the tree, not its content, and
+        // painting them in the row's own colour made every name arrive behind a
+        // ladder as bright as itself. They belong with the other marks the eye
+        // is meant to slide over.
+        let indent = crate::tree::indent_cells(row.depth);
         rows.push(RenderRow {
             cells: label
                 .chars()
-                .map(|text| RenderCell { text, hl: style })
+                .enumerate()
+                .map(|(col, text)| RenderCell {
+                    text,
+                    hl: if col < indent {
+                        hl::NON_TEXT
+                    } else {
+                        style
+                    },
+                })
                 .collect(),
             fill: if index == tree.model.selected() {
                 hl::TREE_SELECTED
@@ -1507,7 +1573,9 @@ fn highlight_table(theme: Theme) -> Vec<(u64, Value)> {
             hl::CURSOR_LINE,
             attrs(None, Some(theme.cursor_line_bg), false, false),
         ),
-        (hl::TREE_DIR, attrs(Some(theme.heading), None, true, false)),
+        // Blue, but not bold. Every second row in a tree is a directory, so
+        // bolding them all is not emphasis — it is just a heavier list.
+        (hl::TREE_DIR, attrs(Some(theme.heading), None, false, false)),
         (hl::TREE_NOTE, attrs(Some(theme.bullet), None, false, false)),
         (hl::TREE_FILE, attrs(Some(theme.fg), None, false, false)),
         (

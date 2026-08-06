@@ -354,6 +354,10 @@ impl Default for Editor {
     }
 }
 
+/// How wide the file tree asks to be. Wide enough for a name plus a few
+/// levels of indentation, and no wider — it is a list, not a document.
+const TREE_COLUMNS: usize = 30;
+
 impl Editor {
     pub fn new(buffer: Buffer) -> Self {
         let buffers = BufferStore::new(buffer.clone());
@@ -738,6 +742,30 @@ impl Editor {
     }
 
     pub fn open_file_tree(&mut self, root: PathBuf, reveal: Option<PathBuf>) {
+        // The tree is rooted at the project, not at whatever directory the open
+        // file happens to sit in: opening `host/src/tree.rs` used to root it at
+        // `src`, so the pane could not reach a sibling module without leaving.
+        //
+        // Only when the answer actually contains what was asked for, though.
+        // `root_of` falls back to the process working directory for a path that
+        // is in no project at all, and a tree that silently jumps somewhere
+        // unrelated is a worse answer than the directory that was requested.
+        // Compared as absolute paths on both sides. `root_of` always answers
+        // with one, so testing a relative request against it said "not inside"
+        // for a directory that plainly was, and quietly kept `src`.
+        let requested = if root.is_absolute() {
+            root
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&root))
+                .unwrap_or(root)
+        };
+        let project = crate::project::root_of(&requested);
+        let root = if requested.starts_with(&project) {
+            project
+        } else {
+            requested
+        };
         self.save_focused_view();
         let root = root.canonicalize().unwrap_or(root);
         let rules = crate::ignore::IgnoreRules::load(&root);
@@ -751,6 +779,11 @@ impl Editor {
             _ => {
                 let old = self.focused_view().clone();
                 let window = self.tabs.split_vertical_before();
+                // A list of file names is read edge-on, not worked in. An equal
+                // share gave it half the screen, which is the width of the
+                // thing being edited — 30 columns holds a name and its
+                // indentation and stops there.
+                self.tabs.set_fixed_width(window, TREE_COLUMNS);
                 let buffer = self.buffers.scratch("file-tree");
                 let mut view = old;
                 view.id = window;
