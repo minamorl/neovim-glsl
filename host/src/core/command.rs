@@ -76,6 +76,11 @@ pub fn execute(editor: &mut Editor, line: &str) {
                     text: "E37: No write since last change (add ! to override)".into(),
                     error: true,
                 });
+            } else if let Some((line, path)) = edit_plus_line(rest) {
+                editor.requests.push(Request::EditAt {
+                    path: expand(path),
+                    line,
+                });
             } else {
                 editor.requests.push(Request::Edit(expand(rest)));
             }
@@ -202,6 +207,16 @@ pub fn execute(editor: &mut Editor, line: &str) {
         "Blame" | "blame" => editor.requests.push(Request::Vcs(VcsRequest::Blame)),
         "Hunks" | "hunks" => editor.requests.push(Request::Vcs(VcsRequest::Hunks)),
         "Diff" | "diff" => editor.requests.push(Request::Vcs(VcsRequest::Diff)),
+        "Telescope" if rest == "live_grep" => editor.requests.push(Request::OpenProjectSearch(
+            crate::run::Origin::OwnerExCommand,
+        )),
+        "FzfLua" if rest == "live_grep" => editor.requests.push(Request::OpenProjectSearch(
+            crate::run::Origin::OwnerExCommand,
+        )),
+        "Grep" | "grep" | "Rg" | "rg" => editor.requests.push(Request::OpenProjectSearch(
+            crate::run::Origin::OwnerExCommand,
+        )),
+        "Jaq" | "jaq" => editor.requests.push(Request::RunTaskFromEx),
         "Note" | "note" => {
             if rest.is_empty() {
                 editor.message = Some(Message {
@@ -333,6 +348,26 @@ fn expand(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+fn edit_plus_line(rest: &str) -> Option<(usize, &str)> {
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix('+')?;
+    let digits = rest
+        .char_indices()
+        .take_while(|(_, ch)| ch.is_ascii_digit())
+        .map(|(index, ch)| index + ch.len_utf8())
+        .last()
+        .unwrap_or(0);
+    if digits == 0 {
+        return None;
+    }
+    let line = rest[..digits].parse().ok()?;
+    let path = rest[digits..].trim_start();
+    if path.is_empty() {
+        return None;
+    }
+    Some((line, path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +453,19 @@ mod tests {
         e.feed_str(":Tategaki<CR>");
         e.feed_str(":preview<CR>");
         assert_eq!(e.requests, vec![Request::Preview, Request::Preview]);
+    }
+
+    #[test]
+    fn edit_accepts_vim_plus_line_before_the_path() {
+        let mut e = editor("");
+        e.feed_str(":e +12 src/main.rs<CR>");
+        assert_eq!(
+            e.requests,
+            vec![Request::EditAt {
+                path: PathBuf::from("src/main.rs"),
+                line: 12
+            }]
+        );
     }
 
     #[test]

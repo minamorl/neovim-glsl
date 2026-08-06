@@ -12,6 +12,10 @@
 //! standing inside an open axis, not an answer to it. The seam that keeps the
 //! other arrangement reachable is [`Source`]: the surface asks a supplier for
 //! candidates and never assumes the supplier is local.
+//!
+//! Project-search results also stay a surface. `pin navigation_not_in_grid`
+//! covers grep hits because choosing one is navigation; even after the window
+//! system landed this must not become a grid quickfix window.
 
 use crate::picker_state::PickerState;
 
@@ -25,10 +29,29 @@ pub trait Source {
     fn label(&self) -> &str;
 }
 
+/// A source whose corpus is rebuilt by the query itself.
+///
+/// It is deliberately separate from [`Source`]. For fuzzy navigation, adding a
+/// character can only remove candidates from a fixed corpus; for grep it starts
+/// a new project search, so that invariant is false.
+pub trait QuerySource {
+    fn set_query(&mut self, query: String);
+    fn poll(&mut self);
+    fn label(&self) -> String;
+    fn total(&self) -> usize;
+    fn truncated(&self) -> bool;
+}
+
 pub struct Picker {
     state: PickerState,
     visible_rows: usize,
     source: String,
+}
+
+pub struct GrepPicker {
+    search: crate::grep::LiveSearch,
+    visible_rows: usize,
+    selected: usize,
 }
 
 /// What the surface asks the host to do when it closes.
@@ -127,6 +150,164 @@ impl Picker {
                 selected: row.selected,
             })
             .collect()
+    }
+}
+
+impl GrepPicker {
+    pub fn open(root: std::path::PathBuf, origin: crate::run::Origin, visible_rows: usize) -> Self {
+        Self {
+            search: crate::grep::LiveSearch::new(root, origin),
+            visible_rows: visible_rows.max(1),
+            selected: 0,
+        }
+    }
+
+    pub fn query(&self) -> &str {
+        self.search.query()
+    }
+
+    pub fn poll(&mut self) {
+        self.search.poll();
+        self.clamp_selection();
+    }
+
+    pub fn feed(&mut self, keys: &str) -> Outcome {
+        for key in crate::core::key::parse(keys) {
+            use crate::core::key::{Code, Named};
+            match key.code {
+                Code::Named(Named::Esc) => return Outcome::Cancelled,
+                Code::Named(Named::Enter) => {
+                    return self
+                        .search
+                        .hits()
+                        .get(self.selected)
+                        .map(|hit| Outcome::Chose(format!("+{} {}", hit.line, hit.path.display())))
+                        .unwrap_or(Outcome::Cancelled)
+                }
+                Code::Named(Named::Backspace) => {
+                    let mut chars: Vec<char> = self.search.query().chars().collect();
+                    chars.pop();
+                    self.search.set_query(chars.into_iter().collect());
+                    self.selected = 0;
+                }
+                Code::Named(Named::Down) => self.move_selection(1),
+                Code::Named(Named::Up) => self.move_selection(-1),
+                Code::Char('n') if key.ctrl => self.move_selection(1),
+                Code::Char('p') if key.ctrl => self.move_selection(-1),
+                Code::Char('j') if key.ctrl => self.move_selection(1),
+                Code::Char('k') if key.ctrl => self.move_selection(-1),
+                Code::Char('c') if key.ctrl => return Outcome::Cancelled,
+                _ => {
+                    if let Some(ch) = key.as_text() {
+                        let mut query = self.search.query().to_string();
+                        query.push(ch);
+                        self.search.set_query(query);
+                        self.selected = 0;
+                    }
+                }
+            }
+        }
+        Outcome::Open
+    }
+
+    pub fn label(&self) -> String {
+        let mut label = format!("grep {}", self.search.engine().label());
+        if self.search.query().chars().count() < crate::grep::MIN_QUERY_CHARS {
+            label.push_str("  min 2 chars");
+        }
+        if self.search.running() {
+            label.push_str("  searching");
+        }
+        if self.search.truncated() {
+            label.push_str("  truncated at 10000");
+        }
+        label
+    }
+
+    pub fn matches(&self) -> usize {
+        self.search.hits().len()
+    }
+
+    pub fn corpus_len(&self) -> usize {
+        if self.search.truncated() {
+            crate::grep::MAX_HITS
+        } else {
+            self.search.hits().len()
+        }
+    }
+
+    pub fn row_budget(&self) -> usize {
+        self.visible_rows
+    }
+
+    pub fn offset(&self) -> usize {
+        self.selected
+            .saturating_sub(self.visible_rows.saturating_sub(1))
+    }
+
+    pub fn visible(&self) -> Vec<crate::root_ui::navigation::RowInput> {
+        self.search
+            .hits()
+            .iter()
+            .enumerate()
+            .skip(self.offset())
+            .take(self.visible_rows)
+            .map(|(index, hit)| {
+                let text = hit.display(self.search.root());
+                let prefix = format!(
+                    "{}:{}:{}: ",
+                    hit.path
+                        .strip_prefix(self.search.root())
+                        .unwrap_or(&hit.path)
+                        .display(),
+                    hit.line,
+                    hit.column + 1
+                );
+                crate::root_ui::navigation::RowInput {
+                    text,
+                    positions: vec![(prefix.chars().count() + hit.column) as u32],
+                    selected: index == self.selected,
+                }
+            })
+            .collect()
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        let len = self.search.hits().len();
+        if len == 0 {
+            self.selected = 0;
+            return;
+        }
+        self.selected = (self.selected as isize + delta).clamp(0, len as isize - 1) as usize;
+    }
+
+    fn clamp_selection(&mut self) {
+        self.selected = self
+            .selected
+            .min(self.search.hits().len().saturating_sub(1));
+    }
+}
+
+impl QuerySource for GrepPicker {
+    fn set_query(&mut self, query: String) {
+        self.search.set_query(query);
+        self.selected = 0;
+    }
+
+    fn poll(&mut self) {
+        GrepPicker::poll(self);
+    }
+
+    fn label(&self) -> String {
+        GrepPicker::label(self)
+    }
+
+    fn total(&self) -> usize {
+        self.corpus_len()
+    }
+
+    fn truncated(&self) -> bool {
+        self.search.truncated()
     }
 }
 

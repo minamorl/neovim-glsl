@@ -28,6 +28,8 @@ use super::paint::{Painter, Theme};
 /// not understand them ignores them, which is the same latitude Neovim gives a
 /// client for `vim.rpcnotify`.
 pub const NAVIGATE: &str = "nvimglsl_navigate";
+pub const PROJECT_SEARCH: &str = "nvimglsl_project_search";
+pub const RUN_TASK: &str = "nvimglsl_run_task";
 pub const QUIT: &str = "nvimglsl_quit";
 /// A plugin-registered Ex command reached the editor; the client owns the
 /// plugin host, so the name and its argument travel out as an ordinary
@@ -156,6 +158,15 @@ impl Host {
         }
     }
 
+    fn open_path_at(&mut self, path: std::path::PathBuf, line: usize) {
+        if let Err(error) = self.editor.open_at(path.clone(), line) {
+            self.report(
+                format!("E484: Can't open file {}: {error}", path.display()),
+                true,
+            );
+        }
+    }
+
     pub fn attached(&self) -> bool {
         self.painter.is_some()
     }
@@ -203,12 +214,28 @@ impl Host {
                         Scope::Files => "files",
                     })],
                 )),
+                Request::OpenProjectSearch(origin) => {
+                    let mut params = vec![Value::from(origin.as_str())];
+                    params.extend(self.buffer_path_param());
+                    out.push(nvim::notification(PROJECT_SEARCH, params));
+                }
+                Request::RunTaskFromKey => {
+                    let mut params = vec![Value::from("key")];
+                    params.extend(self.buffer_path_param());
+                    out.push(nvim::notification(RUN_TASK, params));
+                }
+                Request::RunTaskFromEx => {
+                    let mut params = vec![Value::from("ex")];
+                    params.extend(self.buffer_path_param());
+                    out.push(nvim::notification(RUN_TASK, params));
+                }
                 Request::Plugin { name, argument } => out.push(nvim::notification(
                     PLUGIN,
                     vec![Value::from(name), Value::from(argument)],
                 )),
                 Request::Edit(path) => self.open_path(path),
                 Request::Vcs(request) => self.handle_vcs_request(request),
+                Request::EditAt { path, line } => self.open_path_at(path, line),
                 // Set from the buffer rather than from the file on disk: the
                 // point of a preview is to see what has not been written yet.
                 Request::Preview => {
@@ -514,6 +541,14 @@ impl Host {
             return None;
         }
         Some(events)
+    }
+
+    fn buffer_path_param(&self) -> Vec<Value> {
+        self.editor
+            .buffer
+            .path()
+            .map(|path| vec![Value::from(path.to_string_lossy().as_ref())])
+            .unwrap_or_else(|| vec![Value::Nil])
     }
 
     fn configure_editor_screen(&mut self) {

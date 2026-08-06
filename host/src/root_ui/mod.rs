@@ -10,6 +10,7 @@ pub mod adapter;
 pub mod language;
 pub mod navigation;
 pub mod vcs;
+pub mod output;
 
 use language::{
     bind_user_color_scheme, prepare_design_language, ColorRuntime, PreparedDesign, Result, Sample,

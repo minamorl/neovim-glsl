@@ -149,9 +149,17 @@ pub enum Request {
     /// `<Space>o` — open the navigation surface. The core does not draw it;
     /// `pin navigation_surface_renderer` puts that on the host.
     OpenNavigation(Scope),
+    /// Project grep. Like navigation, results are drawn by the host-side
+    /// surface; unlike navigation its candidate corpus is query-driven.
+    OpenProjectSearch(crate::run::Origin),
     Quit,
     /// A file the host should make current, from `:e`.
     Edit(PathBuf),
+    /// A file and line the host should make current, from `:e +{line} {path}`.
+    EditAt {
+        path: PathBuf,
+        line: usize,
+    },
     /// A new note by title. The core has no vault; the host does.
     NewNote(String),
     /// Follow the `[[link]]` under the cursor. The core does not read it
@@ -179,6 +187,10 @@ pub enum Request {
     Preview,
     /// Read-only Git/VCS views. The host owns Git and any spawned process.
     Vcs(VcsRequest),
+    /// `<F5>` through the owner's keymap.
+    RunTaskFromKey,
+    /// `:Jaq` typed by the owner.
+    RunTaskFromEx,
 }
 
 pub struct TreePane {
@@ -415,6 +427,16 @@ impl Editor {
         }
         self.save_focused_view();
         self.reveal_current_in_tree();
+        Ok(())
+    }
+
+    pub fn open_at(&mut self, path: PathBuf, line: usize) -> std::io::Result<()> {
+        self.open(path)?;
+        self.cursor = (line.saturating_sub(1), 0);
+        self.desired_col = 0;
+        self.clamp_cursor();
+        self.scroll_into_view();
+        self.save_focused_view();
         Ok(())
     }
 
@@ -1187,6 +1209,10 @@ impl Editor {
             return self.run_lua_command(call.trim());
         }
         match command {
+            "Telescope live_grep" | "FzfLua live_grep" => self
+                .requests
+                .push(Request::OpenProjectSearch(crate::run::Origin::OwnerKey)),
+            "Jaq" => self.requests.push(Request::RunTaskFromKey),
             "Telescope find_files" | "FzfLua files" | "Telescope git_files" => {
                 self.requests.push(Request::OpenNavigation(Scope::Files))
             }
@@ -2809,6 +2835,7 @@ mod tests {
         );
         for (mode, lhs, rhs) in [
             ("n", "<space>o", "<cmd>Telescope find_files<cr>"),
+            ("n", "<c-S>", "<cmd>FzfLua live_grep<CR>"),
             ("n", "<Leader>q", "<cmd>q<CR>"),
             ("n", "<F5>", "<cmd>Jaq<CR>"),
         ] {
@@ -2823,12 +2850,12 @@ mod tests {
         assert_eq!(e.requests, vec![Request::OpenNavigation(Scope::Files)]);
         e.feed_str(" q");
         assert!(e.requests.contains(&Request::Quit));
+        e.feed_str("<c-S>");
+        assert!(e
+            .requests
+            .contains(&Request::OpenProjectSearch(crate::run::Origin::OwnerKey)));
         e.feed_str("<F5>");
-        assert!(
-            e.message.as_ref().unwrap().text.contains("no such command"),
-            "an unrunnable mapping must say so: {:?}",
-            e.message
-        );
+        assert!(e.requests.contains(&Request::RunTaskFromKey));
     }
 
     #[test]
