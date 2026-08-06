@@ -181,6 +181,23 @@ pub fn execute(editor: &mut Editor, line: &str) {
         "Files" | "files" | "Nav" | "nav" => {
             editor.requests.push(Request::OpenNavigation(Scope::Files))
         }
+        "Tree" | "tree" | "FileTree" | "filetree" => {
+            let root = if rest.is_empty() {
+                editor
+                    .buffer
+                    .path()
+                    .and_then(|path| path.parent().map(PathBuf::from))
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    })
+            } else {
+                expand(rest)
+            };
+            let reveal = editor.buffer.path().map(PathBuf::from);
+            editor.open_file_tree(root, reveal);
+        }
+        "TreeNew" | "treenew" => editor.tree_create(rest),
+        "TreeRename" | "treerename" => editor.tree_rename(rest),
         "Note" | "note" => {
             if rest.is_empty() {
                 editor.message = Some(Message {

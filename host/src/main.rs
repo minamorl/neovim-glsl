@@ -8,6 +8,7 @@
 
 mod clipboard;
 mod core;
+mod ignore;
 mod keymap;
 mod luaconf;
 mod notes;
@@ -18,6 +19,8 @@ mod proto;
 mod root_ui;
 mod tategaki;
 mod textpos;
+mod tree;
+mod workspace;
 
 // The grid renderer is the measured candidate's, reached by path rather than
 // copied. `pin neovim_asset_not_discarded` forbids throwing the Neovim-derived
@@ -266,7 +269,7 @@ enum Overlay {
     None,
     Picker {
         picker: picker::Picker,
-        in_vault: bool,
+        kind: PickerKind,
     },
     Plugin(String),
 }
@@ -275,6 +278,13 @@ impl Overlay {
     fn is_open(&self) -> bool {
         !matches!(self, Self::None)
     }
+}
+
+#[derive(Clone, Copy)]
+enum PickerKind {
+    Vault,
+    Files,
+    Workspace,
 }
 
 struct App {
@@ -384,7 +394,7 @@ impl App {
             let source = notes::NotesSource::new(&vault);
             self.overlay = Overlay::Picker {
                 picker: picker::Picker::open(&source, visible),
-                in_vault: true,
+                kind: PickerKind::Vault,
             };
         } else {
             if !files {
@@ -403,10 +413,32 @@ impl App {
             let source = picker::TreeSource::new(root);
             self.overlay = Overlay::Picker {
                 picker: picker::Picker::open(&source, visible),
-                in_vault: false,
+                kind: PickerKind::Files,
             };
         }
         self.request_redraw();
+    }
+
+    fn open_entry_point(&mut self) {
+        match workspace::entry_point_source(workspace::EntryPointOrientation::pinned_default()) {
+            workspace::EntryPointSource::Repositories(source)
+            | workspace::EntryPointSource::NotesAndRepositories(source) => {
+                let rows = self.screen.as_ref().map(screen::Screen::rows).unwrap_or(24);
+                let visible = (rows / 2).max(4);
+                self.overlay = Overlay::Picker {
+                    picker: picker::Picker::open(&source, visible),
+                    kind: PickerKind::Workspace,
+                };
+                self.request_redraw();
+            }
+            workspace::EntryPointSource::RecentRepository(Some(repo)) => {
+                if let Some(link) = self.link.as_mut() {
+                    let escaped = repo.path.display().to_string().replace('<', "<lt>");
+                    let _ = link.input(&format!(":Tree {escaped}<CR>"));
+                }
+            }
+            workspace::EntryPointSource::RecentRepository(None) => self.open_navigation(false),
+        }
     }
 
     fn request_redraw(&self) {
@@ -434,18 +466,15 @@ impl App {
                     self.overlay = Overlay::Plugin(name);
                 }
             }
-            Overlay::Picker {
-                mut picker,
-                in_vault,
-            } => {
+            Overlay::Picker { mut picker, kind } => {
                 let choice = match picker.feed(keys) {
                     picker::Outcome::Open => {
-                        self.overlay = Overlay::Picker { picker, in_vault };
+                        self.overlay = Overlay::Picker { picker, kind };
                         None
                     }
                     picker::Outcome::Cancelled => None,
                     picker::Outcome::Chose(choice) => {
-                        let path = if in_vault {
+                        let path = if matches!(kind, PickerKind::Vault) {
                             notes::Vault::default_vault()
                                 .path_of(&choice)
                                 .display()
@@ -459,7 +488,12 @@ impl App {
                 if let Some(path) = choice {
                     if let Some(link) = self.link.as_mut() {
                         let escaped = path.replace('<', "<lt>");
-                        let _ = link.input(&format!("<Esc>:e {escaped}<CR>"));
+                        let command = if matches!(kind, PickerKind::Workspace) {
+                            format!("<Esc>:Tree {escaped}<CR>")
+                        } else {
+                            format!("<Esc>:e {escaped}<CR>")
+                        };
+                        let _ = link.input(&command);
                     }
                 }
                 self.request_redraw();
@@ -782,7 +816,7 @@ impl ApplicationHandler for App {
         // Snapshot mode is included deliberately: a first screen that cannot be
         // photographed cannot be checked.
         if self.args.file.is_none() {
-            self.open_navigation(false);
+            self.open_entry_point();
         }
 
         if let Some(path) = self.args.snapshot.clone() {
