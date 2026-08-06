@@ -134,6 +134,10 @@ impl BufferStore {
         self.insert(Buffer::empty(), false, Some(name.into()))
     }
 
+    pub fn empty(&mut self) -> BufferId {
+        self.insert(Buffer::empty(), true, None)
+    }
+
     pub fn delete(&mut self, id: BufferId) -> bool {
         if self.entries.len() == 1 || !self.entries.contains_key(&id) {
             return false;
