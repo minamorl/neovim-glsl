@@ -490,8 +490,33 @@ struct App {
     last_stats: root_ui::adapter::AdapterStats,
 }
 
+/// The colorscheme to paint with.
+///
+/// `--scheme` wins because it was typed on purpose. Otherwise the owner's
+/// `init.lua` is asked, because a config that says `require('onedark').load()`
+/// has already answered the question and being ignored is not a default, it is
+/// a wrong answer. A name this host has no colours for is left alone rather
+/// than silently painted as something else.
+fn resolve_scheme(args: &Args) -> String {
+    if args.scheme_given {
+        return args.scheme.clone();
+    }
+    match luaconf::load_default().colorscheme {
+        Some(name) if proto::paint::Theme::knows(&name) => {
+            eprintln!("colorscheme: {name} (from init.lua)");
+            name
+        }
+        Some(name) => {
+            eprintln!("colorscheme: {name} is named by init.lua but this host has no colours for it");
+            args.scheme.clone()
+        }
+        None => args.scheme.clone(),
+    }
+}
+
 impl App {
-    fn new(args: Args) -> Self {
+    fn new(mut args: Args) -> Self {
+        args.scheme = resolve_scheme(&args);
         Self {
             args,
             started: false,

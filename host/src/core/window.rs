@@ -127,6 +127,12 @@ pub struct Tabs {
     last_area: Rect,
     last_splitbelow: bool,
     last_splitright: bool,
+    /// Windows that ask for a width in columns rather than an equal share.
+    ///
+    /// A file tree is a list of names next to the thing being read, and an
+    /// equal share made it half the screen: the pane the eye passes over got
+    /// the same room as the pane it works in.
+    fixed_width: BTreeMap<WindowId, usize>,
 }
 
 impl Tabs {
@@ -142,6 +148,7 @@ impl Tabs {
             last_area: Rect::new(0, 0, 24, 80),
             last_splitbelow: true,
             last_splitright: true,
+            fixed_width: BTreeMap::new(),
         }
     }
 
@@ -169,8 +176,14 @@ impl Tabs {
 
     pub fn rects(&self, area: Rect, _splitbelow: bool, _splitright: bool) -> LayoutRects {
         let mut out = LayoutRects::default();
-        layout_rects(self.current_layout(), area, &mut out);
+        layout_rects(self.current_layout(), area, &self.fixed_width, &mut out);
         out
+    }
+
+    /// Ask for this window to be `cols` wide. It still yields when the terminal
+    /// is too narrow for the rest to have anything left.
+    pub fn set_fixed_width(&mut self, id: WindowId, cols: usize) {
+        self.fixed_width.insert(id, cols);
     }
 
     pub fn split_horizontal(&mut self, splitbelow: bool) -> WindowId {
@@ -307,6 +320,16 @@ impl Tabs {
 }
 
 impl Layout {
+    /// The window this branch is, when it is exactly one window. A request for
+    /// a fixed width belongs to a window, not to a subtree that happens to
+    /// contain one.
+    fn single_leaf(&self) -> Option<WindowId> {
+        match self {
+            Layout::Leaf(id) => Some(*id),
+            _ => None,
+        }
+    }
+
     pub fn leaves(&self) -> Vec<WindowId> {
         match self {
             Layout::Leaf(id) => vec![*id],
@@ -398,7 +421,12 @@ fn collapse(layout: &mut Layout) {
     }
 }
 
-fn layout_rects(layout: &Layout, area: Rect, out: &mut LayoutRects) {
+fn layout_rects(
+    layout: &Layout,
+    area: Rect,
+    fixed: &BTreeMap<WindowId, usize>,
+    out: &mut LayoutRects,
+) {
     match layout {
         Layout::Leaf(id) => {
             let text_rows = area.rows.saturating_sub(1).max(1);
@@ -415,10 +443,34 @@ fn layout_rects(layout: &Layout, area: Rect, out: &mut LayoutRects) {
             }
             let separators = children.len().saturating_sub(1);
             let available = area.cols.saturating_sub(separators);
+            // A window that asked for a width is served first, but only out of
+            // what is genuinely spare: half the row is the ceiling, so a request
+            // can never squeeze the windows beside it down to nothing.
+            let ceiling = available / 2;
+            let asked: Vec<usize> = children
+                .iter()
+                .map(|child| {
+                    child
+                        .single_leaf()
+                        .and_then(|id| fixed.get(&id).copied())
+                        .map(|cols| cols.min(ceiling))
+                        .unwrap_or(0)
+                })
+                .collect();
+            let claimed: usize = asked.iter().sum();
+            let rest = available.saturating_sub(claimed);
+            let sharing = asked.iter().filter(|cols| **cols == 0).count();
+            let mut share_index = 0;
             let mut col = area.col;
             for (index, child) in children.iter().enumerate() {
-                let width = split_size(available, children.len(), index);
-                layout_rects(child, Rect::new(area.row, col, area.rows, width), out);
+                let width = if asked[index] > 0 {
+                    asked[index]
+                } else {
+                    let width = split_size(rest, sharing.max(1), share_index);
+                    share_index += 1;
+                    width
+                };
+                layout_rects(child, Rect::new(area.row, col, area.rows, width), fixed, out);
                 col += width;
                 if index + 1 < children.len() {
                     out.separators.push(Rect::new(area.row, col, area.rows, 1));
@@ -433,7 +485,7 @@ fn layout_rects(layout: &Layout, area: Rect, out: &mut LayoutRects) {
             let mut row = area.row;
             for (index, child) in children.iter().enumerate() {
                 let height = split_size(area.rows, children.len(), index);
-                layout_rects(child, Rect::new(row, area.col, height, area.cols), out);
+                layout_rects(child, Rect::new(row, area.col, height, area.cols), fixed, out);
                 row += height;
             }
         }
@@ -519,5 +571,34 @@ mod tests {
         tabs.split_horizontal(true);
         tabs.only();
         assert!(matches!(tabs.current_layout(), Layout::Leaf(_)));
+    }
+
+    /// A file tree is read edge-on next to the thing being worked in. An equal
+    /// share gave the list the same room as the document.
+    #[test]
+    fn a_window_that_asks_for_a_width_is_not_given_an_equal_share() {
+        let mut tabs = Tabs::new(WindowId(1));
+        let tree = tabs.split_vertical_before();
+        tabs.set_fixed_width(tree, 30);
+
+        let rects = tabs.rects(Rect::new(0, 0, 24, 200), true, true);
+        assert_eq!(rects.text[&tree].cols, 30);
+        let other = *rects.text.keys().find(|id| **id != tree).unwrap();
+        assert_eq!(rects.text[&other].cols, 200 - 30 - 1);
+    }
+
+    /// The request is a preference, not a claim on the window beside it: at half
+    /// the row it stops growing, so a narrow terminal never leaves the editor
+    /// with nothing.
+    #[test]
+    fn a_width_request_yields_when_there_is_not_room_for_it() {
+        let mut tabs = Tabs::new(WindowId(1));
+        let tree = tabs.split_vertical_before();
+        tabs.set_fixed_width(tree, 30);
+
+        let rects = tabs.rects(Rect::new(0, 0, 24, 40), true, true);
+        assert!(rects.text[&tree].cols <= 20, "{:?}", rects.text[&tree]);
+        let other = *rects.text.keys().find(|id| **id != tree).unwrap();
+        assert!(rects.text[&other].cols >= 19, "{:?}", rects.text[&other]);
     }
 }

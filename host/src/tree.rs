@@ -300,6 +300,13 @@ pub fn is_note(path: &Path) -> bool {
     )
 }
 
+/// How many leading cells of a row's label are indent guides rather than the
+/// row itself. The renderer needs this to colour them apart; keeping the count
+/// here is what stops the two from disagreeing about where the name starts.
+pub fn indent_cells(depth: usize) -> usize {
+    depth * 2
+}
+
 pub fn row_label(root: &Path, row: &TreeRow) -> String {
     let name = if row.depth == 0 {
         root.file_name()
@@ -313,12 +320,18 @@ pub fn row_label(root: &Path, row: &TreeRow) -> String {
             .unwrap_or("/")
             .to_string()
     };
-    let marker = match (row.kind, row.open) {
-        (RowKind::Dir, true) => "-",
-        (RowKind::Dir, false) => "+",
-        (RowKind::Note | RowKind::File, _) => " ",
+    // The twisty gets a column of its own, and files get the same column empty.
+    // Putting the marker *in* the name column, as this did, meant a directory's
+    // name started two cells right of a file's at the same depth: the one column
+    // the eye scans down was the one column that never lined up.
+    let twisty = match (row.kind, row.open) {
+        (RowKind::Dir, true) => "▾ ",
+        (RowKind::Dir, false) => "▸ ",
+        (RowKind::Note | RowKind::File, _) => "  ",
     };
-    format!("{}{} {}", "  ".repeat(row.depth), marker, name)
+    // One guide per level of ancestry, so a name three levels in still says
+    // which spine it hangs from once the parent has scrolled off the top.
+    format!("{}{}{}", "│ ".repeat(row.depth), twisty, name)
 }
 
 /// Directory, then note, then any other file — so a file never sits at the top
@@ -453,6 +466,54 @@ mod expand_cost {
             .filter_map(|row| row.path.file_name()?.to_str().map(String::from))
             .collect();
         assert_eq!(names, vec!["zzz-dir", "mmm.md", "aaa.txt"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A directory's name used to start two cells right of a file's at the same
+    /// depth, because the marker sat in the name column. The one column the eye
+    /// scans down was the one that never lined up.
+    #[test]
+    fn a_name_starts_at_the_same_column_whatever_the_row_is() {
+        let dir = std::env::temp_dir().join("nvimglsl-tree-columns");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("file.rs"), "").unwrap();
+
+        let model = FileTree::new(&dir, |_, _| false);
+        let starts: Vec<usize> = model
+            .rows()
+            .iter()
+            .skip(1)
+            .map(|row| {
+                let label = row_label(model.root(), row);
+                label.chars().count()
+                    - label
+                        .trim_start_matches(['\u{2502}', ' ', '\u{25be}', '\u{25b8}'])
+                        .chars()
+                        .count()
+            })
+            .collect();
+        assert!(
+            starts.windows(2).all(|pair| pair[0] == pair[1]),
+            "names start at different columns: {starts:?}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn indent_cells_matches_the_guides_the_label_actually_carries() {
+        let dir = std::env::temp_dir().join("nvimglsl-tree-indent");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a/b")).unwrap();
+        std::fs::write(dir.join("a/b/deep.rs"), "").unwrap();
+
+        let mut model = FileTree::new(&dir, |_, _| false);
+        model.reveal(&dir.join("a/b/deep.rs"), |_, _| false);
+        for row in model.rows() {
+            let label = row_label(model.root(), row);
+            let guides: String = label.chars().take(indent_cells(row.depth)).collect();
+            assert_eq!(guides, "\u{2502} ".repeat(row.depth), "row {label:?}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 }

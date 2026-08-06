@@ -104,6 +104,9 @@ pub struct NvimConfig {
     pub globals: BTreeMap<String, Setting>,
     pub mappings: Vec<Mapping>,
     pub cmp: CmpConfig,
+    /// The colorscheme the config asks for, by name. The plugin that owns the
+    /// palette is not run here, so this is the request and not the colours.
+    pub colorscheme: Option<String>,
     /// What went wrong, if the file stopped early. Recorded, not swallowed.
     pub error: Option<String>,
 }
@@ -207,6 +210,21 @@ fn harvest(config: &mut NvimConfig, path: &Path, source: &str) -> mlua::Result<(
     let recorded: Table = globals.get("__nvimglsl")?;
     read_settings(&recorded.get::<Table>("options")?, &mut config.options)?;
     read_settings(&recorded.get::<Table>("globals")?, &mut config.globals)?;
+    config.colorscheme = recorded
+        .get::<Option<String>>("colorscheme")?
+        .or_else(|| {
+            recorded
+                .get::<Table>("commands")
+                .ok()?
+                .sequence_values::<String>()
+                .flatten()
+                .filter_map(|line| {
+                    let rest = line.strip_prefix("colorscheme ")?;
+                    let name = rest.trim();
+                    (!name.is_empty()).then(|| name.to_string())
+                })
+                .last()
+        });
     for entry in recorded.get::<Table>("maps")?.sequence_values::<Table>() {
         let entry = entry?;
         config.mappings.push(Mapping {
@@ -286,7 +304,7 @@ fn setting_from(value: &Value) -> mlua::Result<Option<Setting>> {
 /// config which sets up LSP, Treesitter, completion and forty plugins run to
 /// the end inside a program that has none of them.
 const RECORDER: &str = r#"
-__nvimglsl = { options = {}, globals = {}, maps = {}, commands = {}, cmp = { mapping = {}, sources = {} } }
+__nvimglsl = { options = {}, globals = {}, maps = {}, commands = {}, colorscheme = nil, cmp = { mapping = {}, sources = {} } }
 
 local function stub()
   local t = {}
@@ -379,7 +397,18 @@ vim.cmd = setmetatable({}, {
   __call = function(_, text)
     if type(text) == "string" then table.insert(__nvimglsl.commands, text) end
   end,
-  __index = function() return function() end end,
+  -- `vim.cmd.colorscheme('onedark')` is the same request as
+  -- `vim.cmd('colorscheme onedark')`. Returning a bare no-op here dropped the
+  -- second spelling on the floor.
+  __index = function(_, name)
+    return function(arg)
+      if type(arg) == "string" then
+        table.insert(__nvimglsl.commands, name .. " " .. arg)
+      else
+        table.insert(__nvimglsl.commands, name)
+      end
+    end
+  end,
 })
 
 vim.fn = stub()
@@ -427,7 +456,20 @@ require = function(name)
     local ok, result = pcall(chunk)
     value = (ok and result ~= nil) and result or __nvimglsl_stub()
   else
-    value = __nvimglsl_stub()
+    -- A colorscheme plugin is asked for by name and then told to load itself.
+    -- The plugin is not here and its palette cannot be read, but *which* one
+    -- was asked for is the part this host can act on.
+    value = setmetatable({}, {
+      __index = function(_, key)
+        if key == "load" then
+          return function() __nvimglsl.colorscheme = name end
+        end
+        return __nvimglsl_stub()
+      end,
+      __call = function() return __nvimglsl_stub() end,
+      __newindex = function() end,
+      __concat = function() return "" end,
+    })
   end
   loaded[name] = value
   return value
@@ -603,5 +645,60 @@ cmp.setup({
             config.error
         );
         assert!(!config.options.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod colorscheme_tests {
+    use super::*;
+
+    /// Its own copy: the helper in `tests` is private to that module, and a
+    /// name keyed by source length would collide across the two anyway.
+    fn config_from(source: &str) -> NvimConfig {
+        let dir = std::env::temp_dir().join(format!("nvimglsl-scheme-{}", source.len()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("init.lua");
+        std::fs::write(&path, source).unwrap();
+        let config = load(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+        config
+    }
+
+    #[test]
+    fn a_colorscheme_plugin_asked_to_load_itself_is_recorded() {
+        let config = config_from("require('onedark').load()");
+        assert_eq!(config.colorscheme.as_deref(), Some("onedark"));
+    }
+
+    #[test]
+    fn both_spellings_of_the_colorscheme_command_are_heard() {
+        assert_eq!(
+            config_from("vim.cmd('colorscheme gruvbox')").colorscheme.as_deref(),
+            Some("gruvbox")
+        );
+        assert_eq!(
+            config_from("vim.cmd.colorscheme('nord')").colorscheme.as_deref(),
+            Some("nord")
+        );
+    }
+
+    #[test]
+    fn a_config_that_names_none_says_so_rather_than_guessing() {
+        assert_eq!(config_from("vim.opt.number = true").colorscheme, None);
+    }
+
+    /// The owner's own config, which is what started this: it says
+    /// `require('onedark').load()` and was being ignored.
+    #[test]
+    fn the_owners_config_names_onedark() {
+        let Ok(home) = std::env::var("HOME") else { return };
+        let path = PathBuf::from(home).join(".config/nvim/init.lua");
+        if !path.exists() {
+            eprintln!("skip: no init.lua here");
+            return;
+        }
+        let config = load(&path);
+        assert_eq!(config.error, None);
+        assert_eq!(config.colorscheme.as_deref(), Some("onedark"));
     }
 }
