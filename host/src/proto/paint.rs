@@ -1410,6 +1410,7 @@ fn highlight_table(theme: Theme) -> Vec<(u64, Value)> {
         (
             hl::TREE_SELECTED,
             attrs(Some(theme.fg), Some(theme.visual), false, false),
+        ),
         (hl::GIT_ADD, attrs(Some(theme.git_add), None, true, false)),
         (
             hl::GIT_CHANGE,

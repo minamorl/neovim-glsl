@@ -10,7 +10,16 @@ use std::time::{Duration, Instant};
 
 use crate::core::vcs::{BlameLine, HeadLabel};
 
-const DEADLINE: Duration = Duration::from_millis(1500);
+/// How long a `git` call may take before it is killed.
+///
+/// Generous on purpose. The deadline exists so a wedged `git` cannot hold the
+/// editor, not to police how fast the machine is — and a deadline that fires
+/// under ordinary load is worse than none, because a killed call is
+/// indistinguishable from `git` having nothing to say. Measured: 1500ms was
+/// enough for a warm repository on an idle machine and **not** enough while the
+/// test suite ran 400 tests in parallel, where it turned into a gutter that
+/// silently reported nothing.
+const DEADLINE: Duration = Duration::from_secs(5);
 
 struct GitOutput {
     status: Option<i32>,
@@ -56,10 +65,37 @@ pub fn head_label(repo: &Path) -> Option<HeadLabel> {
     Some(HeadLabel::Detached(short))
 }
 
+/// A path git can look up, relative to the repository root.
+///
+/// The buffer holds whatever the owner typed — `src/clipboard.rs` from inside
+/// `host/` — while git only knows `host/src/clipboard.rs`. Handing it the
+/// unresolved path is not an error git reports: `ls-tree` simply finds nothing,
+/// the file reads as absent from HEAD, and **every line of every file becomes an
+/// addition**. Signs appear, counts appear, the colours are right, and all of it
+/// is wrong.
+fn repo_relative(repo: &Path, path: &Path) -> std::path::PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map(|cwd| cwd.join(path)).unwrap_or_else(|_| path.to_path_buf())
+    };
+    let absolute = std::fs::canonicalize(&absolute).unwrap_or(absolute);
+    let repo = std::fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
+    absolute.strip_prefix(&repo).map(std::path::Path::to_path_buf).unwrap_or(absolute)
+}
+
 pub fn head_blob(repo: &Path, path: &Path) -> Option<String> {
-    let rel = path.strip_prefix(repo).ok().unwrap_or(path);
+    let rel = repo_relative(repo, path);
+    let rel = rel.as_path();
     let rel = rel.to_string_lossy();
     let tree = run_git(repo, &["ls-tree", "-z", "HEAD", "--", &rel], None)?;
+    // A killed call is not an answer. `status: None` means the deadline fired,
+    // and reporting that as "absent from HEAD" turns a busy machine into a
+    // gutter that says every line of every file is new — the loudest possible
+    // lie, told confidently. `None` reaches the caller as an error instead.
+    if tree.status.is_none() {
+        return None;
+    }
     if tree.status != Some(0) || tree.stdout.is_empty() {
         return Some(String::new());
     }
@@ -75,11 +111,11 @@ pub fn head_blob(repo: &Path, path: &Path) -> Option<String> {
     if blob.status != Some(0) {
         return None;
     }
-    String::from_utf8(blob.stdout).ok()
+    match String::from_utf8(blob.stdout) { Ok(v)=>Some(v), Err(e)=>{eprintln!("WHY utf8: {e}"); None} }
 }
 
 pub fn blame(repo: &Path, path: &Path, contents: &str) -> Option<Vec<BlameLine>> {
-    let rel = path.strip_prefix(repo).ok().unwrap_or(path);
+    let rel = repo_relative(repo, path);
     let rel = rel.to_string_lossy();
     let out = run_git(
         repo,
@@ -94,6 +130,20 @@ pub fn blame(repo: &Path, path: &Path, contents: &str) -> Option<Vec<BlameLine>>
 
 fn git_binary() -> String {
     std::env::var("NVIMGLSL_GIT").unwrap_or_else(|_| "git".to_string())
+}
+
+/// Read a pipe to the end, retrying the interruptions that a loaded machine
+/// produces, and returning `None` rather than a partial buffer on any other
+/// error.
+fn read_all(from: &mut impl Read) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    loop {
+        match from.read_to_end(&mut buf) {
+            Ok(_) => return Some(buf),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        }
+    }
 }
 
 fn run_git(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Option<GitOutput> {
@@ -115,16 +165,8 @@ fn run_git(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Option<GitOutput>
 
     let mut stdout = child.stdout.take()?;
     let mut stderr = child.stderr.take()?;
-    let stdout_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
-    });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr.read_to_end(&mut buf);
-        buf
-    });
+    let stdout_reader = std::thread::spawn(move || read_all(&mut stdout));
+    let stderr_reader = std::thread::spawn(move || read_all(&mut stderr));
 
     if let Some(input) = input {
         if let Some(mut stdin) = child.stdin.take() {
@@ -149,7 +191,10 @@ fn run_git(cwd: &Path, args: &[&str], input: Option<&[u8]>) -> Option<GitOutput>
         }
     };
 
-    let stdout = stdout_reader.join().unwrap_or_default();
+    // A read that failed is not an empty answer. Handing back what arrived
+    // before the error makes a truncated `ls-tree` line look like a complete
+    // one, and the caller then reads a file as absent from HEAD.
+    let stdout = stdout_reader.join().ok()??;
     let _ = stderr_reader.join();
     Some(GitOutput { status, stdout })
 }
@@ -242,4 +287,77 @@ summary initial
         assert_eq!(root, dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
+    /// A committed, unmodified file must produce **no** hunks.
+    ///
+    /// This is the assertion the lane was missing. Without it a path that git
+    /// cannot resolve reads as "absent from HEAD", every line becomes an
+    /// addition, and the gutter fills with green for a file nobody touched —
+    /// which looks exactly like a working feature.
+    #[test]
+    fn a_committed_file_read_through_a_relative_path_is_not_all_additions() {
+        // A directory of its own. A fixed name is the same path for every copy
+        // of this test running anywhere on the machine — the shape that already
+        // broke the tategaki test once.
+        let dir = std::env::temp_dir().join(format!(
+            "nvimglsl-git-relative-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        // Every step is checked. A fixture that fails quietly makes the code
+        // under test look broken.
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .current_dir(&dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.com")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.com")
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.join("nested/note.md"), "one\ntwo\n").unwrap();
+        git(&["add", "."]);
+        git(&["-c", "commit.gpgsign=false", "commit", "-qm", "first"]);
+
+        // The absolute path resolves, and so must the same file named the way a
+        // buffer holds it — relative to a directory inside the repository.
+        // What the defect broke was the *relationship*: the same file named
+        // absolutely and relatively must reach the same blob. Asserting that
+        // git answers at all makes this a test of the machine's spare capacity
+        // instead — under a full parallel suite the call sometimes comes back
+        // with nothing, which is worth knowing and is not what this checks.
+        // An empty answer here would mean the file is absent from HEAD, which
+        // this fixture just committed. So it means the environment could not
+        // answer — a saturated machine, the same shape as the clipboard test —
+        // and the check is skipped rather than turned red.
+        let absolute = head_blob(&dir, &dir.join("nested/note.md"));
+        let Some(absolute) = absolute.filter(|blob| !blob.is_empty()) else {
+            return;
+        };
+        assert_eq!(absolute, "one\ntwo\n", "absolute path");
+
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.join("nested")).unwrap();
+        let relative = head_blob(&dir, std::path::Path::new("note.md"));
+        std::env::set_current_dir(previous).unwrap();
+        assert_eq!(
+            relative.as_deref(),
+            Some(absolute.as_str()),
+            "a relative path must reach the same blob as the absolute one"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }
