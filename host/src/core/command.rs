@@ -194,7 +194,12 @@ pub fn execute(editor: &mut Editor, line: &str) {
                     .path()
                     .and_then(|path| path.parent().map(PathBuf::from))
                     .unwrap_or_else(|| {
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                        // The third of these, missed when the other two were
+                        // fixed: `:Tree` with no argument on a Dock launch
+                        // rooted at `/` exactly like the others did.
+                        crate::workspace::workable_root(
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                        )
                     })
             } else {
                 expand(rest)
