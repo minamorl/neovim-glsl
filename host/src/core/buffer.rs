@@ -11,6 +11,46 @@
 
 use std::path::{Path, PathBuf};
 
+/// `O_NONBLOCK`. One integer is not worth a `libc` dependency, and the value is
+/// frozen by each platform's ABI — it cannot change without breaking every
+/// binary already built against it.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const O_NONBLOCK: i32 = 0x0004;
+#[cfg(target_os = "linux")]
+const O_NONBLOCK: i32 = 0o4000;
+
+/// Read a file's text without ever blocking in `open(2)`.
+///
+/// A path handed over by the file tree is whatever the filesystem holds, and
+/// not all of it is a file. Opening a FIFO that has no writer blocks in the
+/// kernel **forever** — there is no timeout to raise and no signal to wait for.
+/// The window keeps repainting because only the editor thread is wedged, so it
+/// does not look like a hang; it looks like the whole application froze.
+///
+/// `O_NONBLOCK` makes the open itself return, and the check below asks the
+/// *opened descriptor* what it is rather than the path, which would leave a
+/// window for the answer to change in between.
+fn read_regular_file(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", path.display()),
+        ));
+    }
+    // `O_NONBLOCK` has no effect on reads from a regular file, so this is a
+    // plain blocking read of something that is guaranteed to end.
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
+    Ok(text)
+}
+
 /// One undoable state of the buffer.
 ///
 /// The whole text is stored, not a diff. `free host_editing_core_design` leaves
@@ -83,7 +123,7 @@ impl Buffer {
     }
 
     pub fn open(path: &Path) -> std::io::Result<Self> {
-        let mut buffer = match std::fs::read_to_string(path) {
+        let mut buffer = match read_regular_file(path) {
             Ok(text) => {
                 let mut b = Self::empty();
                 b.set_text(&text);
@@ -456,5 +496,38 @@ mod tests {
         buffer.remove_lines(0, 2);
         assert_eq!(buffer.line_count(), 1);
         assert_eq!(buffer.line_text(0), "");
+    }
+
+    /// Before this was fixed, opening a FIFO from the file tree wedged the
+    /// editor thread inside `open(2)` with no way back. The test would not
+    /// fail — it would never return, which is exactly what the owner saw.
+    #[test]
+    fn opening_a_fifo_fails_instead_of_blocking() {
+        let dir = std::env::temp_dir().join("nvimglsl-fifo-open");
+        let _ = std::fs::create_dir_all(&dir);
+        let fifo = dir.join("pipe");
+        let _ = std::fs::remove_file(&fifo);
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !made {
+            eprintln!("skip: mkfifo unavailable");
+            return;
+        }
+        let Err(err) = Buffer::open(&fifo) else {
+            panic!("a FIFO is not a file to edit");
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let _ = std::fs::remove_file(&fifo);
+    }
+
+    #[test]
+    fn a_directory_is_not_opened_as_text() {
+        let Err(err) = Buffer::open(Path::new("/")) else {
+            panic!("a directory is not a file to edit");
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 }

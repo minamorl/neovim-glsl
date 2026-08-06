@@ -697,7 +697,13 @@ pub fn serve_incoming(
     initial_path: Option<PathBuf>,
 ) -> std::io::Result<()> {
     if let Some(path) = initial_path {
-        let _ = host.editor.open(path);
+        // Discarding this used to be harmless, because the only way to fail was
+        // a file that is not there yet — which opens an empty buffer on purpose.
+        // A path that cannot be read at all now fails too, and swallowing that
+        // leaves an unnamed empty buffer with no account of where the file went.
+        if let Err(error) = host.editor.open(path.clone()) {
+            host.editor.report_open_failure(&path, &error);
+        }
     }
     loop {
         let outgoing = match incoming.recv() {
