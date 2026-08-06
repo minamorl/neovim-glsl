@@ -316,7 +316,7 @@ impl Editor {
         let buffers = BufferStore::new(buffer.clone());
         let first_window = WindowId(1);
         let mut views = std::collections::BTreeMap::new();
-        views.insert(first_window, WindowView::new(first_window, 1, BufferId(1)));
+        views.insert(first_window, WindowView::new(first_window, 2, BufferId(1)));
         Self {
             buffer,
             buffers,
@@ -366,11 +366,17 @@ impl Editor {
     }
 
     pub fn open(&mut self, path: PathBuf) -> std::io::Result<()> {
-        self.buffer = Buffer::open(&path)?;
+        self.save_focused_view();
+        let id = self.buffers.open_or_reuse(&path)?;
+        self.buffers.set_current(id);
+        self.buffer = self.buffers.get(id).unwrap().clone();
         self.cursor = (0, 0);
         self.desired_col = 0;
         self.top_line = 0;
         self.mode = Mode::Normal;
+        if let Some(view) = self.views.get_mut(&self.focus_window()) {
+            view.buffer = id;
+        }
         self.save_focused_view();
         Ok(())
     }
@@ -406,6 +412,19 @@ impl Editor {
         self.views.get(&self.focus_window()).unwrap()
     }
 
+    pub fn visible_views(&self) -> Vec<WindowView> {
+        self.tabs
+            .current_layout()
+            .leaves()
+            .into_iter()
+            .filter_map(|id| self.views.get(&id).cloned())
+            .collect()
+    }
+
+    pub fn window_count(&self) -> usize {
+        self.tabs.current_layout().leaves().len()
+    }
+
     pub fn set_screen(&mut self, cols: usize, rows: usize) {
         self.view_rows = rows.max(1);
         if let Some(view) = self.views.get_mut(&self.focus_window()) {
@@ -417,6 +436,24 @@ impl Editor {
             self.options.splitbelow,
             self.options.splitright,
         );
+        self.scroll_into_view();
+        self.save_focused_view();
+    }
+
+    pub fn set_layout_screen(&mut self, cols: usize, rows: usize, row_offset: usize) {
+        let area = Rect::new(row_offset, 0, rows.max(1), cols.max(1));
+        self.tabs
+            .remember_geometry(area, self.options.splitbelow, self.options.splitright);
+        let rects = self
+            .tabs
+            .rects(area, self.options.splitbelow, self.options.splitright);
+        for (id, rect) in rects.text {
+            if let Some(view) = self.views.get_mut(&id) {
+                view.cols = rect.cols.max(1);
+                view.rows = rect.rows.max(1);
+            }
+        }
+        self.view_rows = self.focused_view().rows.max(1);
         self.scroll_into_view();
         self.save_focused_view();
     }
@@ -444,6 +481,156 @@ impl Editor {
 
     pub fn register(&self, name: char) -> Option<&Register> {
         self.registers.get(&name)
+    }
+
+    pub fn split_window(&mut self, vertical: bool) {
+        self.save_focused_view();
+        let old_view = self.focused_view().clone();
+        let id = if vertical {
+            self.tabs.split_vertical(self.options.splitright)
+        } else {
+            self.tabs.split_horizontal(self.options.splitbelow)
+        };
+        let mut view = old_view;
+        view.id = id;
+        view.grid = self.tabs.grid_for_new_window();
+        self.views.insert(id, view);
+        self.load_focused_view();
+    }
+
+    pub fn new_window(&mut self) {
+        self.split_window(false);
+        let id = self.buffers.empty();
+        self.switch_focused_to_buffer(id, true);
+    }
+
+    pub fn close_window(&mut self) -> bool {
+        self.save_focused_view();
+        let old = self.focus_window();
+        if self.tabs.close().is_some() {
+            self.views.remove(&old);
+            self.load_focused_view();
+            return true;
+        }
+        false
+    }
+
+    pub fn only_window(&mut self) {
+        self.save_focused_view();
+        let focus = self.focus_window();
+        self.tabs.only();
+        self.views.retain(|id, _| *id == focus);
+        self.load_focused_view();
+    }
+
+    pub fn focus_window_dir(&mut self, dir: Direction) -> bool {
+        self.save_focused_view();
+        let moved = self.tabs.focus_dir(dir).is_some();
+        self.load_focused_view();
+        moved
+    }
+
+    pub fn cycle_window_focus(&mut self) {
+        self.save_focused_view();
+        self.tabs.cycle_focus();
+        self.load_focused_view();
+    }
+
+    pub fn next_tab(&mut self) {
+        self.save_focused_view();
+        self.tabs.next_tab();
+        self.load_focused_view();
+    }
+
+    pub fn prev_tab(&mut self) {
+        self.save_focused_view();
+        self.tabs.prev_tab();
+        self.load_focused_view();
+    }
+
+    pub fn new_tab(&mut self) {
+        self.save_focused_view();
+        let (cols, rows) = {
+            let view = self.focused_view();
+            (view.cols, view.rows)
+        };
+        let id = self.tabs.new_tab();
+        let buffer = self.buffers.empty();
+        let mut view = WindowView::new(id, self.tabs.grid_for_new_window(), buffer);
+        view.cols = cols;
+        view.rows = rows;
+        self.views.insert(id, view);
+        self.switch_focused_to_buffer(buffer, true);
+    }
+
+    pub fn close_tab(&mut self) -> bool {
+        self.save_focused_view();
+        let Some(removed) = self.tabs.close_tab() else {
+            return false;
+        };
+        for id in removed {
+            self.views.remove(&id);
+        }
+        self.load_focused_view();
+        true
+    }
+
+    pub fn next_buffer(&mut self) -> bool {
+        self.save_focused_view();
+        let Some(id) = self.buffers.next() else {
+            return false;
+        };
+        self.switch_focused_to_buffer(id, true)
+    }
+
+    pub fn prev_buffer(&mut self) -> bool {
+        self.save_focused_view();
+        let Some(id) = self.buffers.prev() else {
+            return false;
+        };
+        self.switch_focused_to_buffer(id, true)
+    }
+
+    pub fn switch_buffer_index(&mut self, index: usize) -> bool {
+        self.save_focused_view();
+        let Some(id) = self.buffers.by_index(index) else {
+            return false;
+        };
+        self.switch_focused_to_buffer(id, true)
+    }
+
+    pub fn delete_current_buffer(&mut self) -> bool {
+        self.save_focused_view();
+        let deleting = self.buffers.current_id();
+        if !self.buffers.delete(deleting) {
+            return false;
+        }
+        let replacement = self.buffers.current_id();
+        for view in self.views.values_mut() {
+            if view.buffer == deleting {
+                view.buffer = replacement;
+                view.cursor = (0, 0);
+                view.desired_col = 0;
+                view.top_line = 0;
+            }
+        }
+        self.load_focused_view();
+        true
+    }
+
+    pub fn buffer_list_message(&self) -> String {
+        let current = self.buffers.current_id();
+        self.buffers
+            .list()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, id)| {
+                let entry = self.buffers.entry(id)?;
+                let marker = if id == current { "%" } else { " " };
+                Some(format!("{:>3}{marker} {}", index + 1, entry.buffer.name()))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     // --- input ------------------------------------------------------------
@@ -1651,13 +1838,14 @@ impl Editor {
 
     fn save_focused_view(&mut self) {
         let focus = self.focus_window();
+        let id = self.buffers.current_id();
         if let Some(view) = self.views.get_mut(&focus) {
             view.cursor = self.cursor;
             view.desired_col = self.desired_col;
             view.top_line = self.top_line;
             view.rows = self.view_rows;
+            view.buffer = id;
         }
-        let id = self.buffers.current_id();
         if let Some(slot) = self.buffers.get_mut(id) {
             *slot = self.buffer.clone();
         }
@@ -1666,6 +1854,10 @@ impl Editor {
     fn load_focused_view(&mut self) {
         let focus = self.focus_window();
         if let Some(view) = self.views.get(&focus).cloned() {
+            self.buffers.set_current(view.buffer);
+            if let Some(buffer) = self.buffers.get(view.buffer) {
+                self.buffer = buffer.clone();
+            }
             self.cursor = view.cursor;
             self.desired_col = view.desired_col;
             self.top_line = view.top_line;
@@ -1674,50 +1866,48 @@ impl Editor {
         self.clamp_cursor();
     }
 
+    fn switch_focused_to_buffer(&mut self, id: BufferId, reset_view: bool) -> bool {
+        if !self.buffers.set_current(id) {
+            return false;
+        }
+        if let Some(buffer) = self.buffers.get(id) {
+            self.buffer = buffer.clone();
+        }
+        if reset_view {
+            self.cursor = (0, 0);
+            self.desired_col = 0;
+            self.top_line = 0;
+        }
+        if let Some(view) = self.views.get_mut(&self.focus_window()) {
+            view.buffer = id;
+            if reset_view {
+                view.cursor = self.cursor;
+                view.desired_col = self.desired_col;
+                view.top_line = self.top_line;
+            }
+        }
+        self.clamp_cursor();
+        self.save_focused_view();
+        true
+    }
+
     fn window_command(&mut self, ch: char) {
         self.save_focused_view();
         match ch {
             'h' | 'j' | 'k' | 'l' => {
                 let dir = Direction::from_vim(ch).unwrap();
-                self.tabs.focus_dir(dir);
-                self.load_focused_view();
+                self.focus_window_dir(dir);
             }
             's' | 'S' => self.split_window(false),
             'v' => self.split_window(true),
             'c' | 'q' => {
-                let old = self.focus_window();
-                if self.tabs.close().is_some() {
-                    self.views.remove(&old);
-                    self.load_focused_view();
-                }
+                self.close_window();
             }
-            'o' => {
-                let focus = self.focus_window();
-                self.tabs.only();
-                self.views.retain(|id, _| *id == focus);
-                self.load_focused_view();
-            }
-            'w' => {
-                self.tabs.cycle_focus();
-                self.load_focused_view();
-            }
+            'o' => self.only_window(),
+            'w' => self.cycle_window_focus(),
             _ => {}
         }
         self.pending.clear();
-    }
-
-    fn split_window(&mut self, vertical: bool) {
-        let old_view = self.focused_view().clone();
-        let id = if vertical {
-            self.tabs.split_vertical(self.options.splitright)
-        } else {
-            self.tabs.split_horizontal(self.options.splitbelow)
-        };
-        let mut view = old_view;
-        view.id = id;
-        view.grid = self.tabs.grid_for_new_window();
-        self.views.insert(id, view);
-        self.load_focused_view();
     }
 
     fn scroll_into_view(&mut self) {

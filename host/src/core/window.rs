@@ -138,7 +138,7 @@ impl Tabs {
             }],
             current: 0,
             next_window: first.0 + 1,
-            next_grid: 2,
+            next_grid: 3,
             last_area: Rect::new(0, 0, 24, 80),
             last_splitbelow: true,
             last_splitright: true,
@@ -151,6 +151,14 @@ impl Tabs {
 
     pub fn current_layout(&self) -> &Layout {
         &self.tabs[self.current].layout
+    }
+
+    pub fn len(&self) -> usize {
+        self.tabs.len()
+    }
+
+    pub fn current_index(&self) -> usize {
+        self.current
     }
 
     pub fn remember_geometry(&mut self, area: Rect, splitbelow: bool, splitright: bool) {
@@ -243,14 +251,40 @@ impl Tabs {
         self.focus()
     }
 
+    pub fn new_tab(&mut self) -> WindowId {
+        let id = self.alloc_window();
+        self.tabs.push(Tab {
+            layout: Layout::Leaf(id),
+            focus: id,
+        });
+        self.current = self.tabs.len() - 1;
+        id
+    }
+
+    pub fn close_tab(&mut self) -> Option<Vec<WindowId>> {
+        if self.tabs.len() <= 1 {
+            return None;
+        }
+        let removed = self.tabs.remove(self.current).layout.leaves();
+        if self.current >= self.tabs.len() {
+            self.current = self.tabs.len() - 1;
+        }
+        Some(removed)
+    }
+
     fn split(&mut self, axis: Axis, after: bool) -> WindowId {
-        let id = WindowId(self.next_window);
-        self.next_window += 1;
-        self.next_grid += 1;
+        let id = self.alloc_window();
         let focus = self.focus();
         let tab = &mut self.tabs[self.current];
         insert_split(&mut tab.layout, focus, id, axis, after);
         tab.focus = id;
+        id
+    }
+
+    fn alloc_window(&mut self) -> WindowId {
+        let id = WindowId(self.next_window);
+        self.next_window += 1;
+        self.next_grid += 1;
         id
     }
 
@@ -429,10 +463,10 @@ mod tests {
         let mut tabs = Tabs::new(WindowId(1));
         let a = tabs.split_vertical(true);
         assert_eq!(a, WindowId(2));
-        assert_eq!(tabs.grid_for_new_window(), 2);
+        assert_eq!(tabs.grid_for_new_window(), 3);
         let b = tabs.split_horizontal(true);
         assert_eq!(b, WindowId(3));
-        assert_eq!(tabs.grid_for_new_window(), 3);
+        assert_eq!(tabs.grid_for_new_window(), 4);
     }
 
     #[test]

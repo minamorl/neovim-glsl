@@ -181,6 +181,46 @@ fn attach(client: &mut Client, cols: u64, rows: u64) -> Vec<(String, Vec<Value>)
     redraw_events(&client.drain())
 }
 
+fn attach_multigrid(client: &mut Client, cols: u64, rows: u64) -> Vec<(String, Vec<Value>)> {
+    client.request(
+        "nvim_ui_attach",
+        vec![
+            Value::from(cols),
+            Value::from(rows),
+            Value::Map(vec![
+                (Value::from("ext_linegrid"), Value::from(true)),
+                (Value::from("ext_multigrid"), Value::from(true)),
+                (Value::from("rgb"), Value::from(true)),
+            ]),
+        ],
+    );
+    redraw_events(&client.drain())
+}
+
+fn win_positions(events: &[(String, Vec<Value>)]) -> Vec<(u64, u64, u64, u64, u64)> {
+    events
+        .iter()
+        .filter(|(name, _)| name == "win_pos")
+        .filter_map(|(_, args)| {
+            Some((
+                args.first()?.as_u64()?,
+                args.get(2)?.as_u64()?,
+                args.get(3)?.as_u64()?,
+                args.get(4)?.as_u64()?,
+                args.get(5)?.as_u64()?,
+            ))
+        })
+        .collect()
+}
+
+fn cursor_grid(events: &[(String, Vec<Value>)]) -> Option<u64> {
+    events.iter().rev().find_map(|(name, args)| {
+        (name == "grid_cursor_goto")
+            .then(|| args.first().and_then(Value::as_u64))
+            .flatten()
+    })
+}
+
 #[test]
 fn an_outside_client_can_attach_and_receives_a_full_first_paint() {
     let mut client = Client::start(&[]);
@@ -198,6 +238,60 @@ fn an_outside_client_can_attach_and_receives_a_full_first_paint() {
             "{expected} missing from {names:?}"
         );
     }
+}
+
+#[test]
+fn a_multigrid_client_observes_split_focus_resize_and_close() {
+    let mut client = Client::start(&[]);
+    let attach = attach_multigrid(&mut client, 40, 8);
+    assert!(
+        win_positions(&attach).iter().any(|(grid, ..)| *grid == 2),
+        "initial window grid was not placed: {attach:?}"
+    );
+
+    client.notify("nvim_input", vec![Value::from(":vsplit<CR>")]);
+    let split = redraw_events(&client.drain());
+    let mut positions = win_positions(&split);
+    positions.sort_by_key(|(_, _, col, _, _)| *col);
+    assert_eq!(positions.len(), 2, "split positions were {positions:?}");
+    assert!(positions[0].2 + positions[0].3 <= positions[1].2);
+    assert_eq!(positions[1].2 + positions[1].3, 40);
+    for grid in [2, 3] {
+        assert!(
+            split
+                .iter()
+                .any(|(name, args)| name == "grid_resize" && args[0].as_u64() == Some(grid)),
+            "grid {grid} was not resized in {split:?}"
+        );
+    }
+
+    client.request(
+        "nvim_ui_try_resize",
+        vec![Value::from(50u64), Value::from(8u64)],
+    );
+    let resized = redraw_events(&client.drain());
+    let resized_positions = win_positions(&resized);
+    assert_eq!(
+        resized_positions.len(),
+        2,
+        "both split rects should move on resize: {resized:?}"
+    );
+
+    client.notify("nvim_input", vec![Value::from("<C-w>l")]);
+    let right = redraw_events(&client.drain());
+    let right_grid = cursor_grid(&right).expect("right focus cursor");
+    client.notify("nvim_input", vec![Value::from("<C-w>h")]);
+    let left = redraw_events(&client.drain());
+    let left_grid = cursor_grid(&left).expect("left focus cursor");
+    assert_ne!(right_grid, left_grid, "focus did not change grids");
+
+    client.notify("nvim_input", vec![Value::from(":close<CR>")]);
+    let closed = redraw_events(&client.drain());
+    assert!(
+        closed.iter().any(|(name, _)| name == "win_close")
+            && closed.iter().any(|(name, _)| name == "grid_destroy"),
+        "close did not announce lifecycle events: {closed:?}"
+    );
 }
 
 #[test]

@@ -6,11 +6,13 @@
 //! deliberately absent — `pin navigation_not_in_grid` puts it outside the grid,
 //! so a picker painted here would be a spec violation, not a shortcut.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use rmpv::Value;
 
 use crate::core::buffer::Buffer;
 use crate::core::editor::{Editor, Mode, Options, Visual};
-use crate::core::window::WindowView;
+use crate::core::window::{Rect, WindowId, WindowView};
 use crate::nvim::{RedrawEvent, UiOptions};
 
 pub const GRID: u64 = 1;
@@ -423,10 +425,13 @@ impl GridPainter {
 pub struct Painter {
     theme: Theme,
     grid: GridPainter,
+    windows: BTreeMap<u64, GridPainter>,
+    placements: BTreeMap<u64, Rect>,
     last_mode: Option<&'static str>,
     last_cmdline: Option<String>,
     last_message: Option<String>,
     options: UiOptions,
+    root_resized: bool,
 }
 
 impl Painter {
@@ -440,10 +445,13 @@ impl Painter {
         Self {
             theme,
             grid: GridPainter::new(GRID, cols, rows),
+            windows: BTreeMap::new(),
+            placements: BTreeMap::new(),
             last_mode: None,
             last_cmdline: None,
             last_message: None,
             options,
+            root_resized: false,
         }
     }
 
@@ -466,8 +474,24 @@ impl Painter {
         self.rows().saturating_sub(reserved).max(1)
     }
 
+    pub fn tabline_rows(&self, editor: &Editor) -> usize {
+        usize::from(editor.tabs.len() > 1)
+    }
+
+    pub fn layout_rows(&self, editor: &Editor) -> usize {
+        let message_rows = usize::from(!self.options.ext_messages);
+        self.rows()
+            .saturating_sub(message_rows + self.tabline_rows(editor))
+            .max(1)
+    }
+
     pub fn resize(&mut self, cols: usize, rows: usize) {
-        self.grid.resize(cols, rows);
+        let cols = cols.max(1);
+        let rows = rows.max(1);
+        if self.grid.cols() != cols || self.grid.rows() != rows {
+            self.grid.resize(cols, rows);
+            self.root_resized = true;
+        }
     }
 
     /// The events a freshly attached client needs before any content.
@@ -504,8 +528,18 @@ impl Painter {
 
     /// Everything that changed since the last call, ending in `flush`.
     pub fn render(&mut self, editor: &Editor) -> Vec<RedrawEvent> {
-        self.compose(editor);
-        let mut events = self.diff();
+        let mut events = Vec::new();
+        if self.root_resized {
+            self.root_resized = false;
+            events.push(grid_resize(self.grid.grid(), self.cols(), self.rows()));
+        }
+        if self.options.ext_multigrid {
+            events.extend(self.compose_multigrid(editor));
+            events.extend(self.diff_all());
+        } else {
+            self.compose(editor);
+            events.extend(self.diff());
+        }
 
         let mode = editor.mode.protocol_name();
         if self.last_mode != Some(mode) {
@@ -518,11 +552,11 @@ impl Painter {
 
         events.extend(self.external_surfaces(editor));
 
-        let (row, col) = self.cursor_cell(editor);
+        let (grid, row, col) = self.cursor_cell(editor);
         events.push((
             "grid_cursor_goto".to_string(),
             vec![
-                Value::from(self.grid.grid()),
+                Value::from(grid),
                 Value::from(row as u64),
                 Value::from(col as u64),
             ],
@@ -590,6 +624,10 @@ impl Painter {
     // --- composition ------------------------------------------------------
 
     fn compose(&mut self, editor: &Editor) {
+        if editor.window_count() > 1 || editor.tabs.len() > 1 {
+            self.compose_fallback_windows(editor);
+            return;
+        }
         self.grid.clear_current();
         let text_rows = self.text_rows();
         let mut view = editor.focused_view().clone();
@@ -659,6 +697,213 @@ impl Painter {
         }
     }
 
+    fn compose_fallback_windows(&mut self, editor: &Editor) {
+        self.grid.clear_current();
+        let tabline = self.tabline_rows(editor);
+        if tabline > 0 {
+            self.compose_tabline(editor);
+        }
+        let area = Rect::new(tabline, 0, self.layout_rows(editor), self.cols());
+        let rects = editor
+            .tabs
+            .rects(area, editor.options.splitbelow, editor.options.splitright);
+        for rect in &rects.separators {
+            self.fill_rect(*rect, '|', hl::STATUS);
+        }
+        let leaves = editor.tabs.current_layout().leaves();
+        for id in &leaves {
+            let Some(rect) = rects.text.get(id).copied() else {
+                continue;
+            };
+            let Some(view) = editor.views.get(id) else {
+                continue;
+            };
+            let buffer = self.buffer_for_view(editor, view);
+            self.compose_window_at(editor, view, buffer, rect);
+        }
+        for (id, rect) in leaves.into_iter().zip(rects.status.into_iter()) {
+            if let Some(view) = editor.views.get(&id) {
+                let buffer = self.buffer_for_view(editor, view);
+                self.compose_status_at(rect, editor, view, buffer);
+            }
+        }
+        if !self.options.ext_messages {
+            self.compose_message(editor);
+        }
+    }
+
+    fn compose_multigrid(&mut self, editor: &Editor) -> Vec<RedrawEvent> {
+        let events = self.sync_window_grids(editor);
+        self.grid.clear_current();
+        let tabline = self.tabline_rows(editor);
+        if tabline > 0 {
+            self.compose_tabline(editor);
+        }
+        let area = Rect::new(tabline, 0, self.layout_rows(editor), self.cols());
+        let rects = editor
+            .tabs
+            .rects(area, editor.options.splitbelow, editor.options.splitright);
+        for rect in &rects.separators {
+            self.fill_rect(*rect, '|', hl::STATUS);
+        }
+        let leaves = editor.tabs.current_layout().leaves();
+        for (id, rect) in leaves.into_iter().zip(rects.status.into_iter()) {
+            if let Some(view) = editor.views.get(&id) {
+                let buffer = self.buffer_for_view(editor, view);
+                self.compose_status_at(rect, editor, view, buffer);
+            }
+        }
+        if !self.options.ext_messages {
+            self.compose_message(editor);
+        }
+        for view in editor.visible_views() {
+            let buffer = self.buffer_for_view(editor, &view);
+            if let Some(painter) = self.windows.get_mut(&view.grid) {
+                painter.clear_current();
+                compose_window_grid(painter, editor, &view, buffer);
+            }
+        }
+        events
+    }
+
+    fn sync_window_grids(&mut self, editor: &Editor) -> Vec<RedrawEvent> {
+        let mut events = Vec::new();
+        let tabline = self.tabline_rows(editor);
+        let area = Rect::new(tabline, 0, self.layout_rows(editor), self.cols());
+        let rects = editor
+            .tabs
+            .rects(area, editor.options.splitbelow, editor.options.splitright);
+        let visible: BTreeSet<u64> = editor.visible_views().into_iter().map(|v| v.grid).collect();
+        let old: Vec<u64> = self.placements.keys().copied().collect();
+        for grid in old {
+            if !visible.contains(&grid) {
+                events.push(("win_close".to_string(), vec![Value::from(grid)]));
+                events.push(("grid_destroy".to_string(), vec![Value::from(grid)]));
+                self.placements.remove(&grid);
+                self.windows.remove(&grid);
+            }
+        }
+        for view in editor.visible_views() {
+            let Some(rect) = rects.text.get(&view.id).copied() else {
+                continue;
+            };
+            let painter = self
+                .windows
+                .entry(view.grid)
+                .or_insert_with(|| GridPainter::new(view.grid, rect.cols, rect.rows));
+            let known = self.placements.get(&view.grid).copied();
+            if known.is_none() || painter.cols() != rect.cols || painter.rows() != rect.rows {
+                painter.resize(rect.cols, rect.rows);
+                events.push(grid_resize(view.grid, rect.cols, rect.rows));
+            }
+            if known != Some(rect) {
+                events.push(win_pos(view.grid, view.id, rect));
+                self.placements.insert(view.grid, rect);
+            }
+        }
+        events
+    }
+
+    fn diff_all(&mut self) -> Vec<RedrawEvent> {
+        let mut events = self.grid.diff();
+        for painter in self.windows.values_mut() {
+            events.extend(painter.diff());
+        }
+        events
+    }
+
+    fn buffer_for_view<'a>(&self, editor: &'a Editor, view: &WindowView) -> &'a Buffer {
+        if view.id == editor.focus_window() {
+            &editor.buffer
+        } else {
+            editor.buffers.get(view.buffer).unwrap_or(&editor.buffer)
+        }
+    }
+
+    fn compose_tabline(&mut self, editor: &Editor) {
+        self.grid.fill(0, 0, hl::STATUS);
+        let mut col = 0;
+        for index in 0..editor.tabs.len() {
+            let label = if index == editor.tabs.current_index() {
+                format!(" [{}] ", index + 1)
+            } else {
+                format!("  {}  ", index + 1)
+            };
+            col = self.grid.write(0, col, &label, hl::STATUS);
+        }
+    }
+
+    fn fill_rect(&mut self, rect: Rect, ch: char, hl: u64) {
+        for row in rect.row..rect.row + rect.rows {
+            for col in rect.col..rect.col + rect.cols {
+                self.grid.put(row, col, ch, hl);
+            }
+        }
+    }
+
+    fn compose_window_at(
+        &mut self,
+        editor: &Editor,
+        view: &WindowView,
+        buffer: &Buffer,
+        rect: Rect,
+    ) {
+        let rows = window_rows(editor, view, buffer);
+        for (offset, row) in rows.iter().enumerate() {
+            let screen_row = rect.row + offset;
+            let mut col = rect.col;
+            for cell in &row.cells {
+                if col >= rect.col + rect.cols {
+                    break;
+                }
+                col = self.grid.put(screen_row, col, cell.text, cell.hl);
+            }
+            for fill_col in col..rect.col + rect.cols {
+                self.grid.put(screen_row, fill_col, ' ', row.fill);
+            }
+        }
+    }
+
+    fn compose_status_at(
+        &mut self,
+        rect: Rect,
+        editor: &Editor,
+        view: &WindowView,
+        buffer: &Buffer,
+    ) {
+        if rect.rows == 0 || rect.cols == 0 {
+            return;
+        }
+        let row = rect.row;
+        for col in rect.col..rect.col + rect.cols {
+            self.grid.put(row, col, ' ', hl::STATUS);
+        }
+        let focused = view.id == editor.focus_window();
+        let mode = if focused {
+            editor.mode.short_name().to_uppercase()
+        } else {
+            " ".into()
+        };
+        let left = format!(" {mode} {}", shorten(&buffer.name(), rect.cols / 2));
+        let mut col = self.grid.write(row, rect.col, &left, hl::STATUS);
+        if buffer.modified() {
+            col = self.grid.write(row, col, " [+]", hl::MODIFIED);
+        }
+        let right = format!(
+            "{}:{}  {}/{} ",
+            view.cursor.0 + 1,
+            view.cursor.1 + 1,
+            view.cursor.0 + 1,
+            buffer.line_count()
+        );
+        let start = rect
+            .col
+            .saturating_add(rect.cols.saturating_sub(right.chars().count()));
+        if start > col && start < rect.col + rect.cols {
+            self.grid.write(row, start, &right, hl::STATUS);
+        }
+    }
+
     fn compose_message(&mut self, editor: &Editor) {
         let row = self.rows() - 1;
         self.grid.fill(row, 0, hl::DEFAULT);
@@ -680,24 +925,93 @@ impl Painter {
         }
     }
 
-    fn cursor_cell(&self, editor: &Editor) -> (usize, usize) {
+    fn cursor_cell(&self, editor: &Editor) -> (u64, usize, usize) {
         if editor.mode == Mode::Cmdline && !self.options.ext_cmdline {
             let col = 1 + editor.cmdline.chars().count();
-            return (self.rows() - 1, col.min(self.cols() - 1));
+            return (self.grid.grid(), self.rows() - 1, col.min(self.cols() - 1));
         }
         let gutter = gutter_width(editor.buffer.line_count());
         let row = editor
             .cursor
             .0
             .saturating_sub(editor.top_line)
-            .min(self.text_rows() - 1);
+            .min(editor.focused_view().rows.saturating_sub(1));
         let text = editor.buffer.line(editor.cursor.0);
         let width = crate::textpos::char_to_cell(text, editor.cursor.1);
-        (row, (gutter + width).min(self.cols() - 1))
+        let view = editor.focused_view();
+        let col = (gutter + width).min(view.cols.saturating_sub(1));
+        if self.options.ext_multigrid {
+            (view.grid, row, col)
+        } else if editor.window_count() > 1 || editor.tabs.len() > 1 {
+            let tabline = self.tabline_rows(editor);
+            let area = Rect::new(tabline, 0, self.layout_rows(editor), self.cols());
+            let rects =
+                editor
+                    .tabs
+                    .rects(area, editor.options.splitbelow, editor.options.splitright);
+            let rect = rects.text.get(&view.id).copied().unwrap_or_default();
+            (self.grid.grid(), rect.row + row, rect.col + col)
+        } else {
+            (self.grid.grid(), row, col)
+        }
     }
 
     fn diff(&mut self) -> Vec<RedrawEvent> {
         self.grid.diff()
+    }
+}
+
+fn grid_resize(grid: u64, cols: usize, rows: usize) -> RedrawEvent {
+    (
+        "grid_resize".to_string(),
+        vec![
+            Value::from(grid),
+            Value::from(cols as u64),
+            Value::from(rows as u64),
+        ],
+    )
+}
+
+fn win_pos(grid: u64, id: WindowId, rect: Rect) -> RedrawEvent {
+    (
+        "win_pos".to_string(),
+        vec![
+            Value::from(grid),
+            Value::from(id.0),
+            Value::from(rect.row as u64),
+            Value::from(rect.col as u64),
+            Value::from(rect.cols as u64),
+            Value::from(rect.rows as u64),
+        ],
+    )
+}
+
+fn window_rows(editor: &Editor, view: &WindowView, buffer: &Buffer) -> Vec<RenderRow> {
+    let focus = (view.id == editor.focus_window()).then_some(FocusRender {
+        visual_range: editor.visual_range(),
+        visual_kind: editor.visual_kind(),
+        last_search: editor.last_search.as_deref(),
+        highlight_search: editor.highlight_search(),
+    });
+    render_window_lines(view, buffer, &editor.options, focus)
+}
+
+fn compose_window_grid(
+    painter: &mut GridPainter,
+    editor: &Editor,
+    view: &WindowView,
+    buffer: &Buffer,
+) {
+    let rows = window_rows(editor, view, buffer);
+    for (screen_row, row) in rows.iter().enumerate() {
+        let mut col = 0;
+        for cell in &row.cells {
+            if col >= painter.cols() {
+                break;
+            }
+            col = painter.put(screen_row, col, cell.text, cell.hl);
+        }
+        painter.fill(screen_row, col, row.fill);
     }
 }
 

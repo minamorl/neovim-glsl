@@ -732,8 +732,15 @@ impl ApplicationHandler for App {
             plugin_names,
         )
         .expect("host thread");
-        link.ui_attach(self.args.cols, self.args.rows, nvim::UiOptions::none())
-            .expect("ui_attach");
+        link.ui_attach(
+            self.args.cols,
+            self.args.rows,
+            nvim::UiOptions {
+                ext_multigrid: true,
+                ..nvim::UiOptions::none()
+            },
+        )
+        .expect("ui_attach");
 
         self.renderer = Some(gl::Renderer::new(&glc));
         self.adapter = Some(root_ui::adapter::Adapter::new(&glc));
@@ -1073,7 +1080,11 @@ fn main() {
     let args = parse_args_from(std::env::args().skip(1).collect());
     if args.embed {
         // The protocol face, served the way `nvim --embed` serves it.
-        let mut host = proto::Host::new(core::Editor::default());
+        let mut host = if std::env::var_os("NVIMGLSL_CONFIGURED_EMBED").is_some() {
+            proto::Host::configured(notes::Vault::default_vault(), proto::paint::Theme::dark())
+        } else {
+            proto::Host::new(core::Editor::default())
+        };
         let stdin = std::io::stdin();
         let stdout = std::io::stdout();
         if let Err(error) = proto::serve(&mut host, stdin, stdout.lock(), args.file.clone()) {

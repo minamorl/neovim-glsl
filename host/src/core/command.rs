@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use super::editor::{Editor, Message, Request, Scope};
+use super::window::Direction;
 
 pub fn execute(editor: &mut Editor, line: &str) {
     let line = line.trim();
@@ -51,6 +52,8 @@ pub fn execute(editor: &mut Editor, line: &str) {
                     text: "E37: No write since last change (add ! to override)".into(),
                     error: true,
                 });
+            } else if editor.window_count() > 1 {
+                editor.close_window();
             } else {
                 editor.requests.push(Request::Quit);
             }
@@ -74,6 +77,98 @@ pub fn execute(editor: &mut Editor, line: &str) {
                 });
             } else {
                 editor.requests.push(Request::Edit(expand(rest)));
+            }
+        }
+        "sp" | "split" => {
+            editor.split_window(false);
+            if !rest.is_empty() {
+                editor.requests.push(Request::Edit(expand(rest)));
+            }
+        }
+        "new" => editor.new_window(),
+        "vs" | "vsplit" => {
+            editor.split_window(true);
+            if !rest.is_empty() {
+                editor.requests.push(Request::Edit(expand(rest)));
+            }
+        }
+        "clo" | "close" => {
+            if editor.buffer.modified() && !bang {
+                editor.message = Some(Message {
+                    text: "E37: No write since last change (add ! to override)".into(),
+                    error: true,
+                });
+            } else if !editor.close_window() {
+                editor.message = Some(Message {
+                    text: "E444: Cannot close last window".into(),
+                    error: true,
+                });
+            }
+        }
+        "on" | "only" => editor.only_window(),
+        "bn" | "bnext" | "BufferNext" => {
+            if !editor.next_buffer() {
+                editor.message = Some(Message {
+                    text: "E85: There is no listed buffer".into(),
+                    error: true,
+                });
+            }
+        }
+        "bp" | "bprevious" | "BufferPrevious" => {
+            if !editor.prev_buffer() {
+                editor.message = Some(Message {
+                    text: "E85: There is no listed buffer".into(),
+                    error: true,
+                });
+            }
+        }
+        "b" | "buffer" => match rest.parse::<usize>() {
+            Ok(index) if index > 0 && editor.switch_buffer_index(index - 1) => {}
+            _ => {
+                editor.message = Some(Message {
+                    text: format!("E86: Buffer {rest} does not exist"),
+                    error: true,
+                });
+            }
+        },
+        "ls" | "buffers" => {
+            editor.message = Some(Message {
+                text: editor.buffer_list_message(),
+                error: false,
+            });
+        }
+        "bd" | "bdelete" => {
+            if editor.buffer.modified() && !bang {
+                editor.message = Some(Message {
+                    text: "E89: No write since last change (add ! to override)".into(),
+                    error: true,
+                });
+            } else if !editor.delete_current_buffer() {
+                editor.message = Some(Message {
+                    text: "E90: Cannot unload last buffer".into(),
+                    error: true,
+                });
+            }
+        }
+        "tabnew" => {
+            editor.new_tab();
+            if !rest.is_empty() {
+                editor.requests.push(Request::Edit(expand(rest)));
+            }
+        }
+        "tabnext" | "tabn" | "gt" => editor.next_tab(),
+        "tabprevious" | "tabp" | "gT" => editor.prev_tab(),
+        "tabclose" | "tabc" => {
+            if !editor.close_tab() {
+                editor.message = Some(Message {
+                    text: "E784: Cannot close last tab page".into(),
+                    error: true,
+                });
+            }
+        }
+        "wincmd" => {
+            if let Some(dir) = rest.chars().next().and_then(Direction::from_vim) {
+                editor.focus_window_dir(dir);
             }
         }
         "noh" | "nohl" | "nohlsearch" => editor.last_search = None,
