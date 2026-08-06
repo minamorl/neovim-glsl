@@ -133,6 +133,8 @@ fn parse_bracketed(body: &str) -> Option<Key> {
     }
     let code = if let Some(named) = named_from(rest) {
         Code::Named(named)
+    } else if rest.eq_ignore_ascii_case("space") {
+        Code::Char(' ')
     } else {
         let mut chars = rest.chars();
         let ch = chars.next()?;

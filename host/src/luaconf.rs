@@ -65,6 +65,12 @@ pub struct Mapping {
     pub rhs: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CmpConfig {
+    pub mappings: Vec<String>,
+    pub sources: Vec<String>,
+}
+
 impl Mapping {
     /// `<cmd>Telescope find_files<cr>` and `:e ~/.config/nvim/init.lua<CR>` are
     /// commands; `y$` and `15j` are keys to replay.
@@ -97,6 +103,7 @@ pub struct NvimConfig {
     pub options: BTreeMap<String, Setting>,
     pub globals: BTreeMap<String, Setting>,
     pub mappings: Vec<Mapping>,
+    pub cmp: CmpConfig,
     /// What went wrong, if the file stopped early. Recorded, not swallowed.
     pub error: Option<String>,
 }
@@ -208,6 +215,17 @@ fn harvest(config: &mut NvimConfig, path: &Path, source: &str) -> mlua::Result<(
             rhs: entry.get::<String>("rhs")?,
         });
     }
+    let cmp: Table = recorded.get("cmp")?;
+    let mut cmp_mappings = cmp
+        .get::<Table>("mapping")?
+        .sequence_values::<String>()
+        .collect::<mlua::Result<Vec<_>>>()?;
+    cmp_mappings.sort();
+    config.cmp.mappings = cmp_mappings;
+    config.cmp.sources = cmp
+        .get::<Table>("sources")?
+        .sequence_values::<String>()
+        .collect::<mlua::Result<Vec<_>>>()?;
     if let Some(error) = error {
         config.error = Some(error);
     }
@@ -268,7 +286,7 @@ fn setting_from(value: &Value) -> mlua::Result<Option<Setting>> {
 /// config which sets up LSP, Treesitter, completion and forty plugins run to
 /// the end inside a program that has none of them.
 const RECORDER: &str = r#"
-__nvimglsl = { options = {}, globals = {}, maps = {}, commands = {} }
+__nvimglsl = { options = {}, globals = {}, maps = {}, commands = {}, cmp = { mapping = {}, sources = {} } }
 
 local function stub()
   local t = {}
@@ -310,6 +328,34 @@ local function record_map(mode, lhs, rhs)
   if type(rhs) ~= "string" then return end
   table.insert(__nvimglsl.maps, { mode = modes(mode), lhs = tostring(lhs), rhs = rhs })
 end
+
+local function record_cmp_setup(opts)
+  if type(opts) ~= "table" then return end
+  if type(opts.mapping) == "table" then
+    for lhs, _ in pairs(opts.mapping) do
+      table.insert(__nvimglsl.cmp.mapping, tostring(lhs))
+    end
+  end
+  if type(opts.sources) == "table" then
+    for _, source in ipairs(opts.sources) do
+      if type(source) == "table" and source.name ~= nil then
+        table.insert(__nvimglsl.cmp.sources, tostring(source.name))
+      end
+    end
+  end
+end
+
+local cmp = stub()
+local cmp_mapping = stub()
+rawset(cmp_mapping, "preset", {
+  insert = function(mapping) return mapping or {} end,
+})
+local cmp_config = stub()
+rawset(cmp_config, "sources", function(sources) return sources or {} end)
+rawset(cmp, "mapping", cmp_mapping)
+rawset(cmp, "config", cmp_config)
+rawset(cmp, "setup", record_cmp_setup)
+__nvimglsl_modules = { cmp = cmp }
 
 vim = {}
 vim.opt = recorder(__nvimglsl.options, true)
@@ -370,6 +416,10 @@ local real_require = require
 local loaded = {}
 require = function(name)
   if loaded[name] ~= nil then return loaded[name] end
+  if __nvimglsl_modules[name] ~= nil then
+    loaded[name] = __nvimglsl_modules[name]
+    return loaded[name]
+  end
   local path = __nvimglsl_lua_dir .. "/" .. tostring(name):gsub("%.", "/") .. ".lua"
   local chunk = loadfile(path)
   local value
@@ -459,6 +509,37 @@ vim.api.nvim_set_keymap('n', 'Y', 'y$', {})
         );
         assert!(config.bool_option("number", false));
         assert_eq!(config.mappings.len(), 1);
+    }
+
+    #[test]
+    fn cmp_setup_records_explicit_mapping_keys_and_sources() {
+        let config = config_from(
+            r#"
+local cmp = require('cmp')
+cmp.setup({
+  mapping = cmp.mapping.preset.insert({
+    ['<Tab>'] = function() end,
+    ['<S-Tab>'] = function() end,
+    ['<CR>'] = function() end,
+    ['<C-Space>'] = function() end,
+  }),
+  sources = {
+    { name = 'nvim_lsp' },
+    { name = 'buffer' },
+  },
+})
+"#,
+        );
+        assert_eq!(config.error, None);
+        assert_eq!(
+            config.cmp.mappings,
+            vec!["<C-Space>", "<CR>", "<S-Tab>", "<Tab>"]
+        );
+        assert_eq!(config.cmp.sources, vec!["nvim_lsp", "buffer"]);
+        assert!(
+            config.mappings.is_empty(),
+            "function rhs is not a keymap rhs"
+        );
     }
 
     #[test]

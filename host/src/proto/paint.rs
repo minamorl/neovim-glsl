@@ -44,6 +44,12 @@ pub mod hl {
     pub const GIT_ADD: u64 = 19;
     pub const GIT_CHANGE: u64 = 20;
     pub const GIT_DELETE: u64 = 21;
+    pub const DIAG_ERROR: u64 = 22;
+    pub const DIAG_WARN: u64 = 23;
+    pub const DIAG_INFO: u64 = 24;
+    pub const DIAG_HINT: u64 = 25;
+    pub const PMENU: u64 = 26;
+    pub const PMENU_SEL: u64 = 27;
 }
 
 /// The editor's own palette.
@@ -78,6 +84,12 @@ pub struct Theme {
     pub git_add: u32,
     pub git_change: u32,
     pub git_delete: u32,
+    pub diag_error: u32,
+    pub diag_warn: u32,
+    pub diag_info: u32,
+    pub diag_hint: u32,
+    pub pmenu_bg: u32,
+    pub pmenu_sel_bg: u32,
 }
 
 impl Theme {
@@ -108,6 +120,12 @@ impl Theme {
             git_add: 0x75C47A,
             git_change: 0xE0C285,
             git_delete: 0xE86B7E,
+            diag_error: 0xE86B7E,
+            diag_warn: 0xE0C285,
+            diag_info: 0x6FC7EF,
+            diag_hint: 0x93C97E,
+            pmenu_bg: 0x202636,
+            pmenu_sel_bg: 0x33405F,
         }
     }
 
@@ -135,6 +153,12 @@ impl Theme {
             git_add: 0x2F7A3F,
             git_change: 0x9A6B12,
             git_delete: 0xC0324B,
+            diag_error: 0xC0324B,
+            diag_warn: 0x9A6B12,
+            diag_info: 0x1C6B93,
+            diag_hint: 0x2F7A3F,
+            pmenu_bg: 0xE8ECF5,
+            pmenu_sel_bg: 0xCBD8F2,
         }
     }
 
@@ -225,6 +249,7 @@ pub struct FocusRender<'a> {
     pub highlight_search: bool,
     pub vcs: Option<&'a VcsState>,
     pub cursor_blame: Option<String>,
+    pub diagnostics: &'a [crate::lsp::types::Diagnostic],
 }
 
 pub fn render_window_lines(
@@ -234,6 +259,7 @@ pub fn render_window_lines(
     focus: Option<FocusRender<'_>>,
 ) -> Vec<RenderRow> {
     let mut rows = Vec::new();
+    let diagnostics = focus.as_ref().map(|state| state.diagnostics).unwrap_or(&[]);
     let gutter = gutter_width(buffer.line_count());
     let visual = focus.as_ref().and_then(|state| state.visual_range);
     let visual_kind = focus.as_ref().and_then(|state| state.visual_kind);
@@ -270,15 +296,25 @@ pub fn render_window_lines(
                 hl: number_hl,
             });
         }
-        let sign = focus
-            .as_ref()
-            .and_then(|state| state.vcs)
-            .and_then(|vcs| vcs.sign_at(line, buffer.line_count()));
-        let (sign_text, sign_hl) = match sign {
-            Some(SignKind::Add) => ('+', hl::GIT_ADD),
-            Some(SignKind::Change) => ('~', hl::GIT_CHANGE),
-            Some(SignKind::Delete) => ('-', hl::GIT_DELETE),
-            None => (' ', number_hl),
+        // One sign cell, and a diagnostic takes it. Both lanes arrived wanting a
+        // column of their own, and two columns would shift every line right by a
+        // cell the moment a language server attaches — a worse answer than
+        // choosing. The diagnostic is the urgent sign; the git sign for that line
+        // is still reachable from the diff view.
+        let (sign_text, sign_hl) = match diagnostic_sign_at(diagnostics, line) {
+            Some(sign) => sign,
+            None => {
+                let sign = focus
+                    .as_ref()
+                    .and_then(|state| state.vcs)
+                    .and_then(|vcs| vcs.sign_at(line, buffer.line_count()));
+                match sign {
+                    Some(SignKind::Add) => ('+', hl::GIT_ADD),
+                    Some(SignKind::Change) => ('~', hl::GIT_CHANGE),
+                    Some(SignKind::Delete) => ('-', hl::GIT_DELETE),
+                    None => (' ', number_hl),
+                }
+            }
         };
         cells.push(RenderCell {
             text: sign_text,
@@ -323,6 +359,8 @@ pub fn render_window_lines(
             }
             if in_visual(visual, visual_kind, line, index, buffer) {
                 style = hl::VISUAL;
+            } else if let Some(diag_hl) = diagnostic_hl_at(diagnostics, buffer, line, index) {
+                style = diag_hl;
             } else if highlight_search {
                 if let Some(pattern) = last_search {
                     if !pattern.is_empty() && matches_at(&text, pattern, index) {
@@ -336,18 +374,30 @@ pub fn render_window_lines(
             });
             col += char_width(ch);
         }
-        if line == view.cursor.0 {
-            if let Some(blame) = focus.as_ref().and_then(|state| state.cursor_blame.as_ref()) {
-                for ch in format!("  {blame}").chars() {
-                    if col >= view.cols {
-                        break;
-                    }
-                    cells.push(RenderCell {
-                        text: ch,
-                        hl: hl::NON_TEXT,
-                    });
-                    col += char_width(ch);
+        // A diagnostic and a blame line both want the space after the text.
+        // On a line that has both, the diagnostic wins: it is the urgent one,
+        // and blame is history that is only ever drawn on the cursor line.
+        let trailing = first_diagnostic_on_line(diagnostics, line)
+            .map(|d| (format!("  {}", d.message), diagnostic_hl(d)))
+            .or_else(|| {
+                if line != view.cursor.0 {
+                    return None;
                 }
+                focus
+                    .as_ref()
+                    .and_then(|state| state.cursor_blame.as_ref())
+                    .map(|blame| (format!("  {blame}"), hl::NON_TEXT))
+            });
+        if let Some((text, trailing_hl)) = trailing {
+            for ch in text.chars() {
+                if col >= view.cols {
+                    break;
+                }
+                cells.push(RenderCell {
+                    text: ch,
+                    hl: trailing_hl,
+                });
+                col += char_width(ch);
             }
         }
         let fill = if visual_kind == Some(Visual::Line)
@@ -478,6 +528,7 @@ pub struct Painter {
     last_mode: Option<&'static str>,
     last_cmdline: Option<String>,
     last_message: Option<String>,
+    popup_visible: bool,
     options: UiOptions,
     root_resized: bool,
 }
@@ -498,6 +549,7 @@ impl Painter {
             last_mode: None,
             last_cmdline: None,
             last_message: None,
+            popup_visible: false,
             options,
             root_resized: false,
         }
@@ -570,6 +622,14 @@ impl Painter {
                 vec![Value::from(id), attrs.clone(), attrs, Value::Array(vec![])],
             ));
         }
+        events.push((
+            "hl_group_set".to_string(),
+            vec![Value::from("Pmenu"), Value::from(hl::PMENU)],
+        ));
+        events.push((
+            "hl_group_set".to_string(),
+            vec![Value::from("PmenuSel"), Value::from(hl::PMENU_SEL)],
+        ));
         events.push(("mode_info_set".to_string(), mode_info()));
         events
     }
@@ -666,6 +726,38 @@ impl Painter {
                 self.last_message = text;
             }
         }
+        if self.options.ext_popupmenu {
+            if let Some(menu) = &editor.completion {
+                if !menu.items.is_empty() {
+                    let items = menu
+                        .items
+                        .iter()
+                        .map(|item| {
+                            Value::Array(vec![
+                                Value::from(item.label.as_str()),
+                                Value::from(completion_kind(item.kind)),
+                                Value::from(item.detail.as_deref().unwrap_or("")),
+                                Value::from(""),
+                            ])
+                        })
+                        .collect::<Vec<_>>();
+                    events.push((
+                        "popupmenu_show".to_string(),
+                        vec![
+                            Value::Array(items),
+                            Value::from(menu.selected.map(|i| i as i64).unwrap_or(-1)),
+                            Value::from(menu.row as u64),
+                            Value::from(menu.col as u64),
+                            Value::from(menu.grid as i64),
+                        ],
+                    ));
+                    self.popup_visible = true;
+                }
+            } else if self.popup_visible {
+                events.push(("popupmenu_hide".to_string(), vec![]));
+                self.popup_visible = false;
+            }
+        }
         events
     }
 
@@ -694,6 +786,7 @@ impl Painter {
                 highlight_search: editor.highlight_search(),
                 vcs: Some(&editor.vcs),
                 cursor_blame: cursor_blame(editor, &editor.buffer),
+                diagnostics: &editor.diagnostics,
             }),
         );
 
@@ -1076,6 +1169,11 @@ impl Painter {
         }
     }
 
+    pub fn completion_anchor(&self, editor: &Editor) -> (u64, usize, usize) {
+        let (grid, row, col) = self.cursor_cell(editor);
+        (grid, row, col.saturating_add(1))
+    }
+
     fn diff(&mut self) -> Vec<RedrawEvent> {
         self.grid.diff()
     }
@@ -1117,6 +1215,11 @@ fn window_rows(editor: &Editor, view: &WindowView, buffer: &Buffer) -> Vec<Rende
         highlight_search: editor.highlight_search(),
         vcs: Some(&editor.vcs),
         cursor_blame: cursor_blame(editor, buffer),
+        diagnostics: if view.id == editor.focus_window() {
+            &editor.diagnostics
+        } else {
+            &[]
+        },
     });
     render_window_lines(view, buffer, &editor.options, focus)
 }
@@ -1420,7 +1523,97 @@ fn highlight_table(theme: Theme) -> Vec<(u64, Value)> {
             hl::GIT_DELETE,
             attrs(Some(theme.git_delete), None, true, false),
         ),
+        (
+            hl::DIAG_ERROR,
+            attrs(Some(theme.diag_error), None, true, false),
+        ),
+        (
+            hl::DIAG_WARN,
+            attrs(Some(theme.diag_warn), None, true, false),
+        ),
+        (
+            hl::DIAG_INFO,
+            attrs(Some(theme.diag_info), None, false, false),
+        ),
+        (
+            hl::DIAG_HINT,
+            attrs(Some(theme.diag_hint), None, false, false),
+        ),
+        (
+            hl::PMENU,
+            attrs(Some(theme.fg), Some(theme.pmenu_bg), false, false),
+        ),
+        (
+            hl::PMENU_SEL,
+            attrs(Some(theme.fg), Some(theme.pmenu_sel_bg), false, false),
+        ),
     ]
+}
+
+fn first_diagnostic_on_line(
+    diagnostics: &[crate::lsp::types::Diagnostic],
+    line: usize,
+) -> Option<&crate::lsp::types::Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|diag| diag.line() == line)
+        .min_by_key(|diag| diag.severity_rank())
+}
+
+fn diagnostic_sign_at(
+    diagnostics: &[crate::lsp::types::Diagnostic],
+    line: usize,
+) -> Option<(char, u64)> {
+    let diagnostic = first_diagnostic_on_line(diagnostics, line)?;
+    let ch = match diagnostic.severity_rank() {
+        1 => 'E',
+        2 => 'W',
+        3 => 'I',
+        _ => 'H',
+    };
+    Some((ch, diagnostic_hl(diagnostic)))
+}
+
+fn diagnostic_hl_at(
+    diagnostics: &[crate::lsp::types::Diagnostic],
+    buffer: &Buffer,
+    line: usize,
+    col: usize,
+) -> Option<u64> {
+    diagnostics
+        .iter()
+        .filter(|diag| diag.range.contains_buffer_position(buffer, line, col))
+        .min_by_key(|diag| diag.severity_rank())
+        .map(diagnostic_hl)
+}
+
+fn diagnostic_hl(diagnostic: &crate::lsp::types::Diagnostic) -> u64 {
+    match diagnostic.severity_rank() {
+        1 => hl::DIAG_ERROR,
+        2 => hl::DIAG_WARN,
+        3 => hl::DIAG_INFO,
+        _ => hl::DIAG_HINT,
+    }
+}
+
+fn completion_kind(kind: Option<u8>) -> &'static str {
+    match kind {
+        Some(2) => "Method",
+        Some(3) => "Function",
+        Some(4) => "Constructor",
+        Some(5) => "Field",
+        Some(6) => "Variable",
+        Some(7) => "Class",
+        Some(8) => "Interface",
+        Some(9) => "Module",
+        Some(10) => "Property",
+        Some(14) => "Keyword",
+        Some(15) => "Snippet",
+        Some(16) => "Color",
+        Some(17) => "File",
+        Some(21) => "Constant",
+        _ => "",
+    }
 }
 
 fn mode_index(mode: Mode) -> u64 {
@@ -1518,6 +1711,7 @@ mod tests {
                 highlight_search: true,
                 vcs: None,
                 cursor_blame: None,
+                diagnostics: &[],
             }),
         );
         assert_eq!(rows.len(), 3);
@@ -1564,6 +1758,94 @@ mod tests {
         }];
         let events = p.render(&editor);
         assert_eq!(row_text(&events, 1).unwrap().trim_end(), "  2 +two");
+    }
+
+    fn diagnostic(line: usize, message: &str) -> crate::lsp::types::Diagnostic {
+        serde_json::from_value(serde_json::json!({
+            "range": {
+                "start": { "line": line, "character": 0 },
+                "end": { "line": line, "character": 1 }
+            },
+            "severity": 1,
+            "message": message
+        }))
+        .unwrap()
+    }
+
+    /// The git lane and the lsp lane each arrived with a sign column of their
+    /// own. They share one, and the diagnostic takes it — two columns would push
+    /// every line right by a cell the moment a language server attached.
+    #[test]
+    fn a_diagnostic_sign_takes_the_cell_from_a_git_sign() {
+        let mut p = painter();
+        let mut editor = numbered("one\ntwo\n");
+        editor.vcs.hunks = vec![crate::core::vcs::Hunk {
+            old_start: 0,
+            old_len: 0,
+            new_start: 1,
+            new_len: 1,
+            kind: SignKind::Add,
+        }];
+        assert_eq!(row_text(&p.render(&editor), 1).unwrap().trim_end(), "  2 +two");
+
+        editor.diagnostics = vec![diagnostic(1, "bad")];
+        let row = row_text(&p.render(&editor), 1).unwrap();
+        assert!(
+            row.starts_with("  2 Etwo"),
+            "the diagnostic should hold the sign cell: {row:?}"
+        );
+    }
+
+    /// Same contest at the end of the line: blame is history and only ever shows
+    /// on the cursor line, so a diagnostic there wins the space.
+    #[test]
+    fn a_diagnostic_message_wins_the_end_of_the_line_from_blame() {
+        let mut p = painter();
+        let mut editor = Editor::new(Buffer::from_text("hello\n"));
+        editor.vcs.blame = vec![crate::core::vcs::BlameLine {
+            line: 0,
+            commit: "abc123".into(),
+            author: "Mina".into(),
+            time: None,
+            summary: "initial".into(),
+        }];
+        editor.vcs.blame_revision = Some(editor.buffer.revision());
+        assert!(row_text(&p.render(&editor), 0).unwrap().contains("abc123"));
+
+        editor.diagnostics = vec![diagnostic(0, "bad binding")];
+        let row = row_text(&p.render(&editor), 0).unwrap();
+        assert!(row.contains("bad binding"), "{row:?}");
+        assert!(!row.contains("abc123"), "blame should yield: {row:?}");
+    }
+
+    /// A CJK character is one column to the editing core and two cells here.
+    /// The gutter is what turns one into the other, so a sign column that
+    /// changed width with the diagnostics would move the cursor off the glyph.
+    #[test]
+    fn the_cursor_column_in_japanese_is_unmoved_by_signs() {
+        let mut p = painter();
+        let mut editor = numbered("あいう\n");
+        editor.cursor = (0, 2);
+        let bare = p.render(&editor);
+
+        editor.diagnostics = vec![diagnostic(0, "bad")];
+        editor.vcs.hunks = vec![crate::core::vcs::Hunk {
+            old_start: 0,
+            old_len: 0,
+            new_start: 0,
+            new_len: 1,
+            kind: SignKind::Add,
+        }];
+        let signed = p.render(&editor);
+        let cursor_of = |events: &[RedrawEvent]| {
+            events
+                .iter()
+                .rev()
+                .find(|(name, _)| name == "grid_cursor_goto")
+                .map(|goto| goto.1[2].as_u64())
+        };
+        assert_eq!(cursor_of(&bare), cursor_of(&signed));
+        assert_eq!(cursor_of(&bare), Some(Some(gutter_width(1) as u64 + 4)));
     }
 
     #[test]
