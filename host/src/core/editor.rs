@@ -17,6 +17,7 @@ use super::motion::{self, Kind, Motion};
 use super::window::{Direction, Rect, Tabs, WindowId, WindowView};
 use crate::keymap::{Keymap, Match, Rhs};
 use crate::luaconf::NvimConfig;
+use crate::tree::FileTree;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Visual {
@@ -165,6 +166,13 @@ pub enum Request {
     Preview,
 }
 
+pub struct TreePane {
+    pub window: WindowId,
+    pub buffer: BufferId,
+    pub model: FileTree,
+    pub pending_delete: Option<PathBuf>,
+}
+
 /// The options this editor can act on, read out of the owner's config.
 ///
 /// Derived at load time rather than written down: the values live in
@@ -307,6 +315,7 @@ pub struct Editor {
     /// Keys typed while the host owns input (the navigation surface is open).
     /// The core stops interpreting them; it does not stop existing.
     pub suspended: bool,
+    pub tree: Option<TreePane>,
 }
 
 impl Default for Editor {
@@ -346,6 +355,7 @@ impl Editor {
             pending_keys: Vec::new(),
             requests: Vec::new(),
             suspended: false,
+            tree: None,
         }
     }
 
@@ -382,6 +392,7 @@ impl Editor {
             view.buffer = id;
         }
         self.save_focused_view();
+        self.reveal_current_in_tree();
         Ok(())
     }
 
@@ -513,6 +524,9 @@ impl Editor {
         let old = self.focus_window();
         if self.tabs.close().is_some() {
             self.views.remove(&old);
+            if self.tree.as_ref().is_some_and(|tree| tree.window == old) {
+                self.tree = None;
+            }
             self.load_focused_view();
             return true;
         }
@@ -524,6 +538,9 @@ impl Editor {
         let focus = self.focus_window();
         self.tabs.only();
         self.views.retain(|id, _| *id == focus);
+        if self.tree.as_ref().is_some_and(|tree| tree.window != focus) {
+            self.tree = None;
+        }
         self.load_focused_view();
     }
 
@@ -637,6 +654,387 @@ impl Editor {
             .join("\n")
     }
 
+    pub fn open_file_tree_from_file_browser(&mut self, command: &str) {
+        let current = self.buffer.path().map(PathBuf::from);
+        let root = if command.contains("path=%:p:h") {
+            current
+                .as_ref()
+                .and_then(|path| path.parent().map(PathBuf::from))
+                .filter(|path| !path.as_os_str().is_empty())
+        } else {
+            None
+        }
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let reveal = command
+            .contains("select_buffer=true")
+            .then_some(current)
+            .flatten();
+        self.open_file_tree(root, reveal);
+    }
+
+    pub fn open_file_tree(&mut self, root: PathBuf, reveal: Option<PathBuf>) {
+        self.save_focused_view();
+        let root = root.canonicalize().unwrap_or(root);
+        let rules = crate::ignore::IgnoreRules::load(&root);
+        let mut model = FileTree::new(&root, |path, is_dir| rules.ignored(path, is_dir));
+        if let Some(path) = reveal.as_deref() {
+            model.reveal(path, |path, is_dir| rules.ignored(path, is_dir));
+        }
+
+        let (window, buffer) = match self.tree.as_ref() {
+            Some(tree) if self.views.contains_key(&tree.window) => (tree.window, tree.buffer),
+            _ => {
+                let old = self.focused_view().clone();
+                let window = self.tabs.split_vertical_before();
+                let buffer = self.buffers.scratch("file-tree");
+                let mut view = old;
+                view.id = window;
+                view.grid = self.tabs.grid_for_new_window();
+                view.buffer = buffer;
+                view.cursor = (0, 0);
+                view.desired_col = 0;
+                view.top_line = 0;
+                self.views.insert(window, view);
+                (window, buffer)
+            }
+        };
+        self.tree = Some(TreePane {
+            window,
+            buffer,
+            model,
+            pending_delete: None,
+        });
+        self.sync_tree_buffer();
+        self.tabs.focus_window(window);
+        self.load_focused_view();
+        self.scroll_tree_into_view();
+    }
+
+    pub fn focused_tree(&self) -> Option<&TreePane> {
+        self.tree
+            .as_ref()
+            .filter(|tree| tree.window == self.focus_window())
+    }
+
+    fn focused_tree_mut(&mut self) -> Option<&mut TreePane> {
+        let focus = self.focus_window();
+        self.tree.as_mut().filter(|tree| tree.window == focus)
+    }
+
+    pub fn tree_create(&mut self, name: &str) {
+        let Some(base) = self.tree_selected_base() else {
+            return;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            self.message = Some(Message {
+                text: "E471: Argument required: :TreeNew <name>".into(),
+                error: true,
+            });
+            return;
+        }
+        let path = base.join(name);
+        let result = if name.ends_with('/') {
+            std::fs::create_dir_all(&path)
+        } else {
+            std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&path)
+                .map(|_| ())
+        };
+        match result {
+            Ok(()) => {
+                self.refresh_tree(Some(path));
+            }
+            Err(error) => {
+                self.message = Some(Message {
+                    text: format!("E212: can't create {}: {error}", path.display()),
+                    error: true,
+                });
+            }
+        }
+    }
+
+    pub fn tree_rename(&mut self, name: &str) {
+        let Some(from) = self
+            .focused_tree()
+            .and_then(|tree| tree.model.selected_path())
+        else {
+            return;
+        };
+        let from = from.to_path_buf();
+        let name = name.trim();
+        if name.is_empty() {
+            self.message = Some(Message {
+                text: "E471: Argument required: :TreeRename <name>".into(),
+                error: true,
+            });
+            return;
+        }
+        let Some(parent) = from.parent() else {
+            return;
+        };
+        let to = parent.join(name);
+        match std::fs::rename(&from, &to) {
+            Ok(()) => self.refresh_tree(Some(to)),
+            Err(error) => {
+                self.message = Some(Message {
+                    text: format!("E13: can't rename {}: {error}", from.display()),
+                    error: true,
+                });
+            }
+        }
+    }
+
+    fn feed_tree(&mut self, key: Key) -> bool {
+        if key.ctrl {
+            return false;
+        }
+        if let Code::Char(ch) = key.code {
+            if ch.is_ascii_digit() && !(ch == '0' && self.pending.count.is_none()) {
+                let digit = ch.to_digit(10).unwrap() as usize;
+                self.pending.count = Some(self.pending.count.unwrap_or(0) * 10 + digit);
+                return true;
+            }
+        }
+        match key.code {
+            Code::Named(Named::Down) | Code::Char('j') => self.tree_move(1),
+            Code::Named(Named::Up) | Code::Char('k') => self.tree_move(-1),
+            Code::Named(Named::Enter) | Code::Char('o') => self.tree_open_selected(),
+            Code::Char('l') => {
+                let rules = self.tree_ignore_rules();
+                if let Some(tree) = self.focused_tree_mut() {
+                    tree.model
+                        .open_selected(|path, is_dir| rules.ignored(path, is_dir));
+                }
+                self.sync_tree_buffer();
+                self.scroll_tree_into_view();
+            }
+            Code::Char('h') => {
+                if let Some(tree) = self.focused_tree_mut() {
+                    tree.model.close_selected();
+                }
+                self.sync_tree_buffer();
+                self.scroll_tree_into_view();
+            }
+            Code::Char('a') => self.start_tree_command("TreeNew "),
+            Code::Char('r') => {
+                let name = self
+                    .focused_tree()
+                    .and_then(|tree| tree.model.selected_path())
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("");
+                self.start_tree_command(&format!("TreeRename {name}"));
+            }
+            Code::Char('d') => self.tree_delete_key(),
+            Code::Char('R') => self.refresh_tree(None),
+            _ => return false,
+        }
+        true
+    }
+
+    fn tree_move(&mut self, delta: isize) {
+        let count = self.pending.count.take().unwrap_or(1).max(1) as isize;
+        let delta = delta * count;
+        if let Some(tree) = self.focused_tree_mut() {
+            tree.pending_delete = None;
+            tree.model.move_selection(delta);
+        }
+        self.scroll_tree_into_view();
+    }
+
+    fn tree_open_selected(&mut self) {
+        let Some(kind) = self
+            .focused_tree()
+            .and_then(|tree| tree.model.selected_kind())
+        else {
+            return;
+        };
+        if kind == crate::tree::RowKind::Dir {
+            let rules = self.tree_ignore_rules();
+            if let Some(tree) = self.focused_tree_mut() {
+                tree.model
+                    .toggle_selected(|path, is_dir| rules.ignored(path, is_dir));
+            }
+            self.sync_tree_buffer();
+            self.scroll_tree_into_view();
+            return;
+        }
+        let Some(path) = self
+            .focused_tree()
+            .and_then(|tree| tree.model.selected_path())
+            .map(PathBuf::from)
+        else {
+            return;
+        };
+        let Some(target) = self.first_non_tree_window() else {
+            return;
+        };
+        self.save_focused_view();
+        self.tabs.focus_window(target);
+        self.load_focused_view();
+        if let Err(error) = self.open(path.clone()) {
+            self.message = Some(Message {
+                text: format!("E484: Can't open file {}: {error}", path.display()),
+                error: true,
+            });
+        }
+    }
+
+    fn tree_delete_key(&mut self) {
+        let Some(path) = self
+            .focused_tree()
+            .and_then(|tree| tree.model.selected_path())
+            .map(PathBuf::from)
+        else {
+            return;
+        };
+        let already_confirmed = self
+            .focused_tree()
+            .and_then(|tree| tree.pending_delete.as_ref())
+            == Some(&path);
+        if !already_confirmed {
+            if let Some(tree) = self.focused_tree_mut() {
+                tree.pending_delete = Some(path.clone());
+            }
+            self.message = Some(Message {
+                text: format!("delete {}? press d again to confirm", path.display()),
+                error: false,
+            });
+            return;
+        }
+
+        let is_dir = path.is_dir();
+        let result = if is_dir {
+            match std::fs::read_dir(&path) {
+                Ok(mut entries) => {
+                    if entries.next().is_none() {
+                        std::fs::remove_dir(&path)
+                    } else {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "recursive delete is refused",
+                        ))
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            std::fs::remove_file(&path)
+        };
+        match result {
+            Ok(()) => {
+                let parent = path.parent().map(PathBuf::from);
+                self.refresh_tree(parent);
+            }
+            Err(error) => {
+                if let Some(tree) = self.focused_tree_mut() {
+                    tree.pending_delete = None;
+                }
+                self.message = Some(Message {
+                    text: format!("E13: can't delete {}: {error}", path.display()),
+                    error: true,
+                });
+            }
+        }
+    }
+
+    fn start_tree_command(&mut self, command: &str) {
+        self.cmdline_prefix = ':';
+        self.cmdline = command.to_string();
+        self.cmdline_cursor = self.cmdline.chars().count();
+        self.mode = Mode::Cmdline;
+    }
+
+    fn tree_selected_base(&self) -> Option<PathBuf> {
+        let path = self.focused_tree()?.model.selected_path()?;
+        if path.is_dir() {
+            Some(path.to_path_buf())
+        } else {
+            path.parent().map(PathBuf::from)
+        }
+    }
+
+    fn refresh_tree(&mut self, reveal: Option<PathBuf>) {
+        let rules = self.tree_ignore_rules();
+        if let Some(tree) = self.tree.as_mut() {
+            tree.pending_delete = None;
+            tree.model
+                .reload(|path, is_dir| rules.ignored(path, is_dir));
+            if let Some(path) = reveal.as_deref() {
+                tree.model
+                    .reveal(path, |path, is_dir| rules.ignored(path, is_dir));
+            }
+        }
+        self.sync_tree_buffer();
+        self.scroll_tree_into_view();
+    }
+
+    fn reveal_current_in_tree(&mut self) {
+        let Some(path) = self.buffer.path().map(PathBuf::from) else {
+            return;
+        };
+        let rules = self.tree_ignore_rules();
+        if let Some(tree) = self.tree.as_mut() {
+            if path.starts_with(tree.model.root()) {
+                tree.model
+                    .reveal(&path, |path, is_dir| rules.ignored(path, is_dir));
+            }
+        }
+        self.sync_tree_buffer();
+        self.scroll_tree_into_view();
+    }
+
+    fn sync_tree_buffer(&mut self) {
+        let Some(tree) = self.tree.as_ref() else {
+            return;
+        };
+        let lines: Vec<String> = tree
+            .model
+            .rows()
+            .iter()
+            .map(|row| crate::tree::row_label(tree.model.root(), row))
+            .collect();
+        if let Some(buffer) = self.buffers.get_mut(tree.buffer) {
+            buffer.set_lines(lines);
+        }
+    }
+
+    fn scroll_tree_into_view(&mut self) {
+        let Some(tree) = self.tree.as_ref() else {
+            return;
+        };
+        let selected = tree.model.selected();
+        if let Some(view) = self.views.get_mut(&tree.window) {
+            if selected < view.top_line {
+                view.top_line = selected;
+            } else if selected >= view.top_line + view.rows.max(1) {
+                view.top_line = selected + 1 - view.rows.max(1);
+            }
+            view.cursor = (selected, 0);
+        }
+    }
+
+    fn tree_ignore_rules(&self) -> crate::ignore::IgnoreRules {
+        let root = self
+            .tree
+            .as_ref()
+            .map(|tree| tree.model.root().to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        crate::ignore::IgnoreRules::load(root)
+    }
+
+    fn first_non_tree_window(&self) -> Option<WindowId> {
+        let tree_window = self.tree.as_ref().map(|tree| tree.window);
+        self.tabs
+            .current_layout()
+            .leaves()
+            .into_iter()
+            .find(|id| Some(*id) != tree_window)
+    }
+
     // --- input ------------------------------------------------------------
 
     pub fn feed_str(&mut self, input: &str) {
@@ -709,6 +1107,9 @@ impl Editor {
     }
 
     fn dispatch(&mut self, key: Key) {
+        if self.mode == Mode::Normal && self.focused_tree().is_some() && self.feed_tree(key) {
+            return;
+        }
         match self.mode {
             Mode::Insert => self.feed_insert(key),
             Mode::Cmdline => self.feed_cmdline(key),
@@ -742,7 +1143,7 @@ impl Editor {
                 self.requests.push(Request::OpenNavigation(Scope::Files))
             }
             _ if command.starts_with("Telescope file_browser") => {
-                self.requests.push(Request::OpenNavigation(Scope::Files))
+                self.open_file_tree_from_file_browser(command)
             }
             "Telescope buffers" | "Telescope oldfiles" => {
                 self.requests.push(Request::OpenNavigation(Scope::Notes))
@@ -1893,6 +2294,7 @@ impl Editor {
         }
         self.clamp_cursor();
         self.save_focused_view();
+        self.reveal_current_in_tree();
         true
     }
 
@@ -1978,6 +2380,16 @@ mod tests {
 
     fn editor(text: &str) -> Editor {
         Editor::new(Buffer::from_text(text))
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "nvimglsl-editor-{name}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
     }
 
     #[test]
@@ -2084,6 +2496,64 @@ mod tests {
         e.requests.clear();
         e.feed_str(" f");
         assert_eq!(e.requests, vec![Request::OpenNavigation(Scope::Files)]);
+    }
+
+    #[test]
+    fn file_browser_mapping_opens_a_left_unlisted_tree_and_reveals_the_buffer() {
+        let root = temp_dir("file-browser");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let file = root.join("src/main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        std::fs::write(root.join("note.md"), "# note\n").unwrap();
+
+        let mut config = crate::luaconf::NvimConfig::default();
+        config.globals.insert(
+            "mapleader".into(),
+            crate::luaconf::Setting::Text(" ".into()),
+        );
+        config.mappings.push(crate::luaconf::Mapping {
+            mode: "n".into(),
+            lhs: "<leader>e".into(),
+            rhs: "<cmd>Telescope file_browser path=%:p:h select_buffer=true<CR>".into(),
+        });
+        let buffer = Buffer::open(&file).unwrap();
+        let mut e = Editor::with_config(buffer, &config);
+        e.feed_str(" e");
+        let tree = e.tree.as_ref().expect("tree pane");
+        assert_eq!(e.focus_window(), tree.window);
+        assert!(!e.buffers.list().contains(&tree.buffer));
+        let canonical = file.canonicalize().unwrap();
+        assert_eq!(tree.model.selected_path(), Some(canonical.as_path()));
+        let rects = e.tabs.rects(
+            Rect::new(0, 0, 10, 40),
+            e.options.splitbelow,
+            e.options.splitright,
+        );
+        let tree_rect = rects.text[&tree.window];
+        let other = e.first_non_tree_window().unwrap();
+        assert!(tree_rect.col < rects.text[&other].col);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tree_focus_still_resolves_owner_keymaps_before_tree_keys() {
+        let root = temp_dir("tree-keymap");
+        std::fs::create_dir_all(&root).unwrap();
+        for name in ["a.md", "b.md", "c.md"] {
+            std::fs::write(root.join(name), "").unwrap();
+        }
+        let mut config = crate::luaconf::NvimConfig::default();
+        config.mappings.push(crate::luaconf::Mapping {
+            mode: "n".into(),
+            lhs: "fj".into(),
+            rhs: "2j".into(),
+        });
+        let mut e = Editor::with_config(Buffer::from_text("x\n"), &config);
+        e.open_file_tree(root.clone(), None);
+        assert_eq!(e.tree.as_ref().unwrap().model.selected(), 0);
+        e.feed_str("fj");
+        assert_eq!(e.tree.as_ref().unwrap().model.selected(), 2);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

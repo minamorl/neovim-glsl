@@ -36,6 +36,10 @@ pub mod hl {
     pub const LINK: u64 = 12;
     pub const MODIFIED: u64 = 13;
     pub const CURSOR_LINE: u64 = 14;
+    pub const TREE_DIR: u64 = 15;
+    pub const TREE_NOTE: u64 = 16;
+    pub const TREE_FILE: u64 = 17;
+    pub const TREE_SELECTED: u64 = 18;
 }
 
 /// The editor's own palette.
@@ -879,6 +883,26 @@ impl Painter {
             self.grid.put(row, col, ' ', hl::STATUS);
         }
         let focused = view.id == editor.focus_window();
+        if let Some(tree) = editor.tree.as_ref().filter(|tree| tree.window == view.id) {
+            let mode = if focused { "TREE" } else { "    " };
+            let left = format!(
+                " {mode} {}",
+                shorten(&tree.model.root().display().to_string(), rect.cols / 2)
+            );
+            self.grid.write(row, rect.col, &left, hl::STATUS);
+            let right = format!(
+                "{} / {} ",
+                tree.model.selected().saturating_add(1),
+                tree.model.rows().len()
+            );
+            let start = rect
+                .col
+                .saturating_add(rect.cols.saturating_sub(right.chars().count()));
+            if start < rect.col + rect.cols {
+                self.grid.write(row, start, &right, hl::STATUS);
+            }
+            return;
+        }
         let mode = if focused {
             editor.mode.short_name().to_uppercase()
         } else {
@@ -929,6 +953,30 @@ impl Painter {
         if editor.mode == Mode::Cmdline && !self.options.ext_cmdline {
             let col = 1 + editor.cmdline.chars().count();
             return (self.grid.grid(), self.rows() - 1, col.min(self.cols() - 1));
+        }
+        if let Some(tree) = editor.focused_tree() {
+            let Some(view) = editor.views.get(&tree.window) else {
+                return (self.grid.grid(), 0, 0);
+            };
+            let row = tree
+                .model
+                .selected()
+                .saturating_sub(view.top_line)
+                .min(view.rows.saturating_sub(1));
+            if self.options.ext_multigrid {
+                return (view.grid, row, 0);
+            }
+            if editor.window_count() > 1 || editor.tabs.len() > 1 {
+                let tabline = self.tabline_rows(editor);
+                let area = Rect::new(tabline, 0, self.layout_rows(editor), self.cols());
+                let rects =
+                    editor
+                        .tabs
+                        .rects(area, editor.options.splitbelow, editor.options.splitright);
+                let rect = rects.text.get(&view.id).copied().unwrap_or_default();
+                return (self.grid.grid(), rect.row + row, rect.col);
+            }
+            return (self.grid.grid(), row, 0);
         }
         let gutter = gutter_width(editor.buffer.line_count());
         let row = editor
@@ -987,6 +1035,9 @@ fn win_pos(grid: u64, id: WindowId, rect: Rect) -> RedrawEvent {
 }
 
 fn window_rows(editor: &Editor, view: &WindowView, buffer: &Buffer) -> Vec<RenderRow> {
+    if let Some(tree) = editor.tree.as_ref().filter(|tree| tree.window == view.id) {
+        return render_tree_lines(view, tree);
+    }
     let focus = (view.id == editor.focus_window()).then_some(FocusRender {
         visual_range: editor.visual_range(),
         visual_kind: editor.visual_kind(),
@@ -994,6 +1045,45 @@ fn window_rows(editor: &Editor, view: &WindowView, buffer: &Buffer) -> Vec<Rende
         highlight_search: editor.highlight_search(),
     });
     render_window_lines(view, buffer, &editor.options, focus)
+}
+
+fn render_tree_lines(view: &WindowView, tree: &crate::core::editor::TreePane) -> Vec<RenderRow> {
+    let mut rows = Vec::new();
+    for screen_row in 0..view.rows {
+        let index = view.top_line + screen_row;
+        let Some(row) = tree.model.rows().get(index) else {
+            rows.push(RenderRow {
+                cells: vec![RenderCell {
+                    text: '~',
+                    hl: hl::NON_TEXT,
+                }],
+                fill: hl::DEFAULT,
+            });
+            continue;
+        };
+        let style = if index == tree.model.selected() {
+            hl::TREE_SELECTED
+        } else {
+            match row.kind {
+                crate::tree::RowKind::Dir => hl::TREE_DIR,
+                crate::tree::RowKind::Note => hl::TREE_NOTE,
+                crate::tree::RowKind::File => hl::TREE_FILE,
+            }
+        };
+        let label = crate::tree::row_label(tree.model.root(), row);
+        rows.push(RenderRow {
+            cells: label
+                .chars()
+                .map(|text| RenderCell { text, hl: style })
+                .collect(),
+            fill: if index == tree.model.selected() {
+                hl::TREE_SELECTED
+            } else {
+                hl::DEFAULT
+            },
+        });
+    }
+    rows
 }
 
 fn compose_window_grid(
@@ -1226,6 +1316,13 @@ fn highlight_table(theme: Theme) -> Vec<(u64, Value)> {
         (
             hl::CURSOR_LINE,
             attrs(None, Some(theme.cursor_line_bg), false, false),
+        ),
+        (hl::TREE_DIR, attrs(Some(theme.heading), None, true, false)),
+        (hl::TREE_NOTE, attrs(Some(theme.bullet), None, false, false)),
+        (hl::TREE_FILE, attrs(Some(theme.fg), None, false, false)),
+        (
+            hl::TREE_SELECTED,
+            attrs(Some(theme.fg), Some(theme.visual), false, false),
         ),
     ]
 }

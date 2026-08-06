@@ -181,6 +181,19 @@ impl Tabs {
         self.split(Axis::Horizontal, splitright)
     }
 
+    pub fn split_vertical_before(&mut self) -> WindowId {
+        self.split(Axis::Horizontal, false)
+    }
+
+    pub fn focus_window(&mut self, id: WindowId) -> bool {
+        if self.current_layout().leaves().contains(&id) {
+            self.tabs[self.current].focus = id;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn close(&mut self) -> Option<WindowId> {
         let focus = self.focus();
         if self.current_layout().leaves().len() <= 1 {
