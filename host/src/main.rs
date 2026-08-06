@@ -10,6 +10,7 @@ mod clipboard;
 mod core;
 mod git;
 mod ignore;
+mod grep;
 mod keymap;
 mod lsp;
 mod luaconf;
@@ -17,8 +18,10 @@ mod notes;
 mod nvim;
 mod picker;
 mod plugin;
+mod project;
 mod proto;
 mod root_ui;
+mod run;
 mod tategaki;
 mod textpos;
 mod tree;
@@ -273,6 +276,8 @@ enum Overlay {
         picker: picker::Picker,
         kind: PickerKind,
     },
+    Grep(picker::GrepPicker),
+    Output(OutputPanel),
     Plugin(String),
 }
 
@@ -287,6 +292,149 @@ enum PickerKind {
     Vault,
     Files,
     Workspace,
+}
+
+struct OutputPanel {
+    task: Option<run::Task>,
+    argv: Vec<String>,
+    cwd: PathBuf,
+    lines: Vec<root_ui::output::LineInput>,
+    status: Option<String>,
+    scroll: usize,
+}
+
+impl OutputPanel {
+    fn running(task: run::Task) -> Self {
+        let argv = task.argv.clone();
+        let cwd = task.cwd.clone();
+        Self {
+            task: Some(task),
+            argv,
+            cwd,
+            lines: vec![root_ui::output::LineInput::default()],
+            status: Some("running".into()),
+            scroll: 0,
+        }
+    }
+
+    fn message(argv: Vec<String>, cwd: PathBuf, message: String) -> Self {
+        let mut panel = Self {
+            task: None,
+            argv,
+            cwd,
+            lines: vec![root_ui::output::LineInput::default()],
+            status: Some(message),
+            scroll: 0,
+        };
+        panel.append(vec![run::Segment {
+            text: panel.status.clone().unwrap_or_default(),
+            role: run::Role {
+                stream: run::Stream::Stderr,
+                color: None,
+                bold: false,
+            },
+        }]);
+        panel
+    }
+
+    fn poll(&mut self) -> bool {
+        let Some(task) = self.task.as_mut() else {
+            return false;
+        };
+        let mut segments = task.poll();
+        let status = task.status();
+        // `status()` drains the pipes on its way to the exit code, and a command
+        // fast enough to finish inside one tick has *all* of its output in that
+        // batch. Taking it back is what stops `python3 hello.py` from painting
+        // an empty panel above a clean `exit status 0`.
+        segments.extend(task.poll());
+        let changed = !segments.is_empty();
+        self.append(segments);
+        if let Some(status) = status {
+            self.status = Some(match status.code() {
+                Some(code) => format!("exit status {code}"),
+                None => "terminated by signal".into(),
+            });
+            self.task = None;
+            return true;
+        }
+        changed
+    }
+
+    fn cancel(&mut self) {
+        if let Some(task) = self.task.as_mut() {
+            task.cancel();
+            self.status = Some("cancelled".into());
+        }
+        self.task = None;
+    }
+
+    fn append(&mut self, segments: Vec<run::Segment>) {
+        for segment in segments {
+            let mut rest = segment.text.as_str();
+            loop {
+                if let Some(at) = rest.find('\n') {
+                    let (head, tail) = rest.split_at(at);
+                    if !head.is_empty() {
+                        self.current_line()
+                            .segments
+                            .push(root_ui::output::SegmentInput {
+                                text: head.to_string(),
+                                role: segment.role,
+                            });
+                    }
+                    self.lines.push(root_ui::output::LineInput::default());
+                    rest = &tail[1..];
+                } else {
+                    if !rest.is_empty() {
+                        self.current_line()
+                            .segments
+                            .push(root_ui::output::SegmentInput {
+                                text: rest.to_string(),
+                                role: segment.role,
+                            });
+                    }
+                    break;
+                }
+            }
+        }
+        if self.lines.len() > 20_000 {
+            let drop = self.lines.len() - 20_000;
+            self.lines.drain(0..drop);
+            self.scroll = self.scroll.saturating_sub(drop);
+        }
+        self.scroll = self.lines.len().saturating_sub(1);
+    }
+
+    fn current_line(&mut self) -> &mut root_ui::output::LineInput {
+        if self.lines.is_empty() {
+            self.lines.push(root_ui::output::LineInput::default());
+        }
+        self.lines.last_mut().unwrap()
+    }
+
+    fn feed(&mut self, keys: &str) -> bool {
+        for key in crate::core::key::parse(keys) {
+            use crate::core::key::{Code, Named};
+            match key.code {
+                Code::Named(Named::Esc) => return false,
+                Code::Char('q') if !key.ctrl => return false,
+                Code::Char('c') if key.ctrl => self.cancel(),
+                Code::Named(Named::Up) | Code::Char('k') => {
+                    self.scroll = self.scroll.saturating_sub(1)
+                }
+                Code::Named(Named::Down) | Code::Char('j') => {
+                    self.scroll = (self.scroll + 1).min(self.lines.len().saturating_sub(1))
+                }
+                Code::Named(Named::PageUp) => self.scroll = self.scroll.saturating_sub(10),
+                Code::Named(Named::PageDown) => {
+                    self.scroll = (self.scroll + 10).min(self.lines.len().saturating_sub(1))
+                }
+                _ => {}
+            }
+        }
+        true
+    }
 }
 
 struct App {
@@ -357,6 +505,28 @@ impl App {
                 proto::server::NAVIGATE => {
                     let files = params.first().and_then(rmpv::Value::as_str) == Some("files");
                     self.open_navigation(files);
+                }
+                proto::server::PROJECT_SEARCH => {
+                    let origin = match params.first().and_then(rmpv::Value::as_str) {
+                        Some("ex") => run::Origin::OwnerExCommand,
+                        _ => run::Origin::OwnerKey,
+                    };
+                    let path = params
+                        .get(1)
+                        .and_then(rmpv::Value::as_str)
+                        .map(PathBuf::from);
+                    self.open_project_search(origin, path);
+                }
+                proto::server::RUN_TASK => {
+                    let origin = match params.first().and_then(rmpv::Value::as_str) {
+                        Some("ex") => run::Origin::OwnerExCommand,
+                        _ => run::Origin::OwnerKey,
+                    };
+                    let path = params
+                        .get(1)
+                        .and_then(rmpv::Value::as_str)
+                        .map(PathBuf::from);
+                    self.run_task(origin, path);
                 }
                 proto::server::TATEGAKI => {
                     if let Some(path) = params.first().and_then(rmpv::Value::as_str) {
@@ -444,6 +614,69 @@ impl App {
         }
     }
 
+    fn open_project_search(&mut self, origin: run::Origin, path: Option<PathBuf>) {
+        let rows = self.screen.as_ref().map(screen::Screen::rows).unwrap_or(24);
+        let visible = (rows / 2).max(4);
+        let root = path
+            .as_deref()
+            .map(project::root_of)
+            .unwrap_or_else(|| {
+                workspace::workable_root(
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                )
+            });
+        self.overlay = Overlay::Grep(picker::GrepPicker::open(root, origin, visible));
+        self.request_redraw();
+    }
+
+    /// The `<F5>` table is this host's choice. The owner's `init.lua` maps the
+    /// key to Jaq but does not provide Jaq recipes, so unknown filetypes are
+    /// reported rather than guessed. Cwd is always the worktree root.
+    fn run_task(&mut self, origin: run::Origin, path: Option<PathBuf>) {
+        let cwd = path
+            .as_deref()
+            .map(project::root_of)
+            .unwrap_or_else(|| {
+                workspace::workable_root(
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                )
+            });
+        let Some(path) = path else {
+            self.overlay = Overlay::Output(OutputPanel::message(
+                vec!["Jaq".into()],
+                cwd,
+                "Jaq: current buffer has no filetype to run".into(),
+            ));
+            self.request_redraw();
+            return;
+        };
+        let relative = path.strip_prefix(&cwd).unwrap_or(&path).to_path_buf();
+        let Some(argv) = task_argv_for(&path, &relative) else {
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("[none]");
+            self.overlay = Overlay::Output(OutputPanel::message(
+                vec!["Jaq".into()],
+                cwd,
+                format!("Jaq: no task recipe for filetype {ext}"),
+            ));
+            self.request_redraw();
+            return;
+        };
+        match run::spawn(origin, argv, cwd.clone()) {
+            Ok(task) => self.overlay = Overlay::Output(OutputPanel::running(task)),
+            Err(error) => {
+                self.overlay = Overlay::Output(OutputPanel::message(
+                    vec!["Jaq".into()],
+                    cwd,
+                    format!("Jaq: {error}"),
+                ));
+            }
+        }
+        self.request_redraw();
+    }
+
     fn request_redraw(&self) {
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
@@ -468,6 +701,29 @@ impl App {
                 } else {
                     self.overlay = Overlay::Plugin(name);
                 }
+            }
+            Overlay::Grep(mut picker) => {
+                let choice = match picker.feed(keys) {
+                    picker::Outcome::Open => {
+                        self.overlay = Overlay::Grep(picker);
+                        None
+                    }
+                    picker::Outcome::Cancelled => None,
+                    picker::Outcome::Chose(choice) => Some(choice),
+                };
+                if let Some(choice) = choice {
+                    if let Some(link) = self.link.as_mut() {
+                        let escaped = choice.replace('<', "<lt>");
+                        let _ = link.input(&format!("<Esc>:e {escaped}<CR>"));
+                    }
+                }
+                self.request_redraw();
+            }
+            Overlay::Output(mut panel) => {
+                if panel.feed(keys) {
+                    self.overlay = Overlay::Output(panel);
+                }
+                self.request_redraw();
             }
             Overlay::Picker { mut picker, kind } => {
                 let choice = match picker.feed(keys) {
@@ -590,22 +846,93 @@ impl App {
         self.last_stats = stats;
     }
 
-    /// Push the navigation surface, as a root-ui scene, into the adapter.
-    fn build_navigation(&mut self, width: f32, height: f32) {
-        let (Overlay::Picker { picker, .. }, Some(adapter), Some(atlas)) =
+    fn build_output_surface(&mut self, width: f32, height: f32) {
+        let (Overlay::Output(panel), Some(adapter), Some(atlas)) =
             (&self.overlay, self.adapter.as_mut(), self.atlas.as_mut())
         else {
             return;
         };
-        let rows = picker.visible();
+        let cwd = panel.cwd.display().to_string();
+        let composed = root_ui::output::build(root_ui::output::Input {
+            argv: &panel.argv,
+            cwd: &cwd,
+            status: panel.status.as_deref(),
+            lines: &panel.lines,
+            scroll: panel.scroll,
+            window_w: width,
+            window_h: height,
+            cell_w: atlas.cell_w,
+            cell_h: atlas.cell_h,
+            ascent: atlas.ascent,
+            scale: self.scale,
+        });
+        let runtime = root_ui::output::color_runtime(&self.args.scheme);
+        let prepared = match root_ui::prepare_flat_scene(&composed.scene) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                eprintln!("output surface did not resolve: {error}");
+                return;
+            }
+        };
+        let scene = match root_ui::bind_flat_scene_user_color_scheme(&prepared, &runtime) {
+            Ok(scene) => scene,
+            Err(error) => {
+                eprintln!("output surface has no colour: {error}");
+                return;
+            }
+        };
+        let mut stats = adapter.push_scene(&scene, width, height, atlas.cell_h, self.scale);
+        let scheme = runtime
+            .schemes
+            .iter()
+            .find(|scheme| scheme.id == runtime.scheme_id)
+            .unwrap_or(&runtime.schemes[0]);
+        for run in &composed.texts {
+            let color = scheme
+                .colors
+                .get(run.role)
+                .copied()
+                .unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            stats.glyph_quads +=
+                adapter.push_text(atlas, run.x, run.baseline, &run.text, color, run.max_x);
+        }
+        self.last_stats = stats;
+    }
+
+    /// Push the navigation surface, as a root-ui scene, into the adapter.
+    fn build_navigation(&mut self, width: f32, height: f32) {
+        let (label, query, matched, total, rows, row_budget, offset) = match &self.overlay {
+            Overlay::Picker { picker, .. } => (
+                picker.label().to_string(),
+                picker.query().to_string(),
+                picker.matches(),
+                picker.corpus_len(),
+                picker.visible(),
+                picker.row_budget(),
+                picker.offset(),
+            ),
+            Overlay::Grep(picker) => (
+                picker.label(),
+                picker.query().to_string(),
+                picker.matches(),
+                picker.corpus_len(),
+                picker.visible(),
+                picker.row_budget(),
+                picker.offset(),
+            ),
+            _ => return,
+        };
+        let (Some(adapter), Some(atlas)) = (self.adapter.as_mut(), self.atlas.as_mut()) else {
+            return;
+        };
         let composed = root_ui::navigation::build(root_ui::navigation::Input {
-            label: picker.label(),
-            query: picker.query(),
-            matched: picker.matches(),
-            total: picker.corpus_len(),
+            label: &label,
+            query: &query,
+            matched,
+            total,
             rows: &rows,
-            row_budget: picker.row_budget(),
-            offset: picker.offset(),
+            row_budget,
+            offset,
             window_w: width,
             window_h: height,
             cell_w: atlas.cell_w,
@@ -658,10 +985,30 @@ impl App {
         } else {
             return;
         }
-        if matches!(&self.overlay, Overlay::Picker { .. }) {
+        if matches!(&self.overlay, Overlay::Picker { .. } | Overlay::Grep(_)) {
             self.build_navigation(width, height);
+        } else if matches!(&self.overlay, Overlay::Output(_)) {
+            self.build_output_surface(width, height);
         } else if matches!(&self.overlay, Overlay::Plugin(_)) {
             self.build_plugin_surface(width, height);
+        }
+    }
+
+    fn poll_overlay_work(&mut self) {
+        match &mut self.overlay {
+            Overlay::Grep(picker) => {
+                let before = picker.matches();
+                picker.poll();
+                if picker.matches() != before {
+                    self.request_redraw();
+                }
+            }
+            Overlay::Output(panel) => {
+                if panel.poll() {
+                    self.request_redraw();
+                }
+            }
+            _ => {}
         }
     }
 
@@ -898,6 +1245,7 @@ impl ApplicationHandler for App {
             el.exit();
             return;
         }
+        self.poll_overlay_work();
         let flushed = self.screen.as_mut().is_some_and(|screen| {
             let flushed = screen.flushed;
             screen.flushed = false;
@@ -925,6 +1273,12 @@ impl App {
                 if app.pump() {
                     break;
                 }
+                // The live loop polls overlay work on every tick; a snapshot
+                // that skipped it could never show anything that arrives
+                // asynchronously. A grep with results still in flight would
+                // photograph as an empty list — a picture of the harness, not
+                // of the feature.
+                app.poll_overlay_work();
             }
         };
 
@@ -1118,6 +1472,24 @@ fn wrap(base: &str, mods: ModifiersState) -> String {
     format!("<{prefix}{base}>")
 }
 
+fn task_argv_for(path: &std::path::Path, relative: &std::path::Path) -> Option<Vec<String>> {
+    let ext = path.extension()?.to_str()?;
+    let file = relative.display().to_string();
+    Some(match ext {
+        "rs" => vec![
+            "cargo".into(),
+            "run".into(),
+            "--manifest-path".into(),
+            "host/Cargo.toml".into(),
+        ],
+        "py" => vec!["python3".into(), file],
+        "lua" => vec!["lua".into(), file],
+        "sh" | "bash" => vec!["sh".into(), file],
+        "js" | "mjs" | "cjs" => vec!["node".into(), file],
+        _ => return None,
+    })
+}
+
 fn write_png(path: &str, rgba_bottom_up: &[u8], width: u32, height: u32) {
     let stride = (width * 4) as usize;
     let mut flipped = vec![0u8; rgba_bottom_up.len()];
@@ -1218,6 +1590,37 @@ fn main() {
     let event_loop = EventLoop::new().expect("event loop");
     let mut app = App::new(args);
     event_loop.run_app(&mut app).expect("run_app");
+}
+
+#[cfg(test)]
+mod output_panel_tests {
+    use super::*;
+
+    /// The panel showed `$ python3 hello.py` and `exit status 0` with nothing
+    /// between them. Everything below the spawn works, so the loss is here.
+    #[test]
+    fn a_short_command_reaches_the_panel_lines() {
+        let task = run::spawn(
+            run::Origin::OwnerKey,
+            vec!["/bin/echo".into(), "hello".into()],
+            std::env::temp_dir(),
+        )
+        .unwrap();
+        let mut panel = OutputPanel::running(task);
+        for _ in 0..200 {
+            let done = panel.poll();
+            if done && panel.task.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let text: String = panel
+            .lines
+            .iter()
+            .flat_map(|line| line.segments.iter().map(|s| s.text.as_str()))
+            .collect();
+        assert!(text.contains("hello"), "panel lost the output: {text:?}");
+    }
 }
 
 #[cfg(test)]
