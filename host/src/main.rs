@@ -75,6 +75,34 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
+
+/// What an IME event asks the window to do, decided away from the window so it
+/// can be checked without one.
+///
+/// A real composition needs a real input method and a real window, and neither
+/// fits in a test. What does fit is the shape of the decision, and one detail
+/// inside it that is easy to get wrong: a commit is fed into the same string
+/// that carries key notation, so a literal `<` arriving from an input method
+/// would open a `<C-x>`-shaped token nobody typed.
+#[derive(Debug, PartialEq, Eq)]
+enum ImeAction {
+    /// Replace the composition being shown. An empty string ends it.
+    Compose(String),
+    /// Send these keys to whatever has focus.
+    Commit(String),
+    Nothing,
+}
+
+fn ime_action(event: &Ime) -> ImeAction {
+    match event {
+        Ime::Preedit(text, _) => ImeAction::Compose(text.clone()),
+        Ime::Commit(text) => ImeAction::Commit(text.replace('<', "<lt>")),
+        // A composition that is abandoned leaves nothing on screen.
+        Ime::Disabled => ImeAction::Compose(String::new()),
+        Ime::Enabled => ImeAction::Nothing,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Arguments
 // ---------------------------------------------------------------------------
@@ -1205,19 +1233,17 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Ime(ime) => {
-                match ime {
-                    Ime::Preedit(text, _) => self.preedit = text,
-                    Ime::Commit(text) => {
+                match ime_action(&ime) {
+                    ImeAction::Compose(text) => self.preedit = text,
+                    ImeAction::Commit(keys) => {
                         self.preedit.clear();
-                        let keys = text.replace('<', "<lt>");
                         if self.overlay.is_open() {
                             self.feed_overlay(&keys);
                         } else if let Some(link) = self.link.as_mut() {
                             let _ = link.input(&keys);
                         }
                     }
-                    Ime::Disabled => self.preedit.clear(),
-                    Ime::Enabled => {}
+                    ImeAction::Nothing => {}
                 }
                 self.request_redraw();
             }
@@ -1590,6 +1616,54 @@ fn main() {
     let event_loop = EventLoop::new().expect("event loop");
     let mut app = App::new(args);
     event_loop.run_app(&mut app).expect("run_app");
+}
+
+#[cfg(test)]
+mod ime_tests {
+    use super::*;
+
+    #[test]
+    fn a_composition_is_shown_and_then_replaced_by_what_is_committed() {
+        assert_eq!(
+            ime_action(&Ime::Preedit("かん".into(), None)),
+            ImeAction::Compose("かん".into())
+        );
+        assert_eq!(
+            ime_action(&Ime::Commit("漢字".into())),
+            ImeAction::Commit("漢字".into())
+        );
+    }
+
+    /// The one that would be silent: `<` reaches the same parser that reads
+    /// `<C-x>`, so an input method committing it must not be able to start a
+    /// key notation.
+    #[test]
+    fn a_committed_angle_bracket_cannot_become_key_notation() {
+        assert_eq!(
+            ime_action(&Ime::Commit("a<b".into())),
+            ImeAction::Commit("a<lt>b".into())
+        );
+    }
+
+    #[test]
+    fn abandoning_a_composition_leaves_nothing_on_screen() {
+        assert_eq!(ime_action(&Ime::Disabled), ImeAction::Compose(String::new()));
+        assert_eq!(ime_action(&Ime::Enabled), ImeAction::Nothing);
+    }
+
+    /// While a composition is open the input method owns the keys — the window
+    /// arm that drops them keys off exactly this.
+    #[test]
+    fn keys_are_held_while_a_composition_is_open() {
+        let ImeAction::Compose(preedit) = ime_action(&Ime::Preedit("か".into(), None)) else {
+            panic!("a preedit composes");
+        };
+        assert!(!preedit.is_empty());
+        let ImeAction::Compose(cleared) = ime_action(&Ime::Disabled) else {
+            panic!("disabling composes nothing");
+        };
+        assert!(cleared.is_empty());
+    }
 }
 
 #[cfg(test)]
