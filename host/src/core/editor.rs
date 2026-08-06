@@ -157,6 +157,15 @@ pub enum Request {
     /// Follow the `[[link]]` under the cursor. The core does not read it
     /// either: which text is a link is the note store's rule, not the editor's.
     FollowLink,
+    /// The configured completion key asks the LSP layer for candidates. The
+    /// core does not know server state or popup placement.
+    Completion,
+    /// `vim.diagnostic.open_float()` from the owner's config: show the
+    /// diagnostic under the cursor, or ask hover as a fallback.
+    DiagnosticFloat,
+    /// `gd` asks the LSP layer for the definition under the cursor. The core
+    /// has no project or server state, so the host owns the jump.
+    Definition,
     /// An Ex command a plugin registered. The core does not run plugins; it
     /// only knows which names belong to one, so that a name belonging to
     /// nothing can still report itself as unknown.
@@ -306,6 +315,8 @@ pub struct Editor {
     pub cmdline_prefix: char,
     cmdline_cursor: usize,
     pub message: Option<Message>,
+    pub diagnostics: Vec<crate::lsp::types::Diagnostic>,
+    pub completion: Option<crate::lsp::session::CompletionMenu>,
     pub last_search: Option<String>,
     last_search_forward: bool,
     visual_anchor: (usize, usize),
@@ -351,6 +362,8 @@ impl Editor {
             cmdline_prefix: ':',
             cmdline_cursor: 0,
             message: None,
+            diagnostics: Vec::new(),
+            completion: None,
             last_search: None,
             last_search_forward: true,
             visual_anchor: (0, 0),
@@ -1209,6 +1222,10 @@ impl Editor {
     /// The `lua require("substitute").…()` family the owner maps onto s/ss/S.
     fn run_lua_command(&mut self, call: &str) {
         if !call.contains("substitute") {
+            if call.contains("vim.diagnostic.open_float") {
+                self.requests.push(Request::DiagnosticFloat);
+                return;
+            }
             self.message = Some(Message {
                 text: format!("{call}: no Lua runtime in the editing path"),
                 error: true,
@@ -1305,6 +1322,7 @@ impl Editor {
                     .delete_range_in_line(self.cursor.0, 0, self.cursor.1);
                 self.cursor.1 = 0;
             }
+            Code::Char(' ') if key.ctrl => self.requests.push(Request::Completion),
             _ => {
                 if let Some(ch) = key.as_text() {
                     self.buffer.insert_char(self.cursor.0, self.cursor.1, ch);
@@ -1453,6 +1471,10 @@ impl Editor {
                 Code::Char('f') => {
                     self.pending.clear();
                     self.requests.push(Request::FollowLink);
+                }
+                Code::Char('d') => {
+                    self.pending.clear();
+                    self.requests.push(Request::Definition);
                 }
                 Code::Char('g') => {
                     let motion = match self.pending.count.or(self.pending.operator_count) {
@@ -2648,6 +2670,13 @@ mod tests {
         let mut e = editor("see [[alpha]]\n");
         e.feed_str("gf");
         assert_eq!(e.requests, vec![Request::FollowLink]);
+    }
+
+    #[test]
+    fn gd_asks_the_host_for_lsp_definition() {
+        let mut e = editor("symbol\n");
+        e.feed_str("gd");
+        assert_eq!(e.requests, vec![Request::Definition]);
     }
 
     #[test]

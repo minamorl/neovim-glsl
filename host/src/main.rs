@@ -11,6 +11,7 @@ mod core;
 mod git;
 mod ignore;
 mod keymap;
+mod lsp;
 mod luaconf;
 mod notes;
 mod nvim;
@@ -796,6 +797,7 @@ impl ApplicationHandler for App {
             self.args.rows,
             nvim::UiOptions {
                 ext_multigrid: true,
+                ext_popupmenu: true,
                 ..nvim::UiOptions::none()
             },
         )

@@ -17,6 +17,8 @@ use rmpv::Value;
 use crate::core::editor::{Request, Scope};
 use crate::core::vcs::{HeadLabel, Hunk, SignKind, VcsRequest, VcsStatus};
 use crate::core::{Buffer, BufferId, Editor, Mode};
+use crate::lsp::client::LspEvent;
+use crate::lsp::session::LspSession;
 use crate::notes::{self, Vault};
 use crate::nvim::{self, RedrawEvent, UiOptions};
 
@@ -56,6 +58,8 @@ struct VcsCache {
 #[derive(Debug)]
 pub enum Incoming {
     Client(Value),
+    ClientClosed,
+    Lsp(LspEvent),
     Flush,
 }
 
@@ -79,6 +83,8 @@ pub struct Host {
     /// client before the redraw that answers it.
     pending_attach: Option<Vec<RedrawEvent>>,
     vcs: BTreeMap<BufferId, VcsCache>,
+    lsp: LspSession,
+    lsp_events: Option<mpsc::Sender<LspEvent>>,
 }
 
 impl Host {
@@ -128,7 +134,13 @@ impl Host {
             quit: false,
             pending_attach: None,
             vcs: BTreeMap::new(),
+            lsp: LspSession::default(),
+            lsp_events: None,
         }
+    }
+
+    pub fn set_lsp_events(&mut self, tx: mpsc::Sender<LspEvent>) {
+        self.lsp_events = Some(tx);
     }
 
     fn report(&mut self, text: String, error: bool) {
@@ -239,10 +251,21 @@ impl Host {
                         None => self.report("E446: no link under cursor".into(), true),
                     }
                 }
+                Request::Completion => self.request_completion(),
+                Request::DiagnosticFloat => {
+                    if let Some(message) = self
+                        .lsp
+                        .request_hover(&self.editor.buffer, self.editor.cursor)
+                    {
+                        self.report(message, false);
+                    }
+                }
+                Request::Definition => self.request_definition(),
             }
         }
         self.refresh_vcs();
         self.sync_diff_scroll();
+        self.sync_lsp_current();
         if let Some(events) = self.render() {
             out.push(nvim::pack_redraw(&events));
         }
@@ -469,8 +492,20 @@ impl Host {
         }
     }
 
+    pub fn handle_lsp_event(&mut self, event: LspEvent) -> Vec<Value> {
+        if let Some(message) = self.lsp.handle_event(event) {
+            self.report(message, false);
+        }
+        if let Some(location) = self.lsp.take_definition() {
+            self.jump_to_definition(location);
+        }
+        self.flush_ui()
+    }
+
     fn render(&mut self) -> Option<Vec<RedrawEvent>> {
         self.configure_editor_screen();
+        self.editor.diagnostics = self.lsp.diagnostics_for_current(&self.editor.buffer);
+        self.editor.completion = self.lsp.completion.clone();
         let painter = self.painter.as_mut()?;
         let events = painter.render(&self.editor);
         // A render with nothing but a cursor move and a flush is still traffic
@@ -551,7 +586,9 @@ impl Host {
             }
             "nvim_input" => {
                 let keys = args.first().and_then(Value::as_str).unwrap_or("");
-                self.editor.feed_str(keys);
+                if !self.intercept_completion(keys) {
+                    self.editor.feed_str(keys);
+                }
                 (None, Value::from(keys.len() as u64))
             }
             "nvim_command" | "nvim_exec2" => {
@@ -647,6 +684,83 @@ impl Host {
         self.pending_attach = Some(events);
     }
 
+    fn sync_lsp_current(&mut self) {
+        let Some(tx) = &self.lsp_events else {
+            return;
+        };
+        if let Some(message) =
+            self.lsp
+                .sync_current(self.editor.buffers.current_id(), &self.editor.buffer, tx)
+        {
+            if self.editor.message.is_none() {
+                self.report(message, true);
+            }
+        }
+    }
+
+    fn request_completion(&mut self) {
+        let Some(painter) = self.painter.as_ref() else {
+            return;
+        };
+        let (grid, row, col) = painter.completion_anchor(&self.editor);
+        self.lsp
+            .request_completion(&self.editor.buffer, self.editor.cursor, row, col, grid);
+    }
+
+    fn request_definition(&mut self) {
+        self.lsp
+            .request_definition(&self.editor.buffer, self.editor.cursor);
+    }
+
+    fn jump_to_definition(&mut self, location: crate::lsp::types::Location) {
+        let Some(path) = crate::lsp::types::uri_to_path(&location.uri) else {
+            self.report(format!("LSP definition has unsupported URI: {}", location.uri), true);
+            return;
+        };
+        if self.editor.buffer.path() != Some(path.as_path()) {
+            self.open_path(path);
+        }
+        let cursor = location.range.start.to_buffer_chars(&self.editor.buffer);
+        self.editor.set_cursor(cursor);
+    }
+
+    fn intercept_completion(&mut self, keys: &str) -> bool {
+        if self.lsp.completion.is_none() {
+            return false;
+        }
+        match keys {
+            "<Tab>" | "<C-n>" => {
+                if let Some(menu) = self.lsp.completion.as_mut() {
+                    menu.select_next();
+                }
+                true
+            }
+            "<S-Tab>" | "<C-p>" => {
+                if let Some(menu) = self.lsp.completion.as_mut() {
+                    menu.select_prev();
+                }
+                true
+            }
+            "<CR>" => {
+                if let Some(text) = self.lsp.apply_completion_selection() {
+                    let (line, col) = self.editor.cursor;
+                    self.editor.buffer.begin_change(self.editor.cursor);
+                    self.editor.buffer.insert_str(line, col, &text);
+                    self.editor.buffer.commit_change();
+                    self.editor.cursor.1 += text.chars().count();
+                }
+                self.lsp.hide_completion();
+                true
+            }
+            "<Esc>" | "<C-e>" => {
+                self.lsp.hide_completion();
+                true
+            }
+            "<C-Space>" => false,
+            _ => false,
+        }
+    }
+
     /// The events produced by the last `nvim_ui_attach`, if any.
     pub fn take_attach_events(&mut self) -> Option<Vec<RedrawEvent>> {
         self.pending_attach.take()
@@ -676,6 +790,18 @@ pub fn serve(
     initial_path: Option<PathBuf>,
 ) -> std::io::Result<()> {
     let (tx, rx) = mpsc::channel();
+    let (lsp_tx, lsp_rx) = mpsc::channel();
+    host.set_lsp_events(lsp_tx);
+    let incoming_tx = tx.clone();
+    std::thread::Builder::new()
+        .name("nvimglsl-lsp-events".into())
+        .spawn(move || {
+            while let Ok(event) = lsp_rx.recv() {
+                if incoming_tx.send(Incoming::Lsp(event)).is_err() {
+                    return;
+                }
+            }
+        })?;
     std::thread::Builder::new()
         .name("nvimglsl-proto-reader".into())
         .spawn(move || {
@@ -685,6 +811,7 @@ pub fn serve(
                     return;
                 }
             }
+            let _ = tx.send(Incoming::ClientClosed);
         })?;
 
     serve_incoming(host, rx, output, initial_path)
@@ -706,8 +833,11 @@ pub fn serve_incoming(
         }
     }
     loop {
+        host.sync_lsp_current();
         let outgoing = match incoming.recv() {
             Ok(Incoming::Client(message)) => host.handle(&message),
+            Ok(Incoming::ClientClosed) => return Ok(()),
+            Ok(Incoming::Lsp(event)) => host.handle_lsp_event(event),
             Ok(Incoming::Flush) => host.flush_ui(),
             // A closed channel is how a UI client leaves.
             Err(_) => return Ok(()),
@@ -753,12 +883,59 @@ mod tests {
         host
     }
 
+    fn attached_file_host(text: &str) -> (Host, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "nvimglsl-lsp-host-{}-{}",
+            std::process::id(),
+            text.len()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.rs");
+        std::fs::write(&path, text).unwrap();
+        let mut buffer = Buffer::from_text(text);
+        buffer.set_path(path.clone());
+        let mut host = Host::new(Editor::new(buffer));
+        host.handle(&request(
+            1,
+            "nvim_ui_attach",
+            vec![
+                Value::from(60u64),
+                Value::from(8u64),
+                UiOptions::none().to_map(),
+            ],
+        ));
+        host.take_attach_events();
+        (host, path)
+    }
+
     fn redraw_names(messages: &[Value]) -> Vec<String> {
         messages
             .iter()
             .flat_map(|m| nvim::split_notification(m).0)
             .map(|(name, _)| name)
             .collect()
+    }
+
+    fn row_text(messages: &[Value], row: u64) -> Option<String> {
+        for message in messages {
+            for (name, args) in nvim::split_notification(message).0 {
+                if name == "grid_line" && args.get(1).and_then(Value::as_u64) == Some(row) {
+                    let mut text = String::new();
+                    if let Some(cells) = args.get(3).and_then(Value::as_array) {
+                        for cell in cells {
+                            let parts = cell.as_array().map(Vec::as_slice).unwrap_or(&[]);
+                            let chunk = parts.first().and_then(Value::as_str).unwrap_or("");
+                            let repeat = parts.get(2).and_then(Value::as_u64).unwrap_or(1);
+                            for _ in 0..repeat {
+                                text.push_str(chunk);
+                            }
+                        }
+                    }
+                    return Some(text);
+                }
+            }
+        }
+        None
     }
 
     #[test]
@@ -792,6 +969,61 @@ mod tests {
         ]));
         assert_eq!(host.editor.buffer.line_text(0), "hello");
         assert!(redraw_names(&out).contains(&"grid_line".to_string()));
+    }
+
+    #[test]
+    fn lsp_diagnostics_repaint_without_client_input() {
+        let (mut host, path) = attached_file_host("let bad = 1;\n");
+        let uri = crate::lsp::types::path_to_uri(&path);
+        let out = host.handle_lsp_event(LspEvent::Notification {
+            server: "fake".into(),
+            method: "textDocument/publishDiagnostics".into(),
+            params: serde_json::json!({
+                "uri": uri,
+                "diagnostics": [{
+                    "range": {
+                        "start": { "line": 0, "character": 4 },
+                        "end": { "line": 0, "character": 7 }
+                    },
+                    "severity": 1,
+                    "message": "bad binding"
+                }]
+            }),
+        });
+        let row = row_text(&out, 0).unwrap();
+        // The sign lives in the one sign cell, immediately left of the text —
+        // the same cell a git sign would take. This asserted column 0 while the
+        // lane had a gutter of its own; sharing the column moved it, and the
+        // assertion has to move with it or it only describes the old layout.
+        let sign = crate::proto::paint::gutter_width(1) - 1;
+        assert_eq!(
+            row.chars().nth(sign),
+            Some('E'),
+            "diagnostic sign not in the sign cell: {row:?}"
+        );
+        assert!(row.contains("bad binding"));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn lsp_definition_response_moves_the_cursor() {
+        let (mut host, path) = attached_file_host("call\n  target\n");
+        let uri = crate::lsp::types::path_to_uri(&path);
+        host.handle_lsp_event(LspEvent::Response {
+            server: "fake".into(),
+            id: crate::lsp::jsonrpc::Id::Number(3),
+            kind: Some(crate::lsp::client::RequestKind::Definition),
+            result: Some(serde_json::json!({
+                "uri": uri,
+                "range": {
+                    "start": { "line": 1, "character": 2 },
+                    "end": { "line": 1, "character": 8 }
+                }
+            })),
+            error: None,
+        });
+        assert_eq!(host.editor.cursor, (1, 2));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
