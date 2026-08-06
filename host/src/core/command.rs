@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use super::editor::{Editor, Message, Request, Scope};
+use super::vcs::VcsRequest;
 use super::window::Direction;
 
 pub fn execute(editor: &mut Editor, line: &str) {
@@ -198,6 +199,9 @@ pub fn execute(editor: &mut Editor, line: &str) {
         }
         "TreeNew" | "treenew" => editor.tree_create(rest),
         "TreeRename" | "treerename" => editor.tree_rename(rest),
+        "Blame" | "blame" => editor.requests.push(Request::Vcs(VcsRequest::Blame)),
+        "Hunks" | "hunks" => editor.requests.push(Request::Vcs(VcsRequest::Hunks)),
+        "Diff" | "diff" => editor.requests.push(Request::Vcs(VcsRequest::Diff)),
         "Note" | "note" => {
             if rest.is_empty() {
                 editor.message = Some(Message {
@@ -343,6 +347,22 @@ mod tests {
         let mut e = editor("one\ntwo\nthree\n");
         e.feed_str(":2<CR>");
         assert_eq!(e.cursor.0, 1);
+    }
+
+    #[test]
+    fn vcs_commands_are_host_requests() {
+        let mut e = editor("one\n");
+        e.feed_str(":Blame<CR>");
+        e.feed_str(":Hunks<CR>");
+        e.feed_str(":Diff<CR>");
+        assert_eq!(
+            e.requests,
+            vec![
+                Request::Vcs(crate::core::vcs::VcsRequest::Blame),
+                Request::Vcs(crate::core::vcs::VcsRequest::Hunks),
+                Request::Vcs(crate::core::vcs::VcsRequest::Diff),
+            ]
+        );
     }
 
     #[test]
